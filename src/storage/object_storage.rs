@@ -10,15 +10,29 @@ use super::{
     normalize_object_meta, validate_bucket_name, BucketMeta, ByteStream, ChecksumAlgorithm,
     CorsRule, DeleteResult, MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError,
 };
+use crate::metrics::MetricsRegistry;
 
 pub struct ObjectStorage {
     blobs: BlobStorage,
     meta: Arc<dyn MetadataStore>,
+    metrics: Option<Arc<MetricsRegistry>>,
 }
 
 impl ObjectStorage {
     pub fn new(blobs: BlobStorage, meta: Arc<dyn MetadataStore>) -> Self {
-        Self { blobs, meta }
+        Self { blobs, meta, metrics: None }
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    #[inline]
+    fn record(&self, op: &str, elapsed: std::time::Duration) {
+        if let Some(ref m) = self.metrics {
+            m.record_storage_op(op, elapsed);
+        }
     }
 
     async fn bucket_owner(&self, bucket: &str) -> Result<(String, String), StorageError> {
@@ -126,91 +140,10 @@ impl ObjectStorage {
     }
 }
 
-#[async_trait]
-impl Storage for ObjectStorage {
-    async fn create_bucket(&self, meta: &BucketMeta) -> Result<bool, StorageError> {
-        self.meta.create_bucket(meta).await
-    }
-
-    async fn head_bucket(&self, name: &str) -> Result<bool, StorageError> {
-        self.meta.head_bucket(name).await
-    }
-
-    async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError> {
-        self.meta.delete_bucket(name).await
-    }
-
-    async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError> {
-        self.meta.list_buckets().await
-    }
-
-    async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError> {
-        self.meta.put_bucket_policy(bucket, policy).await
-    }
-
-    async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError> {
-        self.meta.get_bucket_policy(bucket).await
-    }
-
-    async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError> {
-        self.meta.delete_bucket_policy(bucket).await
-    }
-
-    async fn put_bucket_acl(
-        &self,
-        bucket: &str,
-        acl: crate::iam::Acl,
-    ) -> Result<(), StorageError> {
-        self.meta.put_bucket_acl(bucket, acl).await
-    }
-
-    async fn get_bucket_acl(&self, bucket: &str) -> Result<crate::iam::Acl, StorageError> {
-        self.meta.get_bucket_acl(bucket).await
-    }
-
-    async fn put_bucket_cors(
-        &self,
-        bucket: &str,
-        rules: Vec<CorsRule>,
-    ) -> Result<(), StorageError> {
-        self.meta.put_bucket_cors(bucket, rules).await
-    }
-
-    async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError> {
-        self.meta.get_bucket_cors(bucket).await
-    }
-
-    async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError> {
-        self.meta.delete_bucket_cors(bucket).await
-    }
-
-    async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
-        self.meta.is_versioned(bucket).await
-    }
-
-    async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
-        self.meta.set_versioning(bucket, enabled).await
-    }
-
-    async fn get_bucket_auth_info(
-        &self,
-        bucket: &str,
-    ) -> Result<(Option<String>, crate::iam::Acl), StorageError> {
-        let snap = self.meta.fetch_bucket_auth_context(bucket).await?;
-        let acl = snap.acl.unwrap_or_else(|| {
-            crate::iam::Acl::private(&snap.owner_id, &snap.owner_display_name)
-        });
-        Ok((snap.policy, acl))
-    }
-
-    async fn fetch_bucket_auth_context(
-        &self,
-        bucket: &str,
-    ) -> Result<crate::db::repos::BucketAuthSnapshot, StorageError> {
-        self.meta.fetch_bucket_auth_context(bucket).await
-    }
-
-    async fn put_object(
+// Private async helpers extracted from trait impl methods so timing wrappers
+// in the trait impl can delegate to them from an inherent impl block.
+impl ObjectStorage {
+    async fn put_object_inner(
         &self,
         bucket: &str,
         key: &str,
@@ -307,76 +240,7 @@ impl Storage for ObjectStorage {
         .await
     }
 
-    async fn get_object(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
-        validate_bucket_name(bucket)?;
-        validate_key(key)?;
-        let meta = self.meta.get_object_for_read(bucket, key).await?;
-        if meta.is_delete_marker {
-            return Err(StorageError::NotFound(key.to_string()));
-        }
-        let stream = self.blobs.open_object(bucket, key, &meta).await?;
-        Ok((stream, meta))
-    }
-
-    async fn get_object_range(
-        &self,
-        bucket: &str,
-        key: &str,
-        offset: u64,
-        length: u64,
-    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
-        validate_bucket_name(bucket)?;
-        validate_key(key)?;
-        let meta = self.meta.get_object_for_read(bucket, key).await?;
-        if meta.is_delete_marker {
-            return Err(StorageError::NotFound(key.to_string()));
-        }
-        let stream = self
-            .blobs
-            .open_object_range(bucket, key, &meta, offset, length)
-            .await?;
-        Ok((stream, meta))
-    }
-
-    async fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError> {
-        validate_bucket_name(bucket)?;
-        validate_key(key)?;
-        let meta = self.meta.get_object_for_read(bucket, key).await?;
-        if meta.is_delete_marker {
-            return Err(StorageError::NotFound(key.to_string()));
-        }
-        Ok(meta)
-    }
-
-    async fn get_object_tagging(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<HashMap<String, String>, StorageError> {
-        validate_key(key)?;
-        self.meta.get_object_tags(bucket, key).await
-    }
-
-    async fn put_object_tagging(
-        &self,
-        bucket: &str,
-        key: &str,
-        tags: HashMap<String, String>,
-    ) -> Result<(), StorageError> {
-        validate_key(key)?;
-        self.meta.put_object_tags(bucket, key, tags).await
-    }
-
-    async fn delete_object_tagging(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
-        validate_key(key)?;
-        self.meta.delete_object_tags(bucket, key).await
-    }
-
-    async fn delete_object(
+    async fn delete_object_inner(
         &self,
         bucket: &str,
         key: &str,
@@ -429,60 +293,7 @@ impl Storage for ObjectStorage {
         })
     }
 
-    async fn list_objects_page(
-        &self,
-        bucket: &str,
-        prefix: &str,
-        start_after: Option<&str>,
-        max_keys: usize,
-    ) -> Result<ListPage, StorageError> {
-        self.meta
-            .list_objects_page(bucket, prefix, start_after, max_keys)
-            .await
-    }
-
-    async fn put_object_acl(
-        &self,
-        bucket: &str,
-        key: &str,
-        acl: crate::iam::Acl,
-    ) -> Result<(), StorageError> {
-        self.meta.put_object_acl(bucket, key, acl).await
-    }
-
-    async fn get_object_acl(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<crate::iam::Acl, StorageError> {
-        self.meta.get_object_acl(bucket, key).await
-    }
-
-    async fn create_multipart_upload(
-        &self,
-        bucket: &str,
-        key: &str,
-        content_type: &str,
-        checksum_algorithm: Option<ChecksumAlgorithm>,
-    ) -> Result<MultipartUploadMeta, StorageError> {
-        validate_bucket_name(bucket)?;
-        validate_key(key)?;
-        let upload_id = uuid::Uuid::new_v4().to_string();
-        self.blobs.ensure_upload_dir(bucket, &upload_id).await?;
-
-        let meta = MultipartUploadMeta {
-            upload_id: upload_id.clone(),
-            bucket: bucket.to_string(),
-            key: key.to_string(),
-            content_type: content_type.to_string(),
-            initiated: Self::now_ts(),
-            checksum_algorithm,
-        };
-        self.meta.create_multipart_upload(&meta).await?;
-        Ok(meta)
-    }
-
-    async fn upload_part(
+    async fn upload_part_inner(
         &self,
         bucket: &str,
         upload_id: &str,
@@ -538,7 +349,7 @@ impl Storage for ObjectStorage {
         Ok(part)
     }
 
-    async fn complete_multipart_upload(
+    async fn complete_multipart_upload_inner(
         &self,
         bucket: &str,
         upload_id: &str,
@@ -647,6 +458,307 @@ impl Storage for ObjectStorage {
         self.blobs.remove_upload_dir(bucket, upload_id).await?;
 
         Ok(result)
+    }
+}
+
+#[async_trait]
+impl Storage for ObjectStorage {
+    async fn create_bucket(&self, meta: &BucketMeta) -> Result<bool, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self.meta.create_bucket(meta).await;
+        self.record("create_bucket", t.elapsed());
+        result
+    }
+
+    async fn head_bucket(&self, name: &str) -> Result<bool, StorageError> {
+        self.meta.head_bucket(name).await
+    }
+
+    async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self.meta.delete_bucket(name).await;
+        self.record("delete_bucket", t.elapsed());
+        result
+    }
+
+    async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self.meta.list_buckets().await;
+        self.record("list_buckets", t.elapsed());
+        result
+    }
+
+    async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError> {
+        self.meta.put_bucket_policy(bucket, policy).await
+    }
+
+    async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError> {
+        self.meta.get_bucket_policy(bucket).await
+    }
+
+    async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError> {
+        self.meta.delete_bucket_policy(bucket).await
+    }
+
+    async fn put_bucket_acl(
+        &self,
+        bucket: &str,
+        acl: crate::iam::Acl,
+    ) -> Result<(), StorageError> {
+        self.meta.put_bucket_acl(bucket, acl).await
+    }
+
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<crate::iam::Acl, StorageError> {
+        self.meta.get_bucket_acl(bucket).await
+    }
+
+    async fn put_bucket_cors(
+        &self,
+        bucket: &str,
+        rules: Vec<CorsRule>,
+    ) -> Result<(), StorageError> {
+        self.meta.put_bucket_cors(bucket, rules).await
+    }
+
+    async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError> {
+        self.meta.get_bucket_cors(bucket).await
+    }
+
+    async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError> {
+        self.meta.delete_bucket_cors(bucket).await
+    }
+
+    async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
+        self.meta.is_versioned(bucket).await
+    }
+
+    async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
+        self.meta.set_versioning(bucket, enabled).await
+    }
+
+    async fn get_bucket_auth_info(
+        &self,
+        bucket: &str,
+    ) -> Result<(Option<String>, crate::iam::Acl), StorageError> {
+        let snap = self.meta.fetch_bucket_auth_context(bucket).await?;
+        let acl = snap.acl.unwrap_or_else(|| {
+            crate::iam::Acl::private(&snap.owner_id, &snap.owner_display_name)
+        });
+        Ok((snap.policy, acl))
+    }
+
+    async fn fetch_bucket_auth_context(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::db::repos::BucketAuthSnapshot, StorageError> {
+        self.meta.fetch_bucket_auth_context(bucket).await
+    }
+
+    async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: &str,
+        body: ByteStream,
+        checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+    ) -> Result<PutResult, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self
+            .put_object_inner(bucket, key, content_type, body, checksum)
+            .await;
+        self.record("put_object", t.elapsed());
+        result
+    }
+
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
+        let t = std::time::Instant::now();
+        let result = async {
+            validate_bucket_name(bucket)?;
+            validate_key(key)?;
+            let meta = self.meta.get_object_for_read(bucket, key).await?;
+            if meta.is_delete_marker {
+                return Err(StorageError::NotFound(key.to_string()));
+            }
+            let stream = self.blobs.open_object(bucket, key, &meta).await?;
+            Ok((stream, meta))
+        }
+        .await;
+        self.record("get_object", t.elapsed());
+        result
+    }
+
+    async fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
+        let t = std::time::Instant::now();
+        let result = async {
+            validate_bucket_name(bucket)?;
+            validate_key(key)?;
+            let meta = self.meta.get_object_for_read(bucket, key).await?;
+            if meta.is_delete_marker {
+                return Err(StorageError::NotFound(key.to_string()));
+            }
+            let stream = self
+                .blobs
+                .open_object_range(bucket, key, &meta, offset, length)
+                .await?;
+            Ok((stream, meta))
+        }
+        .await;
+        self.record("get_object_range", t.elapsed());
+        result
+    }
+
+    async fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError> {
+        let t = std::time::Instant::now();
+        let result = async {
+            validate_bucket_name(bucket)?;
+            validate_key(key)?;
+            let meta = self.meta.get_object_for_read(bucket, key).await?;
+            if meta.is_delete_marker {
+                return Err(StorageError::NotFound(key.to_string()));
+            }
+            Ok(meta)
+        }
+        .await;
+        self.record("head_object", t.elapsed());
+        result
+    }
+
+    async fn get_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<HashMap<String, String>, StorageError> {
+        validate_key(key)?;
+        self.meta.get_object_tags(bucket, key).await
+    }
+
+    async fn put_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        validate_key(key)?;
+        self.meta.put_object_tags(bucket, key, tags).await
+    }
+
+    async fn delete_object_tagging(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
+        validate_key(key)?;
+        self.meta.delete_object_tags(bucket, key).await
+    }
+
+    async fn delete_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<DeleteResult, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self.delete_object_inner(bucket, key).await;
+        self.record("delete_object", t.elapsed());
+        result
+    }
+
+    async fn list_objects_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        start_after: Option<&str>,
+        max_keys: usize,
+    ) -> Result<ListPage, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self
+            .meta
+            .list_objects_page(bucket, prefix, start_after, max_keys)
+            .await;
+        self.record("list_objects", t.elapsed());
+        result
+    }
+
+    async fn put_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+        acl: crate::iam::Acl,
+    ) -> Result<(), StorageError> {
+        self.meta.put_object_acl(bucket, key, acl).await
+    }
+
+    async fn get_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<crate::iam::Acl, StorageError> {
+        self.meta.get_object_acl(bucket, key).await
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: &str,
+        checksum_algorithm: Option<ChecksumAlgorithm>,
+    ) -> Result<MultipartUploadMeta, StorageError> {
+        let t = std::time::Instant::now();
+        let result = async {
+            validate_bucket_name(bucket)?;
+            validate_key(key)?;
+            let upload_id = uuid::Uuid::new_v4().to_string();
+            self.blobs.ensure_upload_dir(bucket, &upload_id).await?;
+
+            let meta = MultipartUploadMeta {
+                upload_id: upload_id.clone(),
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+                content_type: content_type.to_string(),
+                initiated: Self::now_ts(),
+                checksum_algorithm,
+            };
+            self.meta.create_multipart_upload(&meta).await?;
+            Ok(meta)
+        }
+        .await;
+        self.record("create_multipart_upload", t.elapsed());
+        result
+    }
+
+    async fn upload_part(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        body: ByteStream,
+        checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+    ) -> Result<PartMeta, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self
+            .upload_part_inner(bucket, upload_id, part_number, body, checksum)
+            .await;
+        self.record("upload_part", t.elapsed());
+        result
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<PutResult, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self
+            .complete_multipart_upload_inner(bucket, upload_id, parts)
+            .await;
+        self.record("complete_multipart_upload", t.elapsed());
+        result
     }
 
     async fn abort_multipart_upload(

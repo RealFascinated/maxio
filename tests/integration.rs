@@ -102,6 +102,7 @@ fn test_config(
         parity_shards,
         default_buckets: default_buckets.to_string(),
         max_console_body_bytes: 1024 * 1024,
+        metrics_token: String::new(),
     }
 }
 
@@ -110,12 +111,16 @@ async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> AppSt
     let pool = maxio::db::create_pool(&config.database_url).await.unwrap();
     let pool = Arc::new(pool);
     let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
+    let metrics = Arc::new(maxio::metrics::MetricsRegistry::new().unwrap());
+    let stats = maxio::stats::BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
     AppState {
         storage,
         config,
         login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
         user_store,
         db_pool: pool,
+        metrics,
+        stats,
     }
 }
 

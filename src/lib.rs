@@ -23,6 +23,8 @@ pub mod db;
 pub mod iam;
 pub mod embedded;
 pub mod error;
+pub mod metrics;
 pub mod server;
+pub mod stats;
 pub mod storage;
 pub mod xml;

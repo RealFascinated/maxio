@@ -23,7 +23,9 @@ mod db;
 mod iam;
 mod embedded;
 mod error;
+mod metrics;
 mod server;
+mod stats;
 mod storage;
 mod xml;
 

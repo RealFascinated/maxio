@@ -83,6 +83,11 @@ pub struct Config {
     /// Max request body size for console JSON/form API routes, in bytes. Object uploads are streaming and not covered by this limit.
     #[arg(long, env = "MAXIO_MAX_CONSOLE_BODY_BYTES", default_value = "1048576")]
     pub max_console_body_bytes: usize,
+
+    /// Bearer token required to scrape GET /metrics (MAXIO_METRICS_TOKEN).
+    /// When empty the endpoint returns 403 Forbidden (metrics disabled).
+    #[arg(long, env = "MAXIO_METRICS_TOKEN", default_value = "")]
+    pub metrics_token: String,
 }
 
 #[cfg(test)]

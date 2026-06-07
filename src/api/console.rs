@@ -560,10 +560,13 @@ pub async fn list_buckets(
             let list: Vec<serde_json::Value> = buckets
                 .into_iter()
                 .map(|b| {
+                    let stat = state.stats.get(&b.name);
                     serde_json::json!({
                         "name": b.name,
                         "createdAt": b.created_at,
                         "versioning": b.versioning,
+                        "objectCount": stat.as_ref().map(|s| s.object_count),
+                        "sizeBytes": stat.as_ref().map(|s| s.size_bytes),
                     })
                 })
                 .collect();

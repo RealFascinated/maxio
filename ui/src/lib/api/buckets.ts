@@ -4,6 +4,8 @@ export interface Bucket {
   name: string
   createdAt: string
   versioning: boolean
+  objectCount: number | null
+  sizeBytes: number | null
 }
 
 export interface BucketsResponse { buckets: Bucket[] }

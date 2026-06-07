@@ -250,7 +250,7 @@ pub async fn delete_object_tags(ctx: &DbContext, bucket_name: &str, key: &str) -
     put_object_tags(ctx, bucket_name, key, HashMap::new()).await
 }
 
-fn row_into_read_meta(row: ObjectRow) -> ObjectMeta {
+pub(crate) fn row_into_read_meta(row: ObjectRow) -> ObjectMeta {
     ObjectMeta {
         key: row.key,
         size: row.size as u64,

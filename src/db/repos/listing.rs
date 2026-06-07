@@ -5,7 +5,7 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
 use super::{db_err, get_conn, resolve_bucket_id};
-use super::objects::{row_into_meta, ObjectRow};
+use super::objects::{row_into_read_meta, ObjectRow};
 
 pub async fn list_objects_page(
     ctx: &DbContext,
@@ -49,10 +49,7 @@ pub async fn list_objects_page(
         None
     };
 
-    let mut metas = Vec::with_capacity(page_rows.len());
-    for row in page_rows {
-        metas.push(row_into_meta(&mut conn, row).await?);
-    }
+    let metas: Vec<ObjectMeta> = page_rows.into_iter().map(row_into_read_meta).collect();
 
     Ok((metas, truncated, next_key))
 }

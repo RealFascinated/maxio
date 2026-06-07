@@ -57,6 +57,9 @@ mime_guess = "2"
 rand = "0.10.0"
 reed-solomon-erasure = "6"
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
 # Database
 diesel = { version = "2.2", features = ["postgres", "chrono", "uuid", "serde_json"] }
 diesel-async = { version = "0.5", features = ["postgres", "deadpool", "async-connection-wrapper", "tokio"] }
