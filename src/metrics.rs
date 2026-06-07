@@ -490,7 +490,7 @@ fn parse_proc_status_kb(status: &str, key: &str) -> Option<u64> {
         if label.trim() != key.trim_end_matches(':') {
             return None;
         }
-        let kb = value.trim().split_whitespace().next()?.parse().ok()?;
+        let kb = value.split_whitespace().next()?.parse().ok()?;
         Some(kb)
     })
 }
