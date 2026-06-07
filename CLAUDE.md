@@ -114,7 +114,7 @@ MaxIO handles object storage workloads where throughput matters. Performance is 
 
 **Test-Driven Development (TDD)**: Before implementing any new function or feature, write a failing test first. Then implement until the test passes.
 
-**After every code change**, re-run the full test suite to catch regressions (see [Development Workflow](#development-workflow) below).
+**After every code change**, run `cargo fmt --all` and re-run the full test suite to catch regressions (see [Development Workflow](#development-workflow) below).
 
 Only add tests if requested or they add meaningful coverage of real behavior. Do not add tests that trivially assert the obvious.
 
@@ -167,9 +167,11 @@ Defaults: port 9000, access/secret `maxioadmin`/`maxioadmin`, region `us-east-1`
 
 ## Development Workflow
 
-**After every code change**, re-run the full test suite to catch regressions:
+**After every code change**, format and re-run the full test suite to catch regressions:
 
 ```bash
+cargo fmt --all
+
 # 1. Unit + integration tests (always run first, no server needed)
 cargo test
 
@@ -331,6 +333,8 @@ aws --endpoint-url http://localhost:9000 s3 rb s3://test-bucket
 ### Running Tests
 
 ```bash
+cargo fmt --all
+
 # Unit + integration tests (no server needed)
 cargo test
 
