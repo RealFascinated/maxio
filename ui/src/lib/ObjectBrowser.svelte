@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { createMutation, createQuery } from '@tanstack/svelte-query'
+  import { createInfiniteQuery, createMutation, createQuery } from '@tanstack/svelte-query'
   import * as Table from '$lib/components/ui/table'
   import { Button } from '$lib/components/ui/button'
   import { Callout } from '$lib/components/ui/callout'
@@ -39,8 +39,9 @@
   let newFolderName = $state('')
   let shareMenuPos = $state({ top: 0, left: 0 })
   let versionKey = $state<string | null>(null)
-  let pendingDelete = $state<{ key: string; kind: 'object' | 'folder' } | null>(null)
+  let pendingDelete = $state<string | null>(null)
   let createFolderInput = $state<HTMLInputElement | null>(null)
+  let sentinelEl = $state<HTMLDivElement | undefined>()
 
   $effect(() => {
     if (showCreateFolder && createFolderInput) {
@@ -48,10 +49,43 @@
     }
   })
 
-  const objectsQuery = createQuery(() => ({
+  const objectsQuery = createInfiniteQuery(() => ({
     queryKey: objectKeys.list(bucket, prefix),
-    queryFn: () => listObjects(bucket, prefix),
+    queryFn: ({ pageParam }) => listObjects(bucket, prefix, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextContinuationToken ?? undefined,
   }))
+
+  function maybeFetchNextPage() {
+    if (objectsQuery.hasNextPage && !objectsQuery.isFetchingNextPage && !objectsQuery.isPending) {
+      objectsQuery.fetchNextPage()
+    }
+  }
+
+  $effect(() => {
+    const el = sentinelEl
+    if (!el) return
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) {
+        maybeFetchNextPage()
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  })
+
+  $effect(() => {
+    const el = sentinelEl
+    objectsQuery.data?.pages.length
+    if (!el) return
+
+    const rect = el.getBoundingClientRect()
+    const inView = rect.top < window.innerHeight && rect.bottom > 0
+    if (inView) {
+      maybeFetchNextPage()
+    }
+  })
 
   const versioningQuery = createQuery(() => ({
     queryKey: settingsKeys.versioning(bucket),
@@ -90,9 +124,20 @@
     },
   }))
 
-  const files = $derived(objectsQuery.data?.files ?? [])
-  const prefixes = $derived(objectsQuery.data?.prefixes ?? [])
-  const emptyPrefixes = $derived(new Set(objectsQuery.data?.emptyPrefixes ?? []))
+  const files = $derived(objectsQuery.data?.pages.flatMap((page) => page.files) ?? [])
+  const prefixes = $derived.by(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const page of objectsQuery.data?.pages ?? []) {
+      for (const p of page.prefixes) {
+        if (!seen.has(p)) {
+          seen.add(p)
+          result.push(p)
+        }
+      }
+    }
+    return result
+  })
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
 
   const expiryOptions = [
@@ -177,18 +222,18 @@
 
   async function deleteObject(key: string, e: Event) {
     e.stopPropagation()
-    pendingDelete = { key, kind: 'object' }
+    pendingDelete = key
   }
 
   async function confirmPendingDelete() {
     if (!pendingDelete) return
-    const { key, kind } = pendingDelete
+    const key = pendingDelete
     try {
       await deleteObjectMutation.mutateAsync(key)
       pendingDelete = null
     } catch (err) {
-      console.error(kind === 'folder' ? 'deleteFolder failed:' : 'deleteObject failed:', err)
-      toast.error(err instanceof ApiError ? err.message : kind === 'folder' ? 'Failed to delete folder' : 'Failed to connect to server')
+      console.error('deleteObject failed:', err)
+      toast.error(err instanceof ApiError ? err.message : 'Failed to connect to server')
     }
   }
 
@@ -227,11 +272,6 @@
       console.error('createFolder failed:', err)
       toast.error(err instanceof ApiError ? err.message : 'Failed to create folder')
     }
-  }
-
-  async function deleteFolder(folderPrefix: string, e: Event) {
-    e.stopPropagation()
-    pendingDelete = { key: folderPrefix, kind: 'folder' }
   }
 
   function handleClickOutside() {
@@ -295,17 +335,7 @@
             </Table.Cell>
             <Table.Cell class="text-right text-muted-foreground">&mdash;</Table.Cell>
             <Table.Cell class="text-muted-foreground">&mdash;</Table.Cell>
-            <Table.Cell>
-              {#if emptyPrefixes.has(p)}
-                <button
-                  class="text-muted-foreground hover:text-destructive transition-colors"
-                  onclick={(e) => deleteFolder(p, e)}
-                  title="Delete empty folder"
-                >
-                  <Trash2 class="size-4" />
-                </button>
-              {/if}
-            </Table.Cell>
+            <Table.Cell></Table.Cell>
           </Table.Row>
         {/each}
         {#each files as file}
@@ -370,6 +400,10 @@
         {/each}
       </Table.Body>
     </Table.Root>
+    <div bind:this={sentinelEl} class="h-1" aria-hidden="true"></div>
+    {#if objectsQuery.isFetchingNextPage}
+      <p class="text-sm text-muted-foreground text-center py-2">Loading more...</p>
+    {/if}
   {/if}
 </div>
 
@@ -423,11 +457,9 @@
 {#if pendingDelete}
   <ConfirmDialog
     open
-    title={pendingDelete.kind === 'folder' ? 'Delete empty folder?' : 'Delete object?'}
-    description={pendingDelete.kind === 'folder'
-      ? `This will remove the empty folder marker \"${displayName(pendingDelete.key)}\".`
-      : `This will delete \"${displayName(pendingDelete.key)}\" from this bucket.`}
-    confirmLabel={pendingDelete.kind === 'folder' ? 'Delete folder' : 'Delete object'}
+    title="Delete object?"
+    description={`This will delete \"${displayName(pendingDelete)}\" from this bucket.`}
+    confirmLabel="Delete object"
     confirmVariant="destructive"
     loading={deleteObjectMutation.isPending}
     onClose={() => (pendingDelete = null)}

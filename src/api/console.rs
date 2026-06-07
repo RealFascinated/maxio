@@ -682,10 +682,14 @@ pub async fn delete_bucket_api(
     }
 }
 
+const CONSOLE_LIST_PAGE_SIZE: usize = 200;
+
 #[derive(serde::Deserialize)]
 pub struct ListObjectsParams {
     prefix: Option<String>,
     delimiter: Option<String>,
+    start_after: Option<String>,
+    max_keys: Option<usize>,
 }
 
 pub async fn list_objects(
@@ -718,23 +722,32 @@ pub async fn list_objects(
 
     let prefix = params.prefix.unwrap_or_default();
     let delimiter = params.delimiter.unwrap_or_else(|| "/".to_string());
+    let max_keys = params.max_keys.unwrap_or(CONSOLE_LIST_PAGE_SIZE).max(1);
 
-    let all_objects =
-        match crate::storage::list_objects_all(state.storage.as_ref(), &bucket, &prefix).await {
-            Ok(objects) => objects,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-                    .into_response();
-            }
-        };
+    let page = match state
+        .storage
+        .list_objects_page(
+            &bucket,
+            &prefix,
+            params.start_after.as_deref(),
+            max_keys,
+        )
+        .await
+    {
+        Ok(page) => page,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
 
     let mut files = Vec::new();
     let mut prefix_set = BTreeSet::new();
 
-    for obj in &all_objects {
+    for obj in &page.objects {
         let suffix = &obj.key[prefix.len()..];
         if let Some(pos) = suffix.find(delimiter.as_str()) {
             let common = format!("{}{}", prefix, &suffix[..pos + delimiter.len()]);
@@ -749,25 +762,19 @@ pub async fn list_objects(
         }
     }
 
-    // Determine which prefixes are empty (only contain a folder marker, no real objects)
-    let mut empty_prefixes: Vec<&String> = Vec::new();
-    for p in &prefix_set {
-        let has_children = all_objects
-            .iter()
-            .any(|obj| obj.key.starts_with(p.as_str()) && obj.key != *p);
-        if !has_children {
-            empty_prefixes.push(p);
-        }
-    }
-
     let prefixes: Vec<&String> = prefix_set.iter().collect();
+    let next_continuation_token = if page.is_truncated {
+        page.next_continuation
+    } else {
+        None
+    };
 
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "files": files,
             "prefixes": prefixes,
-            "emptyPrefixes": empty_prefixes,
+            "nextContinuationToken": next_continuation_token,
         })),
     )
         .into_response()

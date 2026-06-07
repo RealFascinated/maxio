@@ -10,11 +10,14 @@ export interface S3File {
 export interface ObjectsResponse {
   files: S3File[]
   prefixes: string[]
-  emptyPrefixes?: string[]
+  nextContinuationToken?: string | null
 }
 
-export async function listObjects(bucket: string, prefix: string): Promise<ObjectsResponse> {
+export async function listObjects(bucket: string, prefix: string, startAfter?: string): Promise<ObjectsResponse> {
   const params = new URLSearchParams({ prefix, delimiter: '/' })
+  if (startAfter) {
+    params.set('start_after', startAfter)
+  }
   return apiFetch<ObjectsResponse>(`/api/buckets/${encodeURIComponent(bucket)}/objects?${params}`)
 }
 
