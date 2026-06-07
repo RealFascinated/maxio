@@ -76,7 +76,6 @@ fn test_config(data_dir: String, database_url: String, default_buckets: &str) ->
         database_url,
         access_key: ACCESS_KEY.to_string(),
         secret_key: SECRET_KEY.to_string(),
-        region: REGION.to_string(),
         allow_insecure_dev: true,
         secure_cookies: false,
         default_buckets: default_buckets.to_string(),
@@ -241,7 +240,7 @@ async fn start_server_with_default_buckets(default_buckets: &str) -> ServerHandl
     let (postgres, database_url) = start_postgres().await;
     let storage = create_storage(&data_dir, &database_url).await;
 
-    maxio::storage::provision_default_buckets(storage.as_ref(), default_buckets, REGION).await;
+    maxio::storage::provision_default_buckets(storage.as_ref(), default_buckets).await;
 
     let config = test_config(data_dir.clone(), database_url, default_buckets);
 
@@ -299,9 +298,9 @@ async fn test_default_buckets_skip_existing() {
     let storage = create_storage(&data_dir, &database_url).await;
 
     // First provision: creates the bucket
-    maxio::storage::provision_default_buckets(storage.as_ref(), "existing", REGION).await;
+    maxio::storage::provision_default_buckets(storage.as_ref(), "existing").await;
     // Second provision: must be idempotent — no error, no duplicate
-    maxio::storage::provision_default_buckets(storage.as_ref(), "existing", REGION).await;
+    maxio::storage::provision_default_buckets(storage.as_ref(), "existing").await;
 
     let config = test_config(data_dir.clone(), database_url, "");
     let state = test_app_state(storage, Arc::new(config)).await;
@@ -921,7 +920,6 @@ async fn test_delete_bucket_sweeps_nested_versions() {
         .create_bucket(&maxio::storage::BucketMeta {
             name: "leftover".to_string(),
             created_at: "2026-04-16T00:00:00.000Z".to_string(),
-            region: "us-east-1".to_string(),
             versioning: false,
             cors_rules: None,
             owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
@@ -3599,7 +3597,6 @@ async fn test_list_objects_page_db_pagination() {
         .create_bucket(&maxio::storage::BucketMeta {
             name: "page-bucket".to_string(),
             created_at: "2026-06-07T00:00:00.000Z".to_string(),
-            region: REGION.to_string(),
             versioning: false,
             cors_rules: None,
             owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
@@ -3664,7 +3661,6 @@ async fn test_put_rollback_when_publish_fails() {
         .create_bucket(&maxio::storage::BucketMeta {
             name: "rollback-bucket".to_string(),
             created_at: "2026-06-07T00:00:00.000Z".to_string(),
-            region: REGION.to_string(),
             versioning: false,
             cors_rules: None,
             owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
@@ -3719,7 +3715,6 @@ async fn test_housekeeping_removes_stale_multipart_uploads() {
         .create_bucket(&maxio::storage::BucketMeta {
             name: "mp-bucket".to_string(),
             created_at: "2026-06-07T00:00:00.000Z".to_string(),
-            region: REGION.to_string(),
             versioning: false,
             cors_rules: None,
             owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),

@@ -89,7 +89,6 @@ pub struct CorsRule {
 pub struct BucketMeta {
     pub name: String,
     pub created_at: String,
-    pub region: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub versioning: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,7 +256,7 @@ pub async fn list_objects_all(
 
 /// Create each bucket in `default_buckets` (comma-separated) if it does not
 /// already exist. Invalid S3 names are logged and skipped; errors are non-fatal.
-pub async fn provision_default_buckets(storage: &dyn Storage, default_buckets: &str, region: &str) {
+pub async fn provision_default_buckets(storage: &dyn Storage, default_buckets: &str) {
     if default_buckets.is_empty() {
         return;
     }
@@ -275,7 +274,6 @@ pub async fn provision_default_buckets(storage: &dyn Storage, default_buckets: &
             created_at: chrono::Utc::now()
                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                 .to_string(),
-            region: region.to_string(),
             versioning: false,
             cors_rules: None,
             owner_id: default_owner_id(),

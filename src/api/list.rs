@@ -12,7 +12,7 @@ use crate::api::authz::check_bucket_access;
 use crate::error::S3Error;
 use crate::iam::principal::Principal;
 use crate::server::AppState;
-use crate::storage::ObjectMeta;
+use crate::storage::{ObjectMeta, StorageError};
 use crate::xml::{response::to_xml, types::*};
 
 pub async fn handle_bucket_get(
@@ -56,11 +56,14 @@ pub async fn handle_bucket_get(
     if params.contains_key("location") {
         check_bucket_access(&state, &principal, &bucket, "s3:GetBucketLocation").await?;
         tracing::debug!("GetBucketLocation for {}", bucket);
-        let xml = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
-             <LocationConstraint>{}</LocationConstraint>",
-            state.config.region
-        );
+        match state.storage.head_bucket(&bucket).await {
+            Ok(true) => {}
+            Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
+            Err(StorageError::InvalidKey(_)) => return Err(S3Error::no_such_bucket(&bucket)),
+            Err(e) => return Err(S3Error::internal(e)),
+        }
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <LocationConstraint></LocationConstraint>";
         return Ok(Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/xml")

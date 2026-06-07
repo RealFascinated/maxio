@@ -12,15 +12,7 @@ use super::{
     grants_to_acl, permission_to_db, resolve_bucket_id,
 };
 
-type BucketListRow = (
-    Uuid,
-    String,
-    chrono::DateTime<Utc>,
-    String,
-    bool,
-    String,
-    String,
-);
+type BucketListRow = (Uuid, String, chrono::DateTime<Utc>, bool, String, String);
 
 type CorsRuleRow = (
     Vec<String>,
@@ -53,7 +45,6 @@ pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, S
             buckets::id.eq(bucket_id),
             buckets::name.eq(&meta.name),
             buckets::created_at.eq(created_at),
-            buckets::region.eq(&meta.region),
             buckets::versioning.eq(meta.versioning),
             buckets::owner_id.eq(&meta.owner_id),
             buckets::owner_display_name.eq(&meta.owner_display_name),
@@ -147,7 +138,6 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
             buckets::id,
             buckets::name,
             buckets::created_at,
-            buckets::region,
             buckets::versioning,
             buckets::owner_id,
             buckets::owner_display_name,
@@ -158,14 +148,13 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
         .map_err(db_err)?;
 
     let mut result = Vec::with_capacity(rows.len());
-    for (id, name, created_at, region, versioning, owner_id, owner_display_name) in rows {
+    for (id, name, created_at, versioning, owner_id, owner_display_name) in rows {
         result.push(
             load_bucket_meta_parts(
                 &mut conn,
                 id,
                 name,
                 created_at,
-                region,
                 versioning,
                 owner_id,
                 owner_display_name,
@@ -179,21 +168,12 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
 pub async fn get_bucket_meta(ctx: &DbContext, name: &str) -> Result<BucketMeta, StorageError> {
     validate_bucket_name(name)?;
     let mut conn = get_conn(ctx.pool()).await?;
-    let row: (
-        Uuid,
-        String,
-        chrono::DateTime<Utc>,
-        String,
-        bool,
-        String,
-        String,
-    ) = buckets::table
+    let row: (Uuid, String, chrono::DateTime<Utc>, bool, String, String) = buckets::table
         .filter(buckets::name.eq(name))
         .select((
             buckets::id,
             buckets::name,
             buckets::created_at,
-            buckets::region,
             buckets::versioning,
             buckets::owner_id,
             buckets::owner_display_name,
@@ -205,7 +185,7 @@ pub async fn get_bucket_meta(ctx: &DbContext, name: &str) -> Result<BucketMeta, 
             other => db_err(other),
         })?;
 
-    load_bucket_meta_parts(&mut conn, row.0, row.1, row.2, row.3, row.4, row.5, row.6).await
+    load_bucket_meta_parts(&mut conn, row.0, row.1, row.2, row.3, row.4, row.5).await
 }
 
 pub async fn put_bucket_policy(
@@ -438,7 +418,6 @@ async fn load_bucket_meta_parts(
     bucket_id: Uuid,
     name: String,
     created_at: chrono::DateTime<Utc>,
-    region: String,
     versioning: bool,
     owner_id: String,
     owner_display_name: String,
@@ -489,7 +468,6 @@ async fn load_bucket_meta_parts(
     Ok(BucketMeta {
         name,
         created_at: format_ts(created_at),
-        region,
         versioning,
         cors_rules,
         owner_id,

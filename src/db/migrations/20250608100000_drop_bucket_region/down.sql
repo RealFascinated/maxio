@@ -1,0 +1,1 @@
+ALTER TABLE buckets ADD COLUMN region TEXT NOT NULL DEFAULT 'us-east-1';

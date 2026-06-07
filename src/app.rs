@@ -45,12 +45,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     let storage: Arc<dyn Storage> =
         Arc::new(ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics)));
 
-    crate::storage::provision_default_buckets(
-        storage.as_ref(),
-        &config.default_buckets,
-        &config.region,
-    )
-    .await;
+    crate::storage::provision_default_buckets(storage.as_ref(), &config.default_buckets).await;
 
     let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
     let stats = BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));

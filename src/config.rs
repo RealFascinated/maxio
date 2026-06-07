@@ -16,11 +16,6 @@ fn default_secret_key() -> String {
         .unwrap_or_else(|| "maxioadmin".to_string())
 }
 
-fn default_region() -> String {
-    first_env_value(&["MINIO_REGION_NAME", "MINIO_REGION"])
-        .unwrap_or_else(|| "us-east-1".to_string())
-}
-
 fn default_default_buckets() -> Option<String> {
     first_env_value(&["MINIO_DEFAULT_BUCKETS"])
 }
@@ -50,10 +45,6 @@ pub struct Config {
     /// Secret key (MAXIO_SECRET_KEY, MINIO_ROOT_PASSWORD, MINIO_SECRET_KEY)
     #[arg(long, env = "MAXIO_SECRET_KEY", default_value_t = default_secret_key())]
     pub secret_key: String,
-
-    /// Default region (MAXIO_REGION, MINIO_REGION_NAME, MINIO_REGION)
-    #[arg(long, env = "MAXIO_REGION", default_value_t = default_region())]
-    pub region: String,
 
     /// Allow insecure development defaults (default credentials, HTTP cookies).
     #[arg(long, env = "MAXIO_ALLOW_INSECURE_DEV", default_value = "false")]

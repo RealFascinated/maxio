@@ -3,7 +3,6 @@ diesel::table! {
         id -> Uuid,
         name -> Text,
         created_at -> Timestamptz,
-        region -> Text,
         versioning -> Bool,
         owner_id -> Text,
         owner_display_name -> Text,

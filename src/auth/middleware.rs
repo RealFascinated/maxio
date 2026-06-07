@@ -58,10 +58,6 @@ pub async fn auth_middleware(
     let parsed = signature_v4::parse_authorization_header(auth_header)
         .map_err(|e| S3Error::access_denied(e))?;
 
-    if !signature_v4::constant_time_eq(parsed.region.as_bytes(), state.config.region.as_bytes()) {
-        return Err(S3Error::access_denied("Invalid region in credential scope"));
-    }
-
     let amz_date = request
         .headers()
         .get("x-amz-date")
@@ -194,10 +190,6 @@ async fn handle_presigned(
 ) -> Result<Response, S3Error> {
     let (parsed, timestamp, expires_secs) =
         signature_v4::parse_presigned_query(query).map_err(|e| S3Error::access_denied(e))?;
-
-    if !signature_v4::constant_time_eq(parsed.region.as_bytes(), state.config.region.as_bytes()) {
-        return Err(S3Error::access_denied("Invalid region in credential scope"));
-    }
 
     let issued_at = NaiveDateTime::parse_from_str(&timestamp, "%Y%m%dT%H%M%SZ")
         .map_err(|_| S3Error::access_denied("Invalid X-Amz-Date format"))?;

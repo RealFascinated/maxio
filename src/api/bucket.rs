@@ -94,7 +94,6 @@ pub async fn create_bucket(
     let meta = BucketMeta {
         name: bucket.clone(),
         created_at: now,
-        region: state.config.region.clone(),
         versioning: false,
         cors_rules: None,
         owner_id: principal.canonical_id.clone(),
@@ -140,7 +139,6 @@ pub async fn head_bucket(
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("x-amz-bucket-region", &*state.config.region)
         .body(Body::empty())
         .unwrap())
 }

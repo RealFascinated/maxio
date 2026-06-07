@@ -239,7 +239,6 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Access Key: {}", config.access_key);
     tracing::info!("Secret Key: [REDACTED]");
     tracing::info!("Data dir:   {}", config.data_dir);
-    tracing::info!("Region:     {}", config.region);
     let display_host = if config.address == "0.0.0.0" {
         "localhost"
     } else {

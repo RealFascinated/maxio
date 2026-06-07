@@ -623,7 +623,6 @@ pub async fn create_bucket(
     let meta = crate::storage::BucketMeta {
         name: body.name.clone(),
         created_at: now,
-        region: state.config.region.clone(),
         versioning: false,
         cors_rules: None,
         owner_id: owner_id.clone(),
@@ -1013,7 +1012,7 @@ pub async fn presign_object(
     let now = chrono::Utc::now();
     let date_stamp = now.format("%Y%m%d").to_string();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-    let region = &state.config.region;
+    let region = "us-east-1";
     let access_key = &state.config.access_key;
 
     let credential = format!("{}/{}/{}/s3/aws4_request", access_key, date_stamp, region);
@@ -1887,7 +1886,6 @@ mod tests {
             .create_bucket(&BucketMeta {
                 name: bucket.to_string(),
                 created_at: "2026-05-18T00:00:00.000Z".to_string(),
-                region: "us-east-1".to_string(),
                 versioning: false,
                 cors_rules: None,
                 owner_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
