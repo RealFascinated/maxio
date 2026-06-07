@@ -14,7 +14,6 @@ on:
         type: string
 
 permissions:
-  contents: write
   packages: write
 
 env:
@@ -28,7 +27,6 @@ jobs:
     outputs:
       image_name: ${{ steps.resolve.outputs.image_name }}
       image_tag: ${{ steps.resolve.outputs.image_tag }}
-      release_tag: ${{ steps.resolve.outputs.release_tag }}
       is_release: ${{ steps.resolve.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
@@ -58,83 +56,11 @@ jobs:
           fi
           test "${TAG#v}" = "$VERSION" || { echo "Cargo version $VERSION does not match tag $TAG"; exit 1; }
           echo "image_tag=${VERSION}" >> $GITHUB_OUTPUT
-          echo "release_tag=${TAG}" >> $GITHUB_OUTPUT
           echo "is_release=true" >> $GITHUB_OUTPUT
-
-  build:
-    name: Build ${{ matrix.target }}
-    needs: resolve
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-            artifact: maxio-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
-            artifact: maxio-linux-arm64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install libpq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install frontend deps
-        run: bun install --frozen-lockfile
-        working-directory: ui
-
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: test
-        run: cargo test --all --all-features
-
-      - name: Build frontend
-        run: bun run build
-        working-directory: ui
-
-      - name: Build binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Package
-        if: needs.resolve.outputs.is_release == 'true'
-        run: |
-          VERSION="$(python3 - <<'PYV'
-          import tomllib
-          with open("Cargo.toml", "rb") as f:
-              print(tomllib.load(f)["package"]["version"])
-          PYV
-          )"
-          ARCHIVE="${{ matrix.artifact }}-${VERSION}.tar.gz"
-          cp target/${{ matrix.target }}/release/maxio maxio
-          tar czf "${ARCHIVE}" maxio
-          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
-
-      - name: Upload artifact
-        if: needs.resolve.outputs.is_release == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ env.ARCHIVE }}
 
   docker:
     name: Docker ${{ matrix.arch }}
-    needs: [resolve, build]
+    needs: resolve
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -167,7 +93,7 @@ jobs:
 
   docker-manifest:
     name: Docker Manifest
-    needs: [resolve, build, docker]
+    needs: [resolve, docker]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -193,20 +119,3 @@ jobs:
             ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:${TAG}-aarch64 \
             --tag ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:${TAG} \
             ${EXTRA_TAG}
-
-  release:
-    name: Create Release
-    needs: [resolve, build]
-    if: needs.resolve.outputs.is_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: maxio-*
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.resolve.outputs.release_tag }}
-          files: '*.tar.gz'
