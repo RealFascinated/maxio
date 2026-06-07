@@ -1,4 +1,5 @@
 pub mod blob;
+pub mod cache;
 pub mod metadata;
 pub mod object_storage;
 pub mod pg_metadata;

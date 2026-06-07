@@ -1,8 +1,10 @@
+use super::cache::CacheLayer;
 use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
 use base64::Engine;
 use md5::{Digest, Md5};
 use rand::RngExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 
@@ -12,6 +14,7 @@ pub(crate) const SMALL_OBJECT_THRESHOLD: u64 = 256 * 1024;
 
 pub struct BlobStorage {
     pub(crate) buckets_dir: PathBuf,
+    cache: Option<Arc<CacheLayer>>,
 }
 
 pub struct WrittenPayload {
@@ -118,24 +121,100 @@ pub fn validate_upload_id(upload_id: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
+pub(crate) fn object_path_in(buckets_dir: &Path, bucket: &str, key: &str) -> PathBuf {
+    if key.ends_with('/') {
+        let dir = key.trim_end_matches('/');
+        buckets_dir.join(bucket).join(dir).join(".folder")
+    } else {
+        buckets_dir.join(bucket).join(key)
+    }
+}
+
 impl BlobStorage {
     pub async fn new(data_dir: &str) -> Result<Self, anyhow::Error> {
         let buckets_dir = Path::new(data_dir).join("buckets");
         fs::create_dir_all(&buckets_dir).await?;
-        Ok(Self { buckets_dir })
+        Ok(Self {
+            buckets_dir,
+            cache: None,
+        })
+    }
+
+    pub fn with_cache(mut self, cache: Arc<CacheLayer>) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    fn staging_buckets_dir(&self) -> &Path {
+        self.cache
+            .as_ref()
+            .map(|c| c.buckets_dir())
+            .unwrap_or(&self.buckets_dir)
+    }
+
+    fn write_buckets_dir(&self) -> Result<&Path, StorageError> {
+        if let Some(cache) = &self.cache {
+            cache.check_write_allowed()?;
+            if cache.writeback() {
+                return Ok(cache.buckets_dir());
+            }
+        }
+        Ok(&self.buckets_dir)
+    }
+
+    pub async fn complete_object_write(
+        &self,
+        bucket: &str,
+        key: &str,
+        final_path: &Path,
+        size: u64,
+    ) -> Result<(), StorageError> {
+        let Some(cache) = &self.cache else {
+            return Ok(());
+        };
+        if cache.writeback() {
+            cache.mark_dirty(bucket, key, size).await;
+            return Ok(());
+        }
+        if final_path.starts_with(&self.buckets_dir) {
+            cache
+                .populate_from_data(bucket, key, final_path, size)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn resolve_read_path(&self, bucket: &str, key: &str) -> Result<PathBuf, StorageError> {
+        if let Some(cache) = &self.cache {
+            let cache_path = cache.object_path(bucket, key);
+            if fs::try_exists(&cache_path).await.unwrap_or(false) {
+                let size = fs::metadata(&cache_path).await.map_err(StorageError::Io)?.len();
+                cache.record_read_hit(bucket, key, size).await;
+                return Ok(cache_path);
+            }
+        }
+
+        let data_path = self.object_path(bucket, key);
+        if !fs::try_exists(&data_path).await.unwrap_or(false) {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+
+        if let Some(cache) = &self.cache {
+            let size = fs::metadata(&data_path).await.map_err(StorageError::Io)?.len();
+            return cache
+                .populate_from_data(bucket, key, &data_path, size)
+                .await;
+        }
+
+        Ok(data_path)
     }
 
     pub fn object_path(&self, bucket: &str, key: &str) -> PathBuf {
-        if key.ends_with('/') {
-            let dir = key.trim_end_matches('/');
-            self.buckets_dir.join(bucket).join(dir).join(".folder")
-        } else {
-            self.buckets_dir.join(bucket).join(key)
-        }
+        object_path_in(&self.buckets_dir, bucket, key)
     }
 
     pub fn uploads_dir(&self, bucket: &str) -> PathBuf {
-        self.buckets_dir.join(bucket).join(".uploads")
+        self.staging_buckets_dir().join(bucket).join(".uploads")
     }
 
     pub fn upload_dir(&self, bucket: &str, upload_id: &str) -> PathBuf {
@@ -189,7 +268,8 @@ impl BlobStorage {
         mut body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
     ) -> Result<WrittenPayload, StorageError> {
-        let obj_path = self.object_path(bucket, key);
+        let write_base = self.write_buckets_dir()?;
+        let obj_path = object_path_in(write_base, bucket, key);
         if let Some(parent) = obj_path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -292,24 +372,14 @@ impl BlobStorage {
         key: &str,
         meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self.object_path(bucket, key);
+        let obj_path = self.resolve_read_path(bucket, key).await?;
         if meta.size <= SMALL_OBJECT_THRESHOLD {
-            let data = fs::read(&obj_path).await.map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    StorageError::NotFound(key.to_string())
-                } else {
-                    StorageError::Io(e)
-                }
-            })?;
+            let data = fs::read(&obj_path).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
         }
-        let file = fs::File::open(&obj_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::NotFound(key.to_string())
-            } else {
-                StorageError::Io(e)
-            }
-        })?;
+        let file = fs::File::open(&obj_path)
+            .await
+            .map_err(StorageError::Io)?;
         Ok(Box::pin(BufReader::with_capacity(IO_BUFFER_SIZE, file)))
     }
 
@@ -321,15 +391,11 @@ impl BlobStorage {
         offset: u64,
         length: u64,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self.object_path(bucket, key);
+        let obj_path = self.resolve_read_path(bucket, key).await?;
         if length <= SMALL_OBJECT_THRESHOLD {
-            let mut file = fs::File::open(&obj_path).await.map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    StorageError::NotFound(key.to_string())
-                } else {
-                    StorageError::Io(e)
-                }
-            })?;
+            let mut file = fs::File::open(&obj_path)
+                .await
+                .map_err(StorageError::Io)?;
             file.seek(std::io::SeekFrom::Start(offset))
                 .await
                 .map_err(StorageError::Io)?;
@@ -337,13 +403,9 @@ impl BlobStorage {
             file.read_exact(&mut data).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
         }
-        let mut file = fs::File::open(&obj_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::NotFound(key.to_string())
-            } else {
-                StorageError::Io(e)
-            }
-        })?;
+        let mut file = fs::File::open(&obj_path)
+            .await
+            .map_err(StorageError::Io)?;
         file.seek(std::io::SeekFrom::Start(offset))
             .await
             .map_err(StorageError::Io)?;
@@ -354,6 +416,11 @@ impl BlobStorage {
     pub async fn unlink_object(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
         let obj_path = self.object_path(bucket, key);
         remove_file_if_exists(&obj_path).await?;
+        if let Some(cache) = &self.cache {
+            let cache_path = cache.object_path(bucket, key);
+            let _ = remove_file_if_exists(&cache_path).await;
+            cache.remove_entry(bucket, key).await;
+        }
         self.cleanup_empty_parents(bucket, key).await;
         Ok(())
     }
@@ -382,6 +449,10 @@ impl BlobStorage {
         mut body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
     ) -> Result<(String, u64, Option<ChecksumAlgorithm>, Option<String>), StorageError> {
+        if let Some(cache) = &self.cache {
+            cache.check_write_allowed()?;
+        }
+        self.ensure_upload_dir(bucket, upload_id).await?;
         let part_path = self.part_path(bucket, upload_id, part_number);
         let file = fs::File::create(&part_path).await?;
         let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
@@ -442,7 +513,8 @@ impl BlobStorage {
         upload_id: &str,
         parts: &[PartMeta],
     ) -> Result<WrittenPayload, StorageError> {
-        let obj_path = self.object_path(bucket, key);
+        let write_base = self.write_buckets_dir()?;
+        let obj_path = object_path_in(write_base, bucket, key);
         if let Some(parent) = obj_path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -583,30 +655,44 @@ impl BlobStorage {
             fs::create_dir_all(parent).await?;
         }
         fs::copy(&ver_data, &obj_path).await?;
+        if let Some(cache) = &self.cache {
+            let size = fs::metadata(&obj_path).await.map_err(StorageError::Io)?.len();
+            let _ = cache
+                .populate_from_data(bucket, key, &obj_path, size)
+                .await;
+        }
         Ok(())
     }
 
     pub async fn housekeeping_temp_sweep(&self) -> u64 {
-        let mut temp_removed = 0u64;
-        let mut bucket_entries = match fs::read_dir(&self.buckets_dir).await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("housekeeping: cannot read buckets dir: {}", e);
-                return 0;
-            }
-        };
-
-        while let Ok(Some(bucket_entry)) = bucket_entries.next_entry().await {
-            if !matches!(bucket_entry.file_type().await, Ok(ft) if ft.is_dir()) {
-                continue;
-            }
-            let bucket_dir = bucket_entry.path();
-            temp_removed += sweep_temp_files(&bucket_dir).await;
-            temp_removed += sweep_temp_files(&bucket_dir.join(".uploads")).await;
+        let mut temp_removed = sweep_buckets_dir(&self.buckets_dir).await;
+        if let Some(cache) = &self.cache {
+            temp_removed += sweep_buckets_dir(cache.buckets_dir()).await;
         }
-
         temp_removed
     }
+}
+
+async fn sweep_buckets_dir(buckets_dir: &Path) -> u64 {
+    let mut temp_removed = 0u64;
+    let mut bucket_entries = match fs::read_dir(buckets_dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("housekeeping: cannot read buckets dir: {}", e);
+            return 0;
+        }
+    };
+
+    while let Ok(Some(bucket_entry)) = bucket_entries.next_entry().await {
+        if !matches!(bucket_entry.file_type().await, Ok(ft) if ft.is_dir()) {
+            continue;
+        }
+        let bucket_dir = bucket_entry.path();
+        temp_removed += sweep_temp_files(&bucket_dir).await;
+        temp_removed += sweep_temp_files(&bucket_dir.join(".uploads")).await;
+    }
+
+    temp_removed
 }
 
 fn temp_sibling_path(path: &Path) -> PathBuf {

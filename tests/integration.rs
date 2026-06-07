@@ -82,6 +82,10 @@ fn test_config(data_dir: String, database_url: String, default_buckets: &str) ->
         default_buckets: default_buckets.to_string(),
         max_console_body_bytes: 1024 * 1024,
         metrics_token: String::new(),
+        cache_dir: None,
+        cache_max_size: 10 * 1024 * 1024 * 1024,
+        cache_writeback: false,
+        cache_flush_interval: 30,
     }
 }
 

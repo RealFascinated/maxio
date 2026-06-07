@@ -88,6 +88,10 @@ impl ObjectStorage {
                 .await?;
         }
 
+        self.blobs
+            .complete_object_write(bucket, key, &written.final_path, written.size)
+            .await?;
+
         Ok(PutResult {
             size: written.size,
             etag: object_meta.etag.clone(),

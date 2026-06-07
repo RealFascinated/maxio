@@ -76,6 +76,22 @@ pub struct Config {
     /// When empty the endpoint returns 403 Forbidden (metrics disabled).
     #[arg(long, env = "MAXIO_METRICS_TOKEN", default_value = "")]
     pub metrics_token: String,
+
+    /// Optional SSD cache directory for object bytes (MAXIO_CACHE_DIR).
+    #[arg(long, env = "MAXIO_CACHE_DIR")]
+    pub cache_dir: Option<String>,
+
+    /// Maximum cache size in bytes (MAXIO_CACHE_MAX_SIZE). Default 10 GiB.
+    #[arg(long, env = "MAXIO_CACHE_MAX_SIZE", default_value = "10737418240")]
+    pub cache_max_size: u64,
+
+    /// Write to cache first and flush to data_dir in the background (MAXIO_CACHE_WRITEBACK).
+    #[arg(long, env = "MAXIO_CACHE_WRITEBACK", default_value = "false")]
+    pub cache_writeback: bool,
+
+    /// Writeback flush interval in seconds (MAXIO_CACHE_FLUSH_INTERVAL).
+    #[arg(long, env = "MAXIO_CACHE_FLUSH_INTERVAL", default_value = "30")]
+    pub cache_flush_interval: u64,
 }
 
 #[cfg(test)]
