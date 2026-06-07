@@ -5,10 +5,7 @@ use super::types::*;
 
 #[async_trait]
 pub trait IamStore: Send + Sync {
-    async fn lookup_by_access_key(
-        &self,
-        access_key_id: &str,
-    ) -> Option<(IamUser, AccessKey)>;
+    async fn lookup_by_access_key(&self, access_key_id: &str) -> Option<(IamUser, AccessKey)>;
     async fn lookup_by_credentials(
         &self,
         access_key_id: &str,

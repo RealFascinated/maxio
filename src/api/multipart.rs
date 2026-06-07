@@ -32,15 +32,9 @@ pub async fn create_multipart_upload(
         .and_then(|v| v.to_str().ok())
         .and_then(ChecksumAlgorithm::from_header_str);
 
-
     let upload = state
         .storage
-        .create_multipart_upload(
-            &bucket,
-            &key,
-            content_type,
-            checksum_algorithm,
-        )
+        .create_multipart_upload(&bucket, &key, content_type, checksum_algorithm)
         .await
         .map_err(map_storage_err)?;
 
@@ -80,13 +74,7 @@ pub async fn upload_part(
     let reader = body_to_reader(&headers, body).await?;
     let part = state
         .storage
-        .upload_part(
-            &bucket,
-            upload_id,
-            part_number,
-            reader,
-            checksum,
-        )
+        .upload_part(&bucket, upload_id, part_number, reader, checksum)
         .await
         .map_err(map_storage_err)?;
 

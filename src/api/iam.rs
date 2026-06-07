@@ -1,15 +1,10 @@
 use std::collections::HashMap;
 
-use axum::{
-    body::Body,
-    extract::State,
-    http::StatusCode,
-    response::Response,
-};
+use axum::{body::Body, extract::State, http::StatusCode, response::Response};
 
 use crate::error::S3Error;
 use crate::iam::principal::Principal;
-use crate::iam::types::{PolicyDocumentRaw, KeyStatus};
+use crate::iam::types::{KeyStatus, PolicyDocumentRaw};
 use crate::server::AppState;
 
 pub async fn iam_handler(
@@ -22,8 +17,8 @@ pub async fn iam_handler(
     let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
         .await
         .map_err(S3Error::internal)?;
-    let form: HashMap<String, String> =
-        serde_urlencoded::from_bytes(&body).map_err(|_| S3Error::invalid_argument("Invalid form body"))?;
+    let form: HashMap<String, String> = serde_urlencoded::from_bytes(&body)
+        .map_err(|_| S3Error::invalid_argument("Invalid form body"))?;
     let action = form
         .get("Action")
         .or_else(|| form.get("action"))
@@ -50,7 +45,11 @@ pub async fn iam_handler(
         "AttachUserPolicy" => attach_user_policy(&state, &form).await?,
         "DetachUserPolicy" => detach_user_policy(&state, &form).await?,
         "ListAttachedUserPolicies" => list_attached_user_policies(&state, &form).await?,
-        other => return Err(S3Error::invalid_argument(&format!("Unknown Action: {other}"))),
+        other => {
+            return Err(S3Error::invalid_argument(&format!(
+                "Unknown Action: {other}"
+            )));
+        }
     };
 
     Ok(Response::builder()
@@ -136,7 +135,10 @@ async fn list_users(state: &AppState) -> Result<String, S3Error> {
     ))
 }
 
-async fn create_access_key(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn create_access_key(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form
         .get("UserName")
         .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
@@ -151,7 +153,10 @@ async fn create_access_key(state: &AppState, form: &HashMap<String, String>) -> 
     ))
 }
 
-async fn delete_access_key(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn delete_access_key(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form
         .get("UserName")
         .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
@@ -166,7 +171,10 @@ async fn delete_access_key(state: &AppState, form: &HashMap<String, String>) -> 
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteAccessKeyResponse/>".into())
 }
 
-async fn update_access_key(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn update_access_key(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form
         .get("UserName")
         .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
@@ -175,10 +183,12 @@ async fn update_access_key(state: &AppState, form: &HashMap<String, String>) -> 
         .ok_or_else(|| S3Error::invalid_argument("Missing AccessKeyId"))?;
     let status = form
         .get("Status")
-        .map(|s| if s.eq_ignore_ascii_case("Inactive") {
-            KeyStatus::Inactive
-        } else {
-            KeyStatus::Active
+        .map(|s| {
+            if s.eq_ignore_ascii_case("Inactive") {
+                KeyStatus::Inactive
+            } else {
+                KeyStatus::Active
+            }
         })
         .unwrap_or(KeyStatus::Active);
     state
@@ -218,12 +228,21 @@ async fn list_access_keys(
     ))
 }
 
-async fn put_user_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let policy_name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
-    let document = form.get("PolicyDocument").ok_or_else(|| S3Error::invalid_argument("Missing PolicyDocument"))?;
-    let doc: PolicyDocumentRaw =
-        serde_json::from_str(document).map_err(|_| S3Error::invalid_argument("MalformedPolicyDocument"))?;
+async fn put_user_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let policy_name = form
+        .get("PolicyName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
+    let document = form
+        .get("PolicyDocument")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyDocument"))?;
+    let doc: PolicyDocumentRaw = serde_json::from_str(document)
+        .map_err(|_| S3Error::invalid_argument("MalformedPolicyDocument"))?;
     state
         .user_store
         .put_user_policy(username, policy_name, doc)
@@ -236,8 +255,12 @@ async fn get_user_policy(
     state: &AppState,
     form: &HashMap<String, String>,
 ) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let policy_name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let policy_name = form
+        .get("PolicyName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
     let user = state
         .user_store
         .get_user(username)
@@ -255,9 +278,16 @@ async fn get_user_policy(
     ))
 }
 
-async fn delete_user_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let policy_name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
+async fn delete_user_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let policy_name = form
+        .get("PolicyName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
     state
         .user_store
         .delete_user_policy(username, policy_name)
@@ -270,7 +300,9 @@ async fn list_user_policies(
     state: &AppState,
     form: &HashMap<String, String>,
 ) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
     let user = state
         .user_store
         .get_user(username)
@@ -286,11 +318,18 @@ async fn list_user_policies(
     ))
 }
 
-async fn create_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
-    let document = form.get("PolicyDocument").ok_or_else(|| S3Error::invalid_argument("Missing PolicyDocument"))?;
-    let doc: PolicyDocumentRaw =
-        serde_json::from_str(document).map_err(|_| S3Error::invalid_argument("MalformedPolicyDocument"))?;
+async fn create_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
+    let name = form
+        .get("PolicyName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
+    let document = form
+        .get("PolicyDocument")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyDocument"))?;
+    let doc: PolicyDocumentRaw = serde_json::from_str(document)
+        .map_err(|_| S3Error::invalid_argument("MalformedPolicyDocument"))?;
     let policy = state
         .user_store
         .create_managed_policy(name, doc)
@@ -302,8 +341,13 @@ async fn create_policy(state: &AppState, form: &HashMap<String, String>) -> Resu
     ))
 }
 
-async fn delete_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
+async fn delete_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
+    let name = form
+        .get("PolicyName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
     state
         .user_store
         .delete_managed_policy(name)
@@ -313,7 +357,9 @@ async fn delete_policy(state: &AppState, form: &HashMap<String, String>) -> Resu
 }
 
 async fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
+    let name = form
+        .get("PolicyName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
     let policy = state
         .user_store
         .get_managed_policy(name)
@@ -322,7 +368,9 @@ async fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<
     let doc = serde_json::to_string(&policy.document).map_err(S3Error::internal)?;
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><GetPolicyResponse><GetPolicyResult><Policy><PolicyName>{}</PolicyName><Arn>{}</Arn><PolicyDocument>{}</PolicyDocument></Policy></GetPolicyResult></GetPolicyResponse>",
-        policy.policy_name, policy.arn, quick_xml::escape::escape(&doc)
+        policy.policy_name,
+        policy.arn,
+        quick_xml::escape::escape(&doc)
     ))
 }
 
@@ -341,9 +389,16 @@ async fn list_policies(state: &AppState) -> Result<String, S3Error> {
     ))
 }
 
-async fn attach_user_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let arn = form.get("PolicyArn").ok_or_else(|| S3Error::invalid_argument("Missing PolicyArn"))?;
+async fn attach_user_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let arn = form
+        .get("PolicyArn")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyArn"))?;
     state
         .user_store
         .attach_user_policy(username, arn)
@@ -352,9 +407,16 @@ async fn attach_user_policy(state: &AppState, form: &HashMap<String, String>) ->
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><AttachUserPolicyResponse/>".into())
 }
 
-async fn detach_user_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let arn = form.get("PolicyArn").ok_or_else(|| S3Error::invalid_argument("Missing PolicyArn"))?;
+async fn detach_user_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let arn = form
+        .get("PolicyArn")
+        .ok_or_else(|| S3Error::invalid_argument("Missing PolicyArn"))?;
     state
         .user_store
         .detach_user_policy(username, arn)
@@ -367,7 +429,9 @@ async fn list_attached_user_policies(
     state: &AppState,
     form: &HashMap<String, String>,
 ) -> Result<String, S3Error> {
-    let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
+    let username = form
+        .get("UserName")
+        .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
     let user = state
         .user_store
         .get_user(username)

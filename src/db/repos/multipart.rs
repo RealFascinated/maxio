@@ -1,11 +1,13 @@
-use crate::db::schema::{multipart_parts, multipart_uploads};
 use crate::db::DbContext;
+use crate::db::schema::{multipart_parts, multipart_uploads};
 use crate::storage::{MultipartUploadMeta, PartMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::{checksum_from_db, checksum_to_db, db_err, format_ts, get_conn, parse_ts, resolve_bucket_id};
+use super::{
+    checksum_from_db, checksum_to_db, db_err, format_ts, get_conn, parse_ts, resolve_bucket_id,
+};
 
 pub async fn insert_multipart_upload(
     ctx: &DbContext,
@@ -22,8 +24,7 @@ pub async fn insert_multipart_upload(
             multipart_uploads::key.eq(&meta.key),
             multipart_uploads::content_type.eq(&meta.content_type),
             multipart_uploads::initiated.eq(initiated),
-            multipart_uploads::checksum_algorithm
-                .eq(meta.checksum_algorithm.map(checksum_to_db)),
+            multipart_uploads::checksum_algorithm.eq(meta.checksum_algorithm.map(checksum_to_db)),
         ))
         .execute(&mut conn)
         .await
@@ -36,25 +37,28 @@ pub async fn get_multipart_upload(
     upload_id: &str,
 ) -> Result<MultipartUploadMeta, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-    let row: (String, String, String, chrono::DateTime<Utc>, Option<String>) =
-        multipart_uploads::table
-            .inner_join(crate::db::schema::buckets::table)
-            .filter(multipart_uploads::upload_id.eq(upload_id))
-            .select((
-                crate::db::schema::buckets::name,
-                multipart_uploads::key,
-                multipart_uploads::content_type,
-                multipart_uploads::initiated,
-                multipart_uploads::checksum_algorithm,
-            ))
-            .first(&mut conn)
-            .await
-            .map_err(|e| match e {
-                diesel::result::Error::NotFound => {
-                    StorageError::UploadNotFound(upload_id.to_string())
-                }
-                other => db_err(other),
-            })?;
+    let row: (
+        String,
+        String,
+        String,
+        chrono::DateTime<Utc>,
+        Option<String>,
+    ) = multipart_uploads::table
+        .inner_join(crate::db::schema::buckets::table)
+        .filter(multipart_uploads::upload_id.eq(upload_id))
+        .select((
+            crate::db::schema::buckets::name,
+            multipart_uploads::key,
+            multipart_uploads::content_type,
+            multipart_uploads::initiated,
+            multipart_uploads::checksum_algorithm,
+        ))
+        .first(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => StorageError::UploadNotFound(upload_id.to_string()),
+            other => db_err(other),
+        })?;
 
     Ok(MultipartUploadMeta {
         upload_id: upload_id.to_string(),
@@ -68,12 +72,11 @@ pub async fn get_multipart_upload(
 
 pub async fn abort_multipart_upload(ctx: &DbContext, upload_id: &str) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-    let deleted = diesel::delete(
-        multipart_uploads::table.filter(multipart_uploads::upload_id.eq(upload_id)),
-    )
-    .execute(&mut conn)
-    .await
-    .map_err(db_err)?;
+    let deleted =
+        diesel::delete(multipart_uploads::table.filter(multipart_uploads::upload_id.eq(upload_id)))
+            .execute(&mut conn)
+            .await
+            .map_err(db_err)?;
 
     if deleted == 0 {
         return Err(StorageError::UploadNotFound(upload_id.to_string()));
@@ -133,32 +136,40 @@ pub async fn list_parts(
     let meta = get_multipart_upload(ctx, upload_id).await?;
     let mut conn = get_conn(ctx.pool()).await?;
 
-    let rows: Vec<(i32, String, i64, chrono::DateTime<Utc>, Option<String>, Option<String>)> =
-        multipart_parts::table
-            .filter(multipart_parts::upload_id.eq(upload_id))
-            .order(multipart_parts::part_number.asc())
-            .select((
-                multipart_parts::part_number,
-                multipart_parts::etag,
-                multipart_parts::size,
-                multipart_parts::last_modified,
-                multipart_parts::checksum_algorithm,
-                multipart_parts::checksum_value,
-            ))
-            .load(&mut conn)
-            .await
-            .map_err(db_err)?;
+    let rows: Vec<(
+        i32,
+        String,
+        i64,
+        chrono::DateTime<Utc>,
+        Option<String>,
+        Option<String>,
+    )> = multipart_parts::table
+        .filter(multipart_parts::upload_id.eq(upload_id))
+        .order(multipart_parts::part_number.asc())
+        .select((
+            multipart_parts::part_number,
+            multipart_parts::etag,
+            multipart_parts::size,
+            multipart_parts::last_modified,
+            multipart_parts::checksum_algorithm,
+            multipart_parts::checksum_value,
+        ))
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
 
     let parts = rows
         .into_iter()
-        .map(|(part_number, etag, size, last_modified, algo, value)| PartMeta {
-            part_number: part_number as u32,
-            etag,
-            size: size as u64,
-            last_modified: format_ts(last_modified),
-            checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
-            checksum_value: value,
-        })
+        .map(
+            |(part_number, etag, size, last_modified, algo, value)| PartMeta {
+                part_number: part_number as u32,
+                etag,
+                size: size as u64,
+                last_modified: format_ts(last_modified),
+                checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
+                checksum_value: value,
+            },
+        )
         .collect();
 
     Ok((meta, parts))
@@ -171,31 +182,38 @@ pub async fn list_multipart_uploads(
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
-    let rows: Vec<(String, String, String, chrono::DateTime<Utc>, Option<String>)> =
-        multipart_uploads::table
-            .filter(multipart_uploads::bucket_id.eq(bucket_id))
-            .order(multipart_uploads::initiated.asc())
-            .select((
-                multipart_uploads::upload_id,
-                multipart_uploads::key,
-                multipart_uploads::content_type,
-                multipart_uploads::initiated,
-                multipart_uploads::checksum_algorithm,
-            ))
-            .load(&mut conn)
-            .await
-            .map_err(db_err)?;
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        chrono::DateTime<Utc>,
+        Option<String>,
+    )> = multipart_uploads::table
+        .filter(multipart_uploads::bucket_id.eq(bucket_id))
+        .order(multipart_uploads::initiated.asc())
+        .select((
+            multipart_uploads::upload_id,
+            multipart_uploads::key,
+            multipart_uploads::content_type,
+            multipart_uploads::initiated,
+            multipart_uploads::checksum_algorithm,
+        ))
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
 
     Ok(rows
         .into_iter()
-        .map(|(upload_id, key, content_type, initiated, algo)| MultipartUploadMeta {
-            upload_id,
-            bucket: bucket_name.to_string(),
-            key,
-            content_type,
-            initiated: format_ts(initiated),
-            checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
-        })
+        .map(
+            |(upload_id, key, content_type, initiated, algo)| MultipartUploadMeta {
+                upload_id,
+                bucket: bucket_name.to_string(),
+                key,
+                content_type,
+                initiated: format_ts(initiated),
+                checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
+            },
+        )
         .collect())
 }
 

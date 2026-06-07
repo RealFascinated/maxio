@@ -3,11 +3,8 @@ use std::collections::HashMap;
 
 pub use crate::db::repos::PutBucketContext;
 
-use super::{
-    BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta,
-    StorageError,
-};
 use super::traits::ListPage;
+use super::{BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError};
 
 #[async_trait]
 pub trait MetadataStore: Send + Sync {
@@ -18,17 +15,10 @@ pub trait MetadataStore: Send + Sync {
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError>;
     async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError>;
     async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError>;
-    async fn put_bucket_acl(
-        &self,
-        bucket: &str,
-        acl: crate::iam::Acl,
-    ) -> Result<(), StorageError>;
+    async fn put_bucket_acl(&self, bucket: &str, acl: crate::iam::Acl) -> Result<(), StorageError>;
     async fn get_bucket_acl(&self, bucket: &str) -> Result<crate::iam::Acl, StorageError>;
-    async fn put_bucket_cors(
-        &self,
-        bucket: &str,
-        rules: Vec<CorsRule>,
-    ) -> Result<(), StorageError>;
+    async fn put_bucket_cors(&self, bucket: &str, rules: Vec<CorsRule>)
+    -> Result<(), StorageError>;
     async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError>;
     async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError>;
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError>;
@@ -48,11 +38,7 @@ pub trait MetadataStore: Send + Sync {
         meta: &ObjectMeta,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<(), StorageError>;
-    async fn get_object_meta(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<ObjectMeta, StorageError>;
+    async fn get_object_meta(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError>;
     async fn get_object_for_read(
         &self,
         bucket: &str,
@@ -115,20 +101,15 @@ pub trait MetadataStore: Send + Sync {
         key: &str,
     ) -> Result<(), StorageError>;
 
-    async fn create_multipart_upload(
-        &self,
-        meta: &MultipartUploadMeta,
-    ) -> Result<(), StorageError>;
+    async fn create_multipart_upload(&self, meta: &MultipartUploadMeta)
+    -> Result<(), StorageError>;
     async fn get_multipart_upload(
         &self,
         upload_id: &str,
     ) -> Result<MultipartUploadMeta, StorageError>;
     async fn abort_multipart_upload(&self, upload_id: &str) -> Result<(), StorageError>;
     async fn upsert_part(&self, upload_id: &str, part: &PartMeta) -> Result<(), StorageError>;
-    async fn list_parts(
-        &self,
-        upload_id: &str,
-    ) -> Result<Vec<PartMeta>, StorageError>;
+    async fn list_parts(&self, upload_id: &str) -> Result<Vec<PartMeta>, StorageError>;
     async fn list_multipart_uploads(
         &self,
         bucket: &str,

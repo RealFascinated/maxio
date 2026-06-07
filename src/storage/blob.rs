@@ -3,9 +3,9 @@ use super::{
     ByteStream, ChecksumAlgorithm, ChunkInfo, ChunkKind, ChunkManifest, ObjectMeta, PartMeta,
     StorageError,
 };
-use rand::RngExt;
 use base64::Engine;
 use md5::{Digest, Md5};
+use rand::RngExt;
 use sha2::Sha256;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
@@ -201,7 +201,11 @@ impl BlobStorage {
         self.erasure_coding
     }
 
-    pub async fn ensure_upload_dir(&self, bucket: &str, upload_id: &str) -> Result<(), StorageError> {
+    pub async fn ensure_upload_dir(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+    ) -> Result<(), StorageError> {
         fs::create_dir_all(self.upload_dir(bucket, upload_id)).await?;
         Ok(())
     }
@@ -461,10 +465,7 @@ impl BlobStorage {
                 StorageError::Io(e)
             }
         })?;
-        Ok(Box::pin(BufReader::with_capacity(
-            IO_BUFFER_SIZE,
-            file,
-        )))
+        Ok(Box::pin(BufReader::with_capacity(IO_BUFFER_SIZE, file)))
     }
 
     pub async fn open_object_range(
@@ -508,10 +509,7 @@ impl BlobStorage {
             .await
             .map_err(StorageError::Io)?;
         let limited = file.take(length);
-        Ok(Box::pin(BufReader::with_capacity(
-            IO_BUFFER_SIZE,
-            limited,
-        )))
+        Ok(Box::pin(BufReader::with_capacity(IO_BUFFER_SIZE, limited)))
     }
 
     pub async fn unlink_object(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
@@ -795,7 +793,11 @@ impl BlobStorage {
         ))
     }
 
-    pub async fn remove_upload_dir(&self, bucket: &str, upload_id: &str) -> Result<(), StorageError> {
+    pub async fn remove_upload_dir(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+    ) -> Result<(), StorageError> {
         remove_dir_all_if_exists(&self.upload_dir(bucket, upload_id)).await
     }
 
@@ -814,8 +816,7 @@ impl BlobStorage {
     ) -> Result<(), StorageError> {
         let ver_dir = self.versions_dir(bucket, key);
         fs::create_dir_all(&ver_dir).await?;
-        fs::copy(data_path, self.version_data_path(bucket, key, version_id))
-            .await?;
+        fs::copy(data_path, self.version_data_path(bucket, key, version_id)).await?;
         Ok(())
     }
 
@@ -879,10 +880,7 @@ impl BlobStorage {
                 StorageError::Io(e)
             }
         })?;
-        Ok(Box::pin(BufReader::with_capacity(
-            IO_BUFFER_SIZE,
-            file,
-        )))
+        Ok(Box::pin(BufReader::with_capacity(IO_BUFFER_SIZE, file)))
     }
 
     pub async fn restore_current_from_version(
@@ -965,7 +963,9 @@ impl BlobStorage {
         if k + m > 255 {
             return Err(StorageError::InvalidKey(format!(
                 "too many shards: {} data + {} parity = {} > 255 (GF(2^8) limit). Increase --chunk-size",
-                k, m, k + m
+                k,
+                m,
+                k + m
             )));
         }
 

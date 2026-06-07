@@ -1,7 +1,7 @@
 use crate::error::S3Error;
+use crate::iam::Acl;
 use crate::iam::authz::authorize;
 use crate::iam::principal::Principal;
-use crate::iam::Acl;
 use crate::server::AppState;
 
 pub fn get_principal(extensions: &http::Extensions) -> Principal {
@@ -92,8 +92,7 @@ pub async fn check_bucket_access(
 }
 
 fn is_bucket_owner(principal: &Principal, owner_id: &str) -> bool {
-    !principal.is_anonymous
-        && (principal.canonical_id == owner_id || principal.user_id == owner_id)
+    !principal.is_anonymous && (principal.canonical_id == owner_id || principal.user_id == owner_id)
 }
 
 pub async fn check_object_access(

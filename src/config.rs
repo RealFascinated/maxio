@@ -107,11 +107,7 @@ mod tests {
             std::env::remove_var("MAXIO_ADDRESS");
         }
 
-        let cli = TestCli::parse_from([
-            "maxio",
-            "--database-url",
-            "postgres://localhost/maxio",
-        ]);
+        let cli = TestCli::parse_from(["maxio", "--database-url", "postgres://localhost/maxio"]);
 
         assert_eq!(cli.config.address, "0.0.0.0");
     }

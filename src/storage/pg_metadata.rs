@@ -8,9 +8,7 @@ use crate::db::{DbContext, DbPool};
 
 use super::metadata::MetadataStore;
 use super::traits::ListPage;
-use super::{
-    BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError,
-};
+use super::{BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError};
 
 pub struct PgMetadataStore {
     ctx: DbContext,
@@ -54,11 +52,7 @@ impl MetadataStore for PgMetadataStore {
         repos::delete_bucket_policy(&self.ctx, bucket).await
     }
 
-    async fn put_bucket_acl(
-        &self,
-        bucket: &str,
-        acl: crate::iam::Acl,
-    ) -> Result<(), StorageError> {
+    async fn put_bucket_acl(&self, bucket: &str, acl: crate::iam::Acl) -> Result<(), StorageError> {
         repos::put_bucket_acl(&self.ctx, bucket, acl).await
     }
 
@@ -116,11 +110,7 @@ impl MetadataStore for PgMetadataStore {
         Ok(())
     }
 
-    async fn get_object_meta(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<ObjectMeta, StorageError> {
+    async fn get_object_meta(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError> {
         repos::get_object_meta(&self.ctx, bucket, key).await
     }
 

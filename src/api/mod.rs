@@ -1,9 +1,9 @@
 pub mod acl;
 pub mod authz;
-pub mod iam;
 pub mod bucket;
 pub mod console;
 pub mod cors;
+pub mod iam;
 pub mod list;
 pub mod multipart;
 pub mod object;

@@ -51,8 +51,7 @@ impl MetricsRegistry {
         )?;
         registry.register(Box::new(storage_duration.clone()))?;
 
-        let uptime =
-            prometheus::Gauge::new("maxio_uptime_seconds", "Server uptime in seconds")?;
+        let uptime = prometheus::Gauge::new("maxio_uptime_seconds", "Server uptime in seconds")?;
         registry.register(Box::new(uptime.clone()))?;
 
         Ok(Self {
@@ -95,18 +94,12 @@ impl MetricsRegistry {
         if !bucket_data.is_empty() {
             let tmp = Registry::new();
             let obj_gauge = GaugeVec::new(
-                Opts::new(
-                    "maxio_bucket_objects_total",
-                    "Number of objects per bucket",
-                ),
+                Opts::new("maxio_bucket_objects_total", "Number of objects per bucket"),
                 &["bucket"],
             )
             .unwrap();
             let size_gauge = GaugeVec::new(
-                Opts::new(
-                    "maxio_bucket_size_bytes",
-                    "Total size in bytes per bucket",
-                ),
+                Opts::new("maxio_bucket_size_bytes", "Total size in bytes per bucket"),
                 &["bucket"],
             )
             .unwrap();

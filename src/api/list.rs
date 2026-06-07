@@ -9,8 +9,8 @@ use http::StatusCode;
 
 use super::multipart;
 use crate::api::authz::check_bucket_access;
-use crate::iam::principal::Principal;
 use crate::error::S3Error;
+use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::ObjectMeta;
 use crate::xml::{response::to_xml, types::*};
@@ -46,7 +46,6 @@ pub async fn handle_bucket_get(
         check_bucket_access(&state, &principal, &bucket, "s3:GetBucketCors").await?;
         return super::bucket::get_bucket_cors(state, bucket).await;
     }
-
 
     if params.contains_key("versions") {
         check_bucket_access(&state, &principal, &bucket, "s3:ListBucketVersions").await?;

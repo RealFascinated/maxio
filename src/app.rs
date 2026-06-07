@@ -27,9 +27,8 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         config.parity_shards,
     )
     .await?;
-    let storage: Arc<dyn Storage> = Arc::new(
-        ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics)),
-    );
+    let storage: Arc<dyn Storage> =
+        Arc::new(ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics)));
 
     crate::storage::provision_default_buckets(
         storage.as_ref(),

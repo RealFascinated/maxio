@@ -13,8 +13,8 @@ pub use objects::*;
 pub use versions::*;
 
 use crate::db::{BucketCache, CachedBucketEntry, DbPool};
-use crate::iam::acl::{AclGrant, AclPermission, Grantee};
 use crate::iam::Acl;
+use crate::iam::acl::{AclGrant, AclPermission, Grantee};
 use crate::storage::ChecksumAlgorithm;
 use crate::storage::StorageError;
 use chrono::{DateTime, Utc};
@@ -81,7 +81,9 @@ pub(crate) fn permission_from_db(s: &str) -> Result<AclPermission, StorageError>
     }
 }
 
-pub(crate) fn encode_grantee(grantee: &Grantee) -> (String, Option<String>, Option<String>, Option<String>) {
+pub(crate) fn encode_grantee(
+    grantee: &Grantee,
+) -> (String, Option<String>, Option<String>, Option<String>) {
     match grantee {
         Grantee::CanonicalUser { id, display_name } => (
             "canonical_user".to_string(),
@@ -89,12 +91,7 @@ pub(crate) fn encode_grantee(grantee: &Grantee) -> (String, Option<String>, Opti
             None,
             display_name.clone(),
         ),
-        Grantee::Group { uri } => (
-            "group".to_string(),
-            None,
-            Some(uri.clone()),
-            None,
-        ),
+        Grantee::Group { uri } => ("group".to_string(), None, Some(uri.clone()), None),
     }
 }
 
@@ -123,7 +120,13 @@ pub(crate) fn decode_grantee(
 pub(crate) fn grants_to_acl(
     owner_id: &str,
     owner_display_name: &str,
-    rows: &[(String, Option<String>, Option<String>, Option<String>, String)],
+    rows: &[(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )],
 ) -> Result<Acl, StorageError> {
     let grants = rows
         .iter()

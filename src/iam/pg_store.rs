@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::db::repos::IamRepo;
 use crate::db::DbPool;
+use crate::db::repos::IamRepo;
 
 use super::iam_store::IamStore;
 use super::policy::PolicyDocument;
@@ -23,10 +23,7 @@ impl PgIamStore {
 
 #[async_trait]
 impl IamStore for PgIamStore {
-    async fn lookup_by_access_key(
-        &self,
-        access_key_id: &str,
-    ) -> Option<(IamUser, AccessKey)> {
+    async fn lookup_by_access_key(&self, access_key_id: &str) -> Option<(IamUser, AccessKey)> {
         self.repo
             .lookup_by_access_key(access_key_id)
             .await
@@ -55,10 +52,7 @@ impl IamStore for PgIamStore {
     }
 
     async fn effective_policies(&self, user: &IamUser) -> Vec<PolicyDocument> {
-        self.repo
-            .effective_policies(user)
-            .await
-            .unwrap_or_default()
+        self.repo.effective_policies(user).await.unwrap_or_default()
     }
 
     async fn get_managed_policy(&self, name: &str) -> Option<ManagedPolicy> {

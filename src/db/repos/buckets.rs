@@ -1,17 +1,15 @@
-use crate::db::schema::{
-    bucket_acl_grants, bucket_cors_rules, bucket_policies, buckets, objects,
-};
+use crate::db::schema::{bucket_acl_grants, bucket_cors_rules, bucket_policies, buckets, objects};
 use crate::db::{CachedBucketEntry, DbContext};
 use crate::iam::Acl;
-use crate::storage::{validate_bucket_name, BucketMeta, CorsRule, StorageError};
+use crate::storage::{BucketMeta, CorsRule, StorageError, validate_bucket_name};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    db_err, encode_grantee, format_ts, get_conn, grants_to_acl, permission_to_db, resolve_bucket_id,
-    BucketAuthSnapshot, PutBucketContext,
+    BucketAuthSnapshot, PutBucketContext, db_err, encode_grantee, format_ts, get_conn,
+    grants_to_acl, permission_to_db, resolve_bucket_id,
 };
 
 pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, StorageError> {
@@ -126,21 +124,28 @@ pub async fn delete_bucket(ctx: &DbContext, name: &str) -> Result<bool, StorageE
 
 pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-    let rows: Vec<(Uuid, String, chrono::DateTime<Utc>, String, bool, String, String)> =
-        buckets::table
-            .select((
-                buckets::id,
-                buckets::name,
-                buckets::created_at,
-                buckets::region,
-                buckets::versioning,
-                buckets::owner_id,
-                buckets::owner_display_name,
-            ))
-            .order(buckets::name.asc())
-            .load(&mut conn)
-            .await
-            .map_err(db_err)?;
+    let rows: Vec<(
+        Uuid,
+        String,
+        chrono::DateTime<Utc>,
+        String,
+        bool,
+        String,
+        String,
+    )> = buckets::table
+        .select((
+            buckets::id,
+            buckets::name,
+            buckets::created_at,
+            buckets::region,
+            buckets::versioning,
+            buckets::owner_id,
+            buckets::owner_display_name,
+        ))
+        .order(buckets::name.asc())
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
 
     let mut result = Vec::with_capacity(rows.len());
     for (id, name, created_at, region, versioning, owner_id, owner_display_name) in rows {
@@ -164,7 +169,15 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
 pub async fn get_bucket_meta(ctx: &DbContext, name: &str) -> Result<BucketMeta, StorageError> {
     validate_bucket_name(name)?;
     let mut conn = get_conn(ctx.pool()).await?;
-    let row: (Uuid, String, chrono::DateTime<Utc>, String, bool, String, String) = buckets::table
+    let row: (
+        Uuid,
+        String,
+        chrono::DateTime<Utc>,
+        String,
+        bool,
+        String,
+        String,
+    ) = buckets::table
         .filter(buckets::name.eq(name))
         .select((
             buckets::id,
@@ -182,20 +195,14 @@ pub async fn get_bucket_meta(ctx: &DbContext, name: &str) -> Result<BucketMeta, 
             other => db_err(other),
         })?;
 
-    load_bucket_meta_parts(
-        &mut conn,
-        row.0,
-        row.1,
-        row.2,
-        row.3,
-        row.4,
-        row.5,
-        row.6,
-    )
-    .await
+    load_bucket_meta_parts(&mut conn, row.0, row.1, row.2, row.3, row.4, row.5, row.6).await
 }
 
-pub async fn put_bucket_policy(ctx: &DbContext, bucket: &str, policy: &str) -> Result<(), StorageError> {
+pub async fn put_bucket_policy(
+    ctx: &DbContext,
+    bucket: &str,
+    policy: &str,
+) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket).await?;
 
@@ -215,7 +222,10 @@ pub async fn put_bucket_policy(ctx: &DbContext, bucket: &str, policy: &str) -> R
     Ok(())
 }
 
-pub async fn get_bucket_policy(ctx: &DbContext, bucket: &str) -> Result<Option<String>, StorageError> {
+pub async fn get_bucket_policy(
+    ctx: &DbContext,
+    bucket: &str,
+) -> Result<Option<String>, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket).await?;
 
@@ -249,9 +259,9 @@ pub async fn put_bucket_acl(ctx: &DbContext, bucket: &str, acl: Acl) -> Result<(
 
 pub async fn get_bucket_acl(ctx: &DbContext, bucket: &str) -> Result<Acl, StorageError> {
     let meta = get_bucket_meta(ctx, bucket).await?;
-    Ok(meta.acl.unwrap_or_else(|| {
-        Acl::private(&meta.owner_id, &meta.owner_display_name)
-    }))
+    Ok(meta
+        .acl
+        .unwrap_or_else(|| Acl::private(&meta.owner_id, &meta.owner_display_name)))
 }
 
 pub async fn put_bucket_cors(
@@ -334,8 +344,7 @@ pub(crate) async fn load_bucket_cache_entry(
             other => db_err(other),
         })?;
 
-    let (policy, acl) =
-        load_bucket_auth_parts(conn, row.0, &row.2, &row.3).await?;
+    let (policy, acl) = load_bucket_auth_parts(conn, row.0, &row.2, &row.3).await?;
 
     Ok(CachedBucketEntry {
         id: row.0,
@@ -358,7 +367,11 @@ pub async fn is_versioned(ctx: &DbContext, bucket: &str) -> Result<bool, Storage
     Ok(entry.versioning)
 }
 
-pub async fn set_versioning(ctx: &DbContext, bucket: &str, enabled: bool) -> Result<(), StorageError> {
+pub async fn set_versioning(
+    ctx: &DbContext,
+    bucket: &str,
+    enabled: bool,
+) -> Result<(), StorageError> {
     validate_bucket_name(bucket)?;
     let mut conn = get_conn(ctx.pool()).await?;
     let updated = diesel::update(buckets::table.filter(buckets::name.eq(bucket)))
@@ -388,28 +401,29 @@ async fn load_bucket_auth_parts(
         .optional()
         .map_err(db_err)?;
 
-    let acl_rows: Vec<(String, Option<String>, Option<String>, Option<String>, String)> =
-        bucket_acl_grants::table
-            .filter(bucket_acl_grants::bucket_id.eq(bucket_id))
-            .select((
-                bucket_acl_grants::grantee_type,
-                bucket_acl_grants::grantee_id,
-                bucket_acl_grants::grantee_uri,
-                bucket_acl_grants::grantee_display_name,
-                bucket_acl_grants::permission,
-            ))
-            .load(conn)
-            .await
-            .map_err(db_err)?;
+    let acl_rows: Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )> = bucket_acl_grants::table
+        .filter(bucket_acl_grants::bucket_id.eq(bucket_id))
+        .select((
+            bucket_acl_grants::grantee_type,
+            bucket_acl_grants::grantee_id,
+            bucket_acl_grants::grantee_uri,
+            bucket_acl_grants::grantee_display_name,
+            bucket_acl_grants::permission,
+        ))
+        .load(conn)
+        .await
+        .map_err(db_err)?;
 
     let acl = if acl_rows.is_empty() {
         None
     } else {
-        Some(grants_to_acl(
-            owner_id,
-            owner_display_name,
-            &acl_rows,
-        )?)
+        Some(grants_to_acl(owner_id, owner_display_name, &acl_rows)?)
     };
 
     Ok((policy, acl))
@@ -454,7 +468,13 @@ async fn load_bucket_meta_parts(
             cors_rows
                 .into_iter()
                 .map(
-                    |(allowed_origins, allowed_methods, allowed_headers, expose_headers, max_age)| {
+                    |(
+                        allowed_origins,
+                        allowed_methods,
+                        allowed_headers,
+                        expose_headers,
+                        max_age,
+                    )| {
                         CorsRule {
                             allowed_origins,
                             allowed_methods,

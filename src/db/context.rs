@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use super::bucket_cache::BucketCache;
 use super::DbPool;
+use super::bucket_cache::BucketCache;
 
 /// Shared database pool plus process-local caches for metadata hot paths.
 #[derive(Clone)]

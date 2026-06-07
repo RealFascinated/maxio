@@ -267,7 +267,6 @@ impl S3Error {
             resource: None,
         }
     }
-
 }
 
 impl IntoResponse for S3Error {

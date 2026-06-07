@@ -109,19 +109,32 @@ where
 }
 
 pub fn managed_policy_arn(name: &str) -> String {
-    format!("arn:aws:iam::{}:policy/{}", super::principal::ACCOUNT_ID, name)
+    format!(
+        "arn:aws:iam::{}:policy/{}",
+        super::principal::ACCOUNT_ID,
+        name
+    )
 }
 
 pub fn generate_user_id() -> String {
-    format!("AIDA{}", uuid::Uuid::new_v4().simple().to_string()[..16].to_uppercase())
+    format!(
+        "AIDA{}",
+        uuid::Uuid::new_v4().simple().to_string()[..16].to_uppercase()
+    )
 }
 
 pub fn generate_policy_id() -> String {
-    format!("ANPA{}", uuid::Uuid::new_v4().simple().to_string()[..16].to_uppercase())
+    format!(
+        "ANPA{}",
+        uuid::Uuid::new_v4().simple().to_string()[..16].to_uppercase()
+    )
 }
 
 pub fn generate_access_key_id() -> String {
-    format!("AKIA{}", uuid::Uuid::new_v4().simple().to_string()[..16].to_uppercase())
+    format!(
+        "AKIA{}",
+        uuid::Uuid::new_v4().simple().to_string()[..16].to_uppercase()
+    )
 }
 
 pub fn generate_secret_access_key() -> String {

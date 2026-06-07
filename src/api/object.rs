@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_util::io::ReaderStream;
 
-use crate::iam::principal::Principal;
 use crate::api::authz::{check_bucket_access, check_object_access, get_principal};
 use crate::error::S3Error;
+use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::{ChecksumAlgorithm, StorageError};
 use crate::xml::{
@@ -67,13 +67,7 @@ pub async fn put_object(
     let body = req.into_body();
     if params.contains_key("acl") {
         return super::acl::handle_object_put_acl(
-            state,
-            bucket,
-            key,
-            params,
-            headers,
-            body,
-            principal,
+            state, bucket, key, params, headers, body, principal,
         )
         .await;
     }
@@ -133,7 +127,6 @@ pub async fn put_object(
     }
 
     let checksum = extract_checksum(&headers);
-
 
     let result = state
         .storage
@@ -345,7 +338,6 @@ async fn copy_object(
 
     // Propagate source checksum algorithm so it's recomputed during copy
     let checksum = src_meta.checksum_algorithm.map(|algo| (algo, None));
-
 
     // Write destination
     let result = state
@@ -560,7 +552,6 @@ pub async fn get_object(
     }
 
     check_object_access(&state, &principal, &bucket, &key, "s3:GetObject").await?;
-
 
     if let Some(part_num_str) = params.get("partNumber") {
         let part_num: u32 = part_num_str

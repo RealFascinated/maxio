@@ -551,12 +551,9 @@ pub async fn list_buckets(
 ) -> impl IntoResponse {
     match state.storage.list_buckets().await {
         Ok(buckets) => {
-            let buckets = crate::iam::authz::filter_buckets_by_access(
-                &state,
-                &session.principal(),
-                buckets,
-            )
-            .await;
+            let buckets =
+                crate::iam::authz::filter_buckets_by_access(&state, &session.principal(), buckets)
+                    .await;
             let list: Vec<serde_json::Value> = buckets
                 .into_iter()
                 .map(|b| {
@@ -629,10 +626,7 @@ pub async fn create_bucket(
         cors_rules: None,
         owner_id: owner_id.clone(),
         owner_display_name: owner_display_name.clone(),
-        acl: Some(crate::iam::Acl::private(
-            &owner_id,
-            &owner_display_name,
-        )),
+        acl: Some(crate::iam::Acl::private(&owner_id, &owner_display_name)),
         policy: None,
         public_read: false,
         public_list: false,
@@ -658,9 +652,7 @@ pub async fn delete_bucket_api(
     Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_bucket_check(&state, &session, &bucket, "s3:DeleteBucket").await
-    {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:DeleteBucket").await {
         return resp;
     }
 
@@ -721,16 +713,17 @@ pub async fn list_objects(
     let prefix = params.prefix.unwrap_or_default();
     let delimiter = params.delimiter.unwrap_or_else(|| "/".to_string());
 
-    let all_objects = match crate::storage::list_objects_all(state.storage.as_ref(), &bucket, &prefix).await {
-        Ok(objects) => objects,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
+    let all_objects =
+        match crate::storage::list_objects_all(state.storage.as_ref(), &bucket, &prefix).await {
+            Ok(objects) => objects,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        };
 
     let mut files = Vec::new();
     let mut prefix_set = BTreeSet::new();
@@ -781,9 +774,7 @@ pub async fn upload_object(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await
-    {
+    if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await {
         return resp;
     }
 
@@ -817,13 +808,7 @@ pub async fn upload_object(
 
     match state
         .storage
-        .put_object(
-            &bucket,
-            &key,
-            content_type,
-            Box::pin(reader),
-            None,
-        )
+        .put_object(&bucket, &key, content_type, Box::pin(reader), None)
         .await
     {
         Ok(result) => (
@@ -874,9 +859,12 @@ pub async fn delete_object_api(
 
     match state.storage.delete_object(&bucket, &key).await {
         Ok(_) => {
-            if let Err(e) =
-                preserve_empty_parent_folder_after_object_delete(state.storage.as_ref(), &bucket, &key)
-                    .await
+            if let Err(e) = preserve_empty_parent_folder_after_object_delete(
+                state.storage.as_ref(),
+                &bucket,
+                &key,
+            )
+            .await
             {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -941,9 +929,7 @@ pub async fn download_object(
     Extension(session): Extension<ConsoleSession>,
     Path((bucket, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await
-    {
+    if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await {
         return resp;
     }
 
@@ -996,9 +982,7 @@ pub async fn presign_object(
     Query(params): Query<PresignParams>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await
-    {
+    if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await {
         return resp;
     }
 
@@ -1131,9 +1115,7 @@ pub async fn create_folder(
     }
 
     let key = format!("{}/", name);
-    if let Err(resp) =
-        console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await
-    {
+    if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await {
         return resp;
     }
 
@@ -1209,15 +1191,12 @@ pub async fn set_versioning(
     }
 }
 
-
 pub async fn get_public(
     State(state): State<AppState>,
     Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_bucket_check(&state, &session, &bucket, "s3:GetBucketPolicy").await
-    {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:GetBucketPolicy").await {
         return resp;
     }
 
@@ -1251,9 +1230,7 @@ pub async fn set_public(
     Path(bucket): Path<String>,
     Json(body): Json<SetPublicRequest>,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_bucket_check(&state, &session, &bucket, "s3:PutBucketPolicy").await
-    {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:PutBucketPolicy").await {
         return resp;
     }
 
@@ -1303,8 +1280,14 @@ pub async fn list_versions(
     Path(bucket): Path<String>,
     Query(params): Query<ListVersionsParams>,
 ) -> impl IntoResponse {
-    if let Err(resp) =
-        console_object_check(&state, &session, &bucket, &params.key, "s3:GetObjectVersion").await
+    if let Err(resp) = console_object_check(
+        &state,
+        &session,
+        &bucket,
+        &params.key,
+        "s3:GetObjectVersion",
+    )
+    .await
     {
         return resp;
     }
@@ -1415,10 +1398,7 @@ pub async fn download_version(
         .into_response()
 }
 
-async fn require_root_middleware(
-    request: Request,
-    next: Next,
-) -> Response {
+async fn require_root_middleware(request: Request, next: Next) -> Response {
     let authorized = request
         .extensions()
         .get::<ConsoleSession>()
@@ -1643,7 +1623,11 @@ pub async fn list_policies_api(State(state): State<AppState>) -> impl IntoRespon
             })
         })
         .collect();
-    (StatusCode::OK, Json(serde_json::json!({ "policies": policies }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "policies": policies })),
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1799,8 +1783,14 @@ pub fn console_router(state: AppState) -> Router<AppState> {
                 .put(put_user_policy_api)
                 .delete(delete_user_policy_api),
         )
-        .route("/users/{username}/attach-policy", post(attach_user_policy_api))
-        .route("/users/{username}/detach-policy", post(detach_user_policy_api))
+        .route(
+            "/users/{username}/attach-policy",
+            post(attach_user_policy_api),
+        )
+        .route(
+            "/users/{username}/detach-policy",
+            post(detach_user_policy_api),
+        )
         .route("/policies", get(list_policies_api).post(create_policy_api))
         .route(
             "/policies/{name}",
@@ -1867,8 +1857,10 @@ mod tests {
 
     async fn test_storage(
         data_dir: &str,
-    ) -> Result<(Arc<dyn Storage>, testcontainers::ContainerAsync<Postgres>), Box<dyn std::error::Error>>
-    {
+    ) -> Result<
+        (Arc<dyn Storage>, testcontainers::ContainerAsync<Postgres>),
+        Box<dyn std::error::Error>,
+    > {
         let postgres = Postgres::default().start().await?;
         let port = postgres.get_host_port_ipv4(5432).await?;
         let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
@@ -1940,9 +1932,13 @@ mod tests {
             .delete_object("bucket", "folder/file.txt")
             .await
             .unwrap();
-        preserve_empty_parent_folder_after_object_delete(storage.as_ref(), "bucket", "folder/file.txt")
-            .await
-            .unwrap();
+        preserve_empty_parent_folder_after_object_delete(
+            storage.as_ref(),
+            "bucket",
+            "folder/file.txt",
+        )
+        .await
+        .unwrap();
 
         let objects = crate::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
             .await

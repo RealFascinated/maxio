@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use crate::db::schema::{
-    object_acl_grants, object_checksums, object_tags, objects,
-};
 use crate::db::DbContext;
+use crate::db::schema::{object_acl_grants, object_checksums, object_tags, objects};
 use crate::iam::Acl;
 use crate::storage::{ObjectMeta, StorageError};
 use chrono::Utc;
@@ -12,9 +10,9 @@ use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts, get_conn, grants_to_acl,
-    parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db, resolve_bucket_id,
-    PutBucketContext,
+    PutBucketContext, checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts,
+    get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
+    resolve_bucket_id,
 };
 
 fn object_has_side_tables(meta: &ObjectMeta) -> bool {
@@ -159,7 +157,11 @@ pub async fn get_object_meta(
     row_into_meta(&mut conn, row).await
 }
 
-pub async fn delete_object(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<(), StorageError> {
+pub async fn delete_object(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
@@ -174,7 +176,11 @@ pub async fn delete_object(ctx: &DbContext, bucket_name: &str, key: &str) -> Res
     Ok(())
 }
 
-pub async fn object_exists(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<bool, StorageError> {
+pub async fn object_exists(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+) -> Result<bool, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
     diesel::select(diesel::dsl::exists(
@@ -208,11 +214,15 @@ pub async fn put_object_acl(
     replace_object_acl(&mut conn, object_id, Some(&acl)).await
 }
 
-pub async fn get_object_acl(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<Acl, StorageError> {
+pub async fn get_object_acl(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+) -> Result<Acl, StorageError> {
     let meta = get_object_meta(ctx, bucket_name, key).await?;
-    Ok(meta.acl.unwrap_or_else(|| {
-        Acl::private(&meta.owner_id, &meta.owner_display_name)
-    }))
+    Ok(meta
+        .acl
+        .unwrap_or_else(|| Acl::private(&meta.owner_id, &meta.owner_display_name)))
 }
 
 pub async fn put_object_tags(
@@ -246,7 +256,11 @@ pub async fn get_object_tags(
     Ok(meta.tags.unwrap_or_default())
 }
 
-pub async fn delete_object_tags(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<(), StorageError> {
+pub async fn delete_object_tags(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+) -> Result<(), StorageError> {
     put_object_tags(ctx, bucket_name, key, HashMap::new()).await
 }
 
@@ -281,19 +295,24 @@ pub(crate) async fn row_into_meta(
         .await
         .map_err(db_err)?;
 
-    let acl_rows: Vec<(String, Option<String>, Option<String>, Option<String>, String)> =
-        object_acl_grants::table
-            .filter(object_acl_grants::object_id.eq(row.id))
-            .select((
-                object_acl_grants::grantee_type,
-                object_acl_grants::grantee_id,
-                object_acl_grants::grantee_uri,
-                object_acl_grants::grantee_display_name,
-                object_acl_grants::permission,
-            ))
-            .load(conn)
-            .await
-            .map_err(db_err)?;
+    let acl_rows: Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )> = object_acl_grants::table
+        .filter(object_acl_grants::object_id.eq(row.id))
+        .select((
+            object_acl_grants::grantee_type,
+            object_acl_grants::grantee_id,
+            object_acl_grants::grantee_uri,
+            object_acl_grants::grantee_display_name,
+            object_acl_grants::permission,
+        ))
+        .load(conn)
+        .await
+        .map_err(db_err)?;
 
     let checksum: Option<(String, String)> = object_checksums::table
         .filter(object_checksums::object_id.eq(row.id))

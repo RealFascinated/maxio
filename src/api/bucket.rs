@@ -7,15 +7,13 @@ use axum::{
     response::Response,
 };
 
+use crate::api::authz::{check_bucket_access, get_principal};
 use crate::error::S3Error;
 use crate::iam::authz::filter_buckets_by_access;
 use crate::iam::policy::{parse_policy_json, policy_has_public_list, policy_has_public_read};
 use crate::iam::principal::Principal;
-use crate::api::authz::{check_bucket_access, get_principal};
 use crate::server::AppState;
-use crate::storage::{
-    BucketMeta, CorsRule, StorageError, is_valid_bucket_name,
-};
+use crate::storage::{BucketMeta, CorsRule, StorageError, is_valid_bucket_name};
 use crate::xml::{response::to_xml, types::*};
 
 pub async fn list_buckets(
@@ -184,15 +182,8 @@ pub async fn handle_bucket_put(
         return put_bucket_policy(state, bucket, body, principal).await;
     }
     if params.contains_key("acl") {
-        return super::acl::handle_bucket_put_acl(
-            state,
-            bucket,
-            params,
-            headers,
-            body,
-            principal,
-        )
-        .await;
+        return super::acl::handle_bucket_put_acl(state, bucket, params, headers, body, principal)
+            .await;
     }
     if params.contains_key("versioning") {
         return put_bucket_versioning(State(state), Path(bucket), body).await;
@@ -439,9 +430,8 @@ pub async fn get_bucket_policy(
         .get_bucket_policy(&bucket)
         .await
         .map_err(S3Error::internal)?;
-    let policy = policy.ok_or_else(|| {
-        S3Error::access_denied("The bucket policy does not exist")
-    })?;
+    let policy =
+        policy.ok_or_else(|| S3Error::access_denied("The bucket policy does not exist"))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/json")
@@ -477,8 +467,8 @@ pub async fn get_bucket_policy_status(
         .get_bucket_policy(&bucket)
         .await
         .map_err(S3Error::internal)?;
-    let is_public = policy_has_public_read(policy.as_deref())
-        || policy_has_public_list(policy.as_deref());
+    let is_public =
+        policy_has_public_read(policy.as_deref()) || policy_has_public_list(policy.as_deref());
     let status = crate::xml::types::PolicyStatus { is_public };
     let xml = crate::xml::response::to_xml(&status).map_err(S3Error::internal)?;
     Ok(Response::builder()

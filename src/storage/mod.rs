@@ -96,7 +96,10 @@ pub struct BucketMeta {
     pub cors_rules: Option<Vec<CorsRule>>,
     #[serde(default = "default_owner_id", skip_serializing_if = "is_root_owner")]
     pub owner_id: String,
-    #[serde(default = "default_owner_display_name", skip_serializing_if = "is_root_owner_display")]
+    #[serde(
+        default = "default_owner_display_name",
+        skip_serializing_if = "is_root_owner_display"
+    )]
     pub owner_display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acl: Option<crate::iam::Acl>,
@@ -135,7 +138,10 @@ pub struct ObjectMeta {
     pub last_modified: String,
     #[serde(default = "default_owner_id", skip_serializing_if = "is_root_owner")]
     pub owner_id: String,
-    #[serde(default = "default_owner_display_name", skip_serializing_if = "is_root_owner_display")]
+    #[serde(
+        default = "default_owner_display_name",
+        skip_serializing_if = "is_root_owner_display"
+    )]
     pub owner_display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acl: Option<crate::iam::Acl>,
@@ -251,7 +257,11 @@ pub fn is_valid_bucket_name(name: &str) -> bool {
 }
 
 /// Normalize object metadata defaults for owner/acl fields.
-pub fn normalize_object_meta(meta: &mut ObjectMeta, bucket_owner_id: &str, bucket_owner_name: &str) {
+pub fn normalize_object_meta(
+    meta: &mut ObjectMeta,
+    bucket_owner_id: &str,
+    bucket_owner_name: &str,
+) {
     if meta.owner_id.is_empty() {
         meta.owner_id = bucket_owner_id.to_string();
     }
@@ -290,11 +300,7 @@ pub async fn list_objects_all(
 
 /// Create each bucket in `default_buckets` (comma-separated) if it does not
 /// already exist. Invalid S3 names are logged and skipped; errors are non-fatal.
-pub async fn provision_default_buckets(
-    storage: &dyn Storage,
-    default_buckets: &str,
-    region: &str,
-) {
+pub async fn provision_default_buckets(storage: &dyn Storage, default_buckets: &str, region: &str) {
     if default_buckets.is_empty() {
         return;
     }

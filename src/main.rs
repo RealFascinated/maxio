@@ -20,9 +20,9 @@ mod app;
 mod auth;
 mod config;
 mod db;
-mod iam;
 mod embedded;
 mod error;
+mod iam;
 mod metrics;
 mod server;
 mod stats;
@@ -70,7 +70,6 @@ enum Commands {
         #[arg(long, env = "MAXIO_HEALTHCHECK_TIMEOUT_MS", default_value = "2000")]
         timeout_ms: u64,
     },
-
 
     /// Manage IAM users
     #[command(subcommand)]
@@ -164,7 +163,6 @@ enum PolicyCmd {
         database_url: String,
     },
 }
-
 
 fn default_healthcheck_url() -> String {
     let port = std::env::var("MAXIO_PORT")
@@ -325,7 +323,6 @@ async fn run_healthcheck(url: &str, timeout_ms: u64) -> anyhow::Result<()> {
     anyhow::bail!("healthcheck failed with HTTP status {}", status_code);
 }
 
-
 async fn load_iam_store(database_url: &str) -> anyhow::Result<Arc<dyn iam::IamStore>> {
     let pool = db::create_pool(database_url).await?;
     db::run_migrations(database_url).await?;
@@ -342,23 +339,42 @@ async fn run_user_cmd(cmd: UserCmd) -> anyhow::Result<()> {
             database_url,
         } => {
             let store = load_iam_store(&database_url).await?;
-            api::iam::cli_add_user(store.as_ref(), &username, access_key.as_deref(), secret_key.as_deref())
-                .await
-                .map_err(|e| anyhow::anyhow!(e))?;
+            api::iam::cli_add_user(
+                store.as_ref(),
+                &username,
+                access_key.as_deref(),
+                secret_key.as_deref(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
             println!("✓ user {username} created");
         }
         UserCmd::List { database_url } => {
             let store = load_iam_store(&database_url).await?;
             for u in store.list_users().await {
-                println!("{} ({}) keys={}", u.username, u.user_id, u.access_keys.len());
+                println!(
+                    "{} ({}) keys={}",
+                    u.username,
+                    u.user_id,
+                    u.access_keys.len()
+                );
             }
         }
-        UserCmd::Delete { username, database_url } => {
+        UserCmd::Delete {
+            username,
+            database_url,
+        } => {
             let store = load_iam_store(&database_url).await?;
-            store.delete_user(&username).await.map_err(|e| anyhow::anyhow!(e))?;
+            store
+                .delete_user(&username)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
             println!("✓ user {username} deleted");
         }
-        UserCmd::CreateKey { username, database_url } => {
+        UserCmd::CreateKey {
+            username,
+            database_url,
+        } => {
             let store = load_iam_store(&database_url).await?;
             let key = store
                 .create_access_key(&username)

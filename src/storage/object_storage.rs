@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::blob::{validate_key, validate_upload_id, BlobStorage};
+use super::blob::{BlobStorage, validate_key, validate_upload_id};
 use super::metadata::{MetadataStore, PutBucketContext};
 use super::traits::{ListPage, Storage};
 use super::{
-    normalize_object_meta, validate_bucket_name, BucketMeta, ByteStream, ChecksumAlgorithm,
-    CorsRule, DeleteResult, MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError,
+    BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult, MultipartUploadMeta,
+    ObjectMeta, PartMeta, PutResult, StorageError, normalize_object_meta, validate_bucket_name,
 };
 use crate::metrics::MetricsRegistry;
 
@@ -20,7 +20,11 @@ pub struct ObjectStorage {
 
 impl ObjectStorage {
     pub fn new(blobs: BlobStorage, meta: Arc<dyn MetadataStore>) -> Self {
-        Self { blobs, meta, metrics: None }
+        Self {
+            blobs,
+            meta,
+            metrics: None,
+        }
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
@@ -56,16 +60,9 @@ impl ObjectStorage {
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
         if written.published {
-            if let Err(e) = self
-                .meta
-                .upsert_object(bucket, &object_meta, put_ctx)
-                .await
-            {
-                let _ = BlobStorage::discard_payload(
-                    &written.final_path,
-                    written.payload_is_dir,
-                )
-                .await;
+            if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {
+                let _ =
+                    BlobStorage::discard_payload(&written.final_path, written.payload_is_dir).await;
                 return Err(e);
             }
         } else {
@@ -195,12 +192,7 @@ impl ObjectStorage {
 
         let written = if self.blobs.erasure_coding_enabled() {
             self.blobs
-                .write_chunked_object_temp(
-                    bucket,
-                    key,
-                    body,
-                    checksum.as_ref().map(|(a, _)| *a),
-                )
+                .write_chunked_object_temp(bucket, key, body, checksum.as_ref().map(|(a, _)| *a))
                 .await?
         } else {
             self.blobs
@@ -375,9 +367,7 @@ impl ObjectStorage {
                 .iter()
                 .find(|p| p.part_number == *part_number)
                 .cloned()
-                .ok_or_else(|| {
-                    StorageError::InvalidKey(format!("missing part {}", part_number))
-                })?;
+                .ok_or_else(|| StorageError::InvalidKey(format!("missing part {}", part_number)))?;
             if meta.etag != *requested_etag {
                 return Err(StorageError::InvalidKey(format!(
                     "etag mismatch for part {}",
@@ -399,12 +389,7 @@ impl ObjectStorage {
 
         let mut written = if self.blobs.erasure_coding_enabled() {
             self.blobs
-                .assemble_multipart_chunked_temp(
-                    bucket,
-                    &upload_meta.key,
-                    upload_id,
-                    &selected,
-                )
+                .assemble_multipart_chunked_temp(bucket, &upload_meta.key, upload_id, &selected)
                 .await?
         } else {
             self.blobs
@@ -500,11 +485,7 @@ impl Storage for ObjectStorage {
         self.meta.delete_bucket_policy(bucket).await
     }
 
-    async fn put_bucket_acl(
-        &self,
-        bucket: &str,
-        acl: crate::iam::Acl,
-    ) -> Result<(), StorageError> {
+    async fn put_bucket_acl(&self, bucket: &str, acl: crate::iam::Acl) -> Result<(), StorageError> {
         self.meta.put_bucket_acl(bucket, acl).await
     }
 
@@ -541,9 +522,9 @@ impl Storage for ObjectStorage {
         bucket: &str,
     ) -> Result<(Option<String>, crate::iam::Acl), StorageError> {
         let snap = self.meta.fetch_bucket_auth_context(bucket).await?;
-        let acl = snap.acl.unwrap_or_else(|| {
-            crate::iam::Acl::private(&snap.owner_id, &snap.owner_display_name)
-        });
+        let acl = snap
+            .acl
+            .unwrap_or_else(|| crate::iam::Acl::private(&snap.owner_id, &snap.owner_display_name));
         Ok((snap.policy, acl))
     }
 
@@ -657,11 +638,7 @@ impl Storage for ObjectStorage {
         self.meta.delete_object_tags(bucket, key).await
     }
 
-    async fn delete_object(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<DeleteResult, StorageError> {
+    async fn delete_object(&self, bucket: &str, key: &str) -> Result<DeleteResult, StorageError> {
         let t = std::time::Instant::now();
         let result = self.delete_object_inner(bucket, key).await;
         self.record("delete_object", t.elapsed());
@@ -889,7 +866,8 @@ impl Storage for ObjectStorage {
         self.meta
             .delete_object_version_meta(bucket, key, version_id)
             .await?;
-        self.blobs.unlink_version_blobs(bucket, key, version_id)
+        self.blobs
+            .unlink_version_blobs(bucket, key, version_id)
             .await?;
         self.meta.update_current_after_delete(bucket, key).await?;
         self.sync_current_blobs_after_version_change(bucket, key)

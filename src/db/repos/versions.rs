@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use crate::db::DbContext;
 use crate::db::schema::{
     object_version_acl_grants, object_version_checksums, object_version_tags, object_versions,
     objects,
 };
-use crate::db::DbContext;
 use crate::storage::{ObjectMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
@@ -61,7 +61,11 @@ pub async fn insert_version(
             object_versions::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
             object_versions::is_current.eq(is_current),
         ))
-        .on_conflict((object_versions::bucket_id, object_versions::key, object_versions::version_id))
+        .on_conflict((
+            object_versions::bucket_id,
+            object_versions::key,
+            object_versions::version_id,
+        ))
         .do_update()
         .set((
             object_versions::size.eq(meta.size as i64),
@@ -274,14 +278,11 @@ pub async fn update_current_after_delete(
     if let Some(row) = latest {
         let meta = version_row_into_meta(&mut conn, row.clone()).await?;
         super::upsert_object(ctx, bucket_name, &meta, None).await?;
-        diesel::update(
-            object_versions::table
-                .filter(object_versions::id.eq(row.id)),
-        )
-        .set(object_versions::is_current.eq(true))
-        .execute(&mut conn)
-        .await
-        .map_err(db_err)?;
+        diesel::update(object_versions::table.filter(object_versions::id.eq(row.id)))
+            .set(object_versions::is_current.eq(true))
+            .execute(&mut conn)
+            .await
+            .map_err(db_err)?;
     }
 
     Ok(())
@@ -317,19 +318,24 @@ async fn version_row_into_meta(
         .await
         .map_err(db_err)?;
 
-    let acl_rows: Vec<(String, Option<String>, Option<String>, Option<String>, String)> =
-        object_version_acl_grants::table
-            .filter(object_version_acl_grants::object_version_id.eq(row.id))
-            .select((
-                object_version_acl_grants::grantee_type,
-                object_version_acl_grants::grantee_id,
-                object_version_acl_grants::grantee_uri,
-                object_version_acl_grants::grantee_display_name,
-                object_version_acl_grants::permission,
-            ))
-            .load(conn)
-            .await
-            .map_err(db_err)?;
+    let acl_rows: Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )> = object_version_acl_grants::table
+        .filter(object_version_acl_grants::object_version_id.eq(row.id))
+        .select((
+            object_version_acl_grants::grantee_type,
+            object_version_acl_grants::grantee_id,
+            object_version_acl_grants::grantee_uri,
+            object_version_acl_grants::grantee_display_name,
+            object_version_acl_grants::permission,
+        ))
+        .load(conn)
+        .await
+        .map_err(db_err)?;
 
     let checksum: Option<(String, String)> = object_version_checksums::table
         .filter(object_version_checksums::object_version_id.eq(row.id))

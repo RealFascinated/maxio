@@ -1,13 +1,13 @@
+use crate::db::DbPool;
 use crate::db::schema::{
     iam_access_keys, iam_managed_policies, iam_managed_policy_statements, iam_user_inline_policies,
     iam_user_policy_attachments, iam_users,
 };
-use crate::db::DbPool;
-use crate::iam::policy::{parse_policy_document, PolicyDocument};
+use crate::iam::policy::{PolicyDocument, parse_policy_document};
 use crate::iam::types::{
+    AccessKey, IamUser, InlinePolicy, KeyStatus, ManagedPolicy, PolicyDocumentRaw, StatementRaw,
     generate_access_key_id, generate_policy_id, generate_secret_access_key, generate_user_id,
-    managed_policy_arn, AccessKey, IamUser, InlinePolicy, KeyStatus, ManagedPolicy, PolicyDocumentRaw,
-    StatementRaw,
+    managed_policy_arn,
 };
 use chrono::Utc;
 use diesel::prelude::*;
@@ -32,21 +32,22 @@ impl IamRepo {
     ) -> Result<Option<(IamUser, AccessKey)>, StorageError> {
         let mut conn = get_conn(&self.pool).await?;
 
-        let row: Option<(String, String, String, String, chrono::DateTime<Utc>)> = iam_access_keys::table
-            .inner_join(iam_users::table)
-            .filter(iam_access_keys::access_key_id.eq(access_key_id))
-            .filter(iam_access_keys::status.eq("Active"))
-            .select((
-                iam_users::username,
-                iam_users::user_id,
-                iam_access_keys::access_key_id,
-                iam_access_keys::secret_access_key,
-                iam_access_keys::created_at,
-            ))
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(db_err)?;
+        let row: Option<(String, String, String, String, chrono::DateTime<Utc>)> =
+            iam_access_keys::table
+                .inner_join(iam_users::table)
+                .filter(iam_access_keys::access_key_id.eq(access_key_id))
+                .filter(iam_access_keys::status.eq("Active"))
+                .select((
+                    iam_users::username,
+                    iam_users::user_id,
+                    iam_access_keys::access_key_id,
+                    iam_access_keys::secret_access_key,
+                    iam_access_keys::created_at,
+                ))
+                .first(&mut conn)
+                .await
+                .optional()
+                .map_err(db_err)?;
 
         let Some((username, user_id, key_id, secret, created_at)) = row else {
             return Ok(None);
@@ -112,7 +113,10 @@ impl IamRepo {
         Ok(users)
     }
 
-    pub async fn effective_policies(&self, user: &IamUser) -> Result<Vec<PolicyDocument>, StorageError> {
+    pub async fn effective_policies(
+        &self,
+        user: &IamUser,
+    ) -> Result<Vec<PolicyDocument>, StorageError> {
         let mut docs = Vec::new();
         for inline in &user.inline_policies {
             if let Ok(doc) = parse_policy_document(&inline.document) {
@@ -129,20 +133,24 @@ impl IamRepo {
         Ok(docs)
     }
 
-    pub async fn get_managed_policy(&self, name: &str) -> Result<Option<ManagedPolicy>, StorageError> {
+    pub async fn get_managed_policy(
+        &self,
+        name: &str,
+    ) -> Result<Option<ManagedPolicy>, StorageError> {
         let mut conn = get_conn(&self.pool).await?;
-        let row: Option<(String, String, String, chrono::DateTime<Utc>)> = iam_managed_policies::table
-            .filter(iam_managed_policies::policy_name.eq(name))
-            .select((
-                iam_managed_policies::policy_id,
-                iam_managed_policies::policy_name,
-                iam_managed_policies::arn,
-                iam_managed_policies::created_at,
-            ))
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(db_err)?;
+        let row: Option<(String, String, String, chrono::DateTime<Utc>)> =
+            iam_managed_policies::table
+                .filter(iam_managed_policies::policy_name.eq(name))
+                .select((
+                    iam_managed_policies::policy_id,
+                    iam_managed_policies::policy_name,
+                    iam_managed_policies::arn,
+                    iam_managed_policies::created_at,
+                ))
+                .first(&mut conn)
+                .await
+                .optional()
+                .map_err(db_err)?;
 
         let Some((policy_id, policy_name, arn, created_at)) = row else {
             return Ok(None);
@@ -160,17 +168,18 @@ impl IamRepo {
 
     pub async fn list_managed_policies(&self) -> Result<Vec<ManagedPolicy>, StorageError> {
         let mut conn = get_conn(&self.pool).await?;
-        let rows: Vec<(String, String, String, chrono::DateTime<Utc>)> = iam_managed_policies::table
-            .select((
-                iam_managed_policies::policy_id,
-                iam_managed_policies::policy_name,
-                iam_managed_policies::arn,
-                iam_managed_policies::created_at,
-            ))
-            .order(iam_managed_policies::policy_name.asc())
-            .load(&mut conn)
-            .await
-            .map_err(db_err)?;
+        let rows: Vec<(String, String, String, chrono::DateTime<Utc>)> =
+            iam_managed_policies::table
+                .select((
+                    iam_managed_policies::policy_id,
+                    iam_managed_policies::policy_name,
+                    iam_managed_policies::arn,
+                    iam_managed_policies::created_at,
+                ))
+                .order(iam_managed_policies::policy_name.asc())
+                .load(&mut conn)
+                .await
+                .map_err(db_err)?;
 
         let mut policies = Vec::with_capacity(rows.len());
         for (policy_id, policy_name, arn, created_at) in rows {
@@ -264,7 +273,8 @@ impl IamRepo {
                 iam_access_keys::user_username.eq(username),
                 iam_access_keys::secret_access_key.eq(&key.secret_access_key),
                 iam_access_keys::status.eq("Active"),
-                iam_access_keys::created_at.eq(parse_ts(&key.created_at).map_err(|e| e.to_string())?),
+                iam_access_keys::created_at
+                    .eq(parse_ts(&key.created_at).map_err(|e| e.to_string())?),
             ))
             .execute(&mut conn)
             .await
@@ -273,7 +283,11 @@ impl IamRepo {
         Ok(key)
     }
 
-    pub async fn delete_access_key(&self, username: &str, access_key_id: &str) -> Result<(), String> {
+    pub async fn delete_access_key(
+        &self,
+        username: &str,
+        access_key_id: &str,
+    ) -> Result<(), String> {
         let mut conn = get_conn(&self.pool).await.map_err(|e| e.to_string())?;
         let deleted = diesel::delete(
             iam_access_keys::table
@@ -355,7 +369,11 @@ impl IamRepo {
         Ok(())
     }
 
-    pub async fn delete_user_policy(&self, username: &str, policy_name: &str) -> Result<(), String> {
+    pub async fn delete_user_policy(
+        &self,
+        username: &str,
+        policy_name: &str,
+    ) -> Result<(), String> {
         let mut conn = get_conn(&self.pool).await.map_err(|e| e.to_string())?;
         let deleted = diesel::delete(
             iam_user_inline_policies::table
@@ -421,7 +439,8 @@ impl IamRepo {
             .optional()
             .map_err(|e| e.to_string())?;
 
-        let policy_name = policy_name.ok_or_else(|| format!("policy not attached: {policy_arn}"))?;
+        let policy_name =
+            policy_name.ok_or_else(|| format!("policy not attached: {policy_arn}"))?;
 
         let deleted = diesel::delete(
             iam_user_policy_attachments::table
@@ -515,7 +534,8 @@ impl IamRepo {
                 iam_access_keys::user_username.eq(username),
                 iam_access_keys::secret_access_key.eq(&key.secret_access_key),
                 iam_access_keys::status.eq("Active"),
-                iam_access_keys::created_at.eq(parse_ts(&key.created_at).map_err(|e| e.to_string())?),
+                iam_access_keys::created_at
+                    .eq(parse_ts(&key.created_at).map_err(|e| e.to_string())?),
             ))
             .execute(&mut conn)
             .await
@@ -527,20 +547,24 @@ impl IamRepo {
             .ok_or_else(|| "user not found".into())
     }
 
-    async fn get_managed_policy_by_arn(&self, arn: &str) -> Result<Option<ManagedPolicy>, StorageError> {
+    async fn get_managed_policy_by_arn(
+        &self,
+        arn: &str,
+    ) -> Result<Option<ManagedPolicy>, StorageError> {
         let mut conn = get_conn(&self.pool).await?;
-        let row: Option<(String, String, String, chrono::DateTime<Utc>)> = iam_managed_policies::table
-            .filter(iam_managed_policies::arn.eq(arn))
-            .select((
-                iam_managed_policies::policy_id,
-                iam_managed_policies::policy_name,
-                iam_managed_policies::arn,
-                iam_managed_policies::created_at,
-            ))
-            .first(&mut conn)
-            .await
-            .optional()
-            .map_err(db_err)?;
+        let row: Option<(String, String, String, chrono::DateTime<Utc>)> =
+            iam_managed_policies::table
+                .filter(iam_managed_policies::arn.eq(arn))
+                .select((
+                    iam_managed_policies::policy_id,
+                    iam_managed_policies::policy_name,
+                    iam_managed_policies::arn,
+                    iam_managed_policies::created_at,
+                ))
+                .first(&mut conn)
+                .await
+                .optional()
+                .map_err(db_err)?;
 
         let Some((policy_id, policy_name, arn, created_at)) = row else {
             return Ok(None);
@@ -583,15 +607,17 @@ impl IamRepo {
 
         let access_keys = key_rows
             .into_iter()
-            .map(|(access_key_id, secret_access_key, status, created)| AccessKey {
-                access_key_id,
-                secret_access_key,
-                status: match status.as_str() {
-                    "Active" => KeyStatus::Active,
-                    _ => KeyStatus::Inactive,
+            .map(
+                |(access_key_id, secret_access_key, status, created)| AccessKey {
+                    access_key_id,
+                    secret_access_key,
+                    status: match status.as_str() {
+                        "Active" => KeyStatus::Active,
+                        _ => KeyStatus::Inactive,
+                    },
+                    created_at: format_ts(created),
                 },
-                created_at: format_ts(created),
-            })
+            )
             .collect();
 
         let inline_rows: Vec<(String, serde_json::Value)> = iam_user_inline_policies::table
@@ -672,14 +698,16 @@ async fn load_managed_policy_document(
 
     let statement = rows
         .into_iter()
-        .map(|(sid, effect, actions, resources, principal, condition)| StatementRaw {
-            sid,
-            effect,
-            action: actions,
-            resource: resources,
-            principal: principal.and_then(|v| serde_json::from_value(v).ok()),
-            condition,
-        })
+        .map(
+            |(sid, effect, actions, resources, principal, condition)| StatementRaw {
+                sid,
+                effect,
+                action: actions,
+                resource: resources,
+                principal: principal.and_then(|v| serde_json::from_value(v).ok()),
+                condition,
+            },
+        )
         .collect();
 
     Ok(PolicyDocumentRaw {

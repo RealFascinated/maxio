@@ -1,8 +1,8 @@
-use axum::routing::post;
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::routing::get;
+use axum::routing::post;
 use std::sync::Arc;
 
 use crate::api::console::{LoginRateLimiter, console_router};
@@ -40,12 +40,13 @@ pub fn build_router(state: AppState) -> Router {
             cors_middleware,
         ));
 
-    let iam_routes: Router<AppState> = Router::new()
-        .route("/iam", post(iam_handler))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ));
+    let iam_routes: Router<AppState> =
+        Router::new()
+            .route("/iam", post(iam_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ));
 
     Router::new()
         .nest("/api", console_router(state.clone()))
@@ -136,12 +137,9 @@ async fn http_metrics_middleware(
 
     let response = next.run(req).await;
 
-    state.metrics.record_http(
-        &method,
-        &route,
-        response.status().as_str(),
-        start.elapsed(),
-    );
+    state
+        .metrics
+        .record_http(&method, &route, response.status().as_str(), start.elapsed());
 
     response
 }

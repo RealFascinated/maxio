@@ -314,7 +314,9 @@ pub fn policy_has_public_read(policy_json: Option<&str>) -> bool {
         .map(|doc| {
             doc.statements.iter().any(|s| {
                 s.effect == Effect::Allow
-                    && s.actions.iter().any(|a| a == "s3:GetObject" || a == "s3:*" || a == "*")
+                    && s.actions
+                        .iter()
+                        .any(|a| a == "s3:GetObject" || a == "s3:*" || a == "*")
                     && s.principal.is_some()
             })
         })
@@ -327,7 +329,9 @@ pub fn policy_has_public_list(policy_json: Option<&str>) -> bool {
         .map(|doc| {
             doc.statements.iter().any(|s| {
                 s.effect == Effect::Allow
-                    && s.actions.iter().any(|a| a == "s3:ListBucket" || a == "s3:*" || a == "*")
+                    && s.actions
+                        .iter()
+                        .any(|a| a == "s3:ListBucket" || a == "s3:*" || a == "*")
                     && s.principal.is_some()
             })
         })
@@ -363,7 +367,13 @@ mod tests {
             is_anonymous: false,
         };
         assert_eq!(
-            evaluate(&p, "s3:GetObject", "arn:aws:s3:::my-bucket/file.txt", &[doc], None),
+            evaluate(
+                &p,
+                "s3:GetObject",
+                "arn:aws:s3:::my-bucket/file.txt",
+                &[doc],
+                None
+            ),
             AuthDecision::Allow
         );
     }

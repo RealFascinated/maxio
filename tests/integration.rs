@@ -107,7 +107,9 @@ fn test_config(
 }
 
 async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> AppState {
-    maxio::db::run_migrations(&config.database_url).await.unwrap();
+    maxio::db::run_migrations(&config.database_url)
+        .await
+        .unwrap();
     let pool = maxio::db::create_pool(&config.database_url).await.unwrap();
     let pool = Arc::new(pool);
     let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
@@ -334,7 +336,14 @@ async fn test_default_buckets_skip_existing() {
     // Second provision: must be idempotent — no error, no duplicate
     maxio::storage::provision_default_buckets(storage.as_ref(), "existing", REGION).await;
 
-    let config = test_config(data_dir.clone(), database_url, false, 10 * 1024 * 1024, 0, "");
+    let config = test_config(
+        data_dir.clone(),
+        database_url,
+        false,
+        10 * 1024 * 1024,
+        0,
+        "",
+    );
     let state = test_app_state(storage, Arc::new(config)).await;
     let _postgres = postgres;
     let app = server::build_router(state);
@@ -994,7 +1003,10 @@ async fn test_delete_bucket_sweeps_nested_versions() {
         .unwrap();
 
     let deleted = storage.delete_bucket("leftover").await.unwrap();
-    assert!(deleted, "delete_bucket should succeed when metadata has no objects");
+    assert!(
+        deleted,
+        "delete_bucket should succeed when metadata has no objects"
+    );
     assert!(!storage.head_bucket("leftover").await.unwrap());
     let _postgres = postgres;
 }
@@ -3507,8 +3519,7 @@ async fn test_parity_write_creates_parity_chunks() {
     s3_request("PUT", &format!("{}/parity-test/file.bin", base_url), data).await;
 
     // Check the .ec directory
-    let ec_dir =
-        std::path::Path::new(server.data_dir()).join("buckets/parity-test/file.bin.ec");
+    let ec_dir = std::path::Path::new(server.data_dir()).join("buckets/parity-test/file.bin.ec");
     assert!(ec_dir.is_dir());
 
     // Should have 6 chunk files + manifest.json = 7 entries
@@ -3719,8 +3730,7 @@ async fn test_parity_empty_object() {
     )
     .await;
 
-    let ec_dir =
-        std::path::Path::new(server.data_dir()).join("buckets/parity-test/empty.bin.ec");
+    let ec_dir = std::path::Path::new(server.data_dir()).join("buckets/parity-test/empty.bin.ec");
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(ec_dir.join("manifest.json")).unwrap())
             .unwrap();
@@ -4372,12 +4382,7 @@ async fn test_list_objects_page_db_pagination() {
     assert_eq!(page2.next_continuation.as_deref(), Some("d.txt"));
 
     let page3 = storage
-        .list_objects_page(
-            "page-bucket",
-            "",
-            page2.next_continuation.as_deref(),
-            2,
-        )
+        .list_objects_page("page-bucket", "", page2.next_continuation.as_deref(), 2)
         .await
         .unwrap();
     assert_eq!(page3.objects.len(), 1);
@@ -4489,4 +4494,3 @@ async fn test_housekeeping_removes_stale_multipart_uploads() {
     );
     let _postgres = postgres;
 }
-

@@ -172,8 +172,9 @@ async fn parse_acl_input(
         return Ok(Acl::private(owner_id, owner_display_name));
     }
 
-    let xml_acl: AccessControlPolicy = quick_xml::de::from_str(&String::from_utf8_lossy(&body_bytes))
-        .map_err(|_| S3Error::malformed_xml())?;
+    let xml_acl: AccessControlPolicy =
+        quick_xml::de::from_str(&String::from_utf8_lossy(&body_bytes))
+            .map_err(|_| S3Error::malformed_xml())?;
     xml_to_acl(xml_acl)
 }
 
@@ -260,8 +261,8 @@ pub async fn apply_create_bucket_acl(
     owner_id: &str,
     owner_display_name: &str,
 ) -> Result<(), S3Error> {
-    if let Some(acl) = parse_canned_acl_header(headers, owner_id, owner_display_name, None, None)
-        .await?
+    if let Some(acl) =
+        parse_canned_acl_header(headers, owner_id, owner_display_name, None, None).await?
     {
         state
             .storage

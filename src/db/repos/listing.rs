@@ -1,11 +1,11 @@
-use crate::db::schema::objects;
 use crate::db::DbContext;
+use crate::db::schema::objects;
 use crate::storage::{ObjectMeta, StorageError};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
+use super::objects::{ObjectRow, row_into_read_meta};
 use super::{db_err, get_conn, resolve_bucket_id};
-use super::objects::{row_into_read_meta, ObjectRow};
 
 pub async fn list_objects_page(
     ctx: &DbContext,

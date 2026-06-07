@@ -1,8 +1,8 @@
 use crate::error::S3Error;
-use crate::iam::acl::{acl_allows, action_to_acl_permission};
-use crate::iam::policy::{evaluate, parse_policy_json, AuthDecision};
-use crate::iam::principal::Principal;
 use crate::iam::Acl;
+use crate::iam::acl::{acl_allows, action_to_acl_permission};
+use crate::iam::policy::{AuthDecision, evaluate, parse_policy_json};
+use crate::iam::principal::Principal;
 use crate::server::AppState;
 
 pub fn bucket_arn(bucket: &str) -> String {
@@ -31,7 +31,8 @@ pub async fn authorize(
         return authorize_anonymous(action, resource, bucket_policy_json, bucket_acl, object_acl);
     }
 
-    let identity_policies = if let Some(user) = state.user_store.get_user(&principal.username).await {
+    let identity_policies = if let Some(user) = state.user_store.get_user(&principal.username).await
+    {
         state.user_store.effective_policies(&user).await
     } else {
         vec![]
@@ -79,13 +80,7 @@ pub fn authorize_anonymous(
     let principal = Principal::anonymous();
     let bucket_policy = bucket_policy_json.and_then(|j| parse_policy_json(j).ok());
 
-    match evaluate(
-        &principal,
-        action,
-        resource,
-        &[],
-        bucket_policy.as_ref(),
-    ) {
+    match evaluate(&principal, action, resource, &[], bucket_policy.as_ref()) {
         AuthDecision::Allow => return Ok(()),
         AuthDecision::Deny => return Err(S3Error::access_denied("Access Denied")),
         AuthDecision::NoMatch => {}
@@ -114,12 +109,7 @@ pub fn anonymous_allowed(
 }
 
 pub fn bucket_policy_allows_anonymous_list(policy_json: Option<&str>, bucket: &str) -> bool {
-    anonymous_allowed(
-        "s3:ListBucket",
-        &bucket_arn(bucket),
-        policy_json,
-        None,
-    )
+    anonymous_allowed("s3:ListBucket", &bucket_arn(bucket), policy_json, None)
 }
 
 pub fn bucket_policy_allows_anonymous_read(
@@ -127,12 +117,7 @@ pub fn bucket_policy_allows_anonymous_read(
     bucket: &str,
     key: &str,
 ) -> bool {
-    anonymous_allowed(
-        "s3:GetObject",
-        &object_arn(bucket, key),
-        policy_json,
-        None,
-    )
+    anonymous_allowed("s3:GetObject", &object_arn(bucket, key), policy_json, None)
 }
 
 pub async fn filter_buckets_by_access(

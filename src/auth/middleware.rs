@@ -106,10 +106,7 @@ async fn resolve_credentials(
     state: &AppState,
     access_key: &str,
 ) -> Result<(String, Principal), S3Error> {
-    if signature_v4::constant_time_eq(
-        access_key.as_bytes(),
-        state.config.access_key.as_bytes(),
-    ) {
+    if signature_v4::constant_time_eq(access_key.as_bytes(), state.config.access_key.as_bytes()) {
         return Ok((state.config.secret_key.clone(), Principal::root()));
     }
 
@@ -122,12 +119,7 @@ async fn resolve_credentials(
     Err(S3Error::invalid_access_key())
 }
 
-async fn is_public_bypass_allowed(
-    state: &AppState,
-    method: &str,
-    path: &str,
-    query: &str,
-) -> bool {
+async fn is_public_bypass_allowed(state: &AppState, method: &str, path: &str, query: &str) -> bool {
     match method {
         "GET" | "HEAD" | "OPTIONS" => {}
         _ => return false,

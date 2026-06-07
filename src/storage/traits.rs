@@ -23,17 +23,10 @@ pub trait Storage: Send + Sync {
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError>;
     async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError>;
     async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError>;
-    async fn put_bucket_acl(
-        &self,
-        bucket: &str,
-        acl: crate::iam::Acl,
-    ) -> Result<(), StorageError>;
+    async fn put_bucket_acl(&self, bucket: &str, acl: crate::iam::Acl) -> Result<(), StorageError>;
     async fn get_bucket_acl(&self, bucket: &str) -> Result<crate::iam::Acl, StorageError>;
-    async fn put_bucket_cors(
-        &self,
-        bucket: &str,
-        rules: Vec<CorsRule>,
-    ) -> Result<(), StorageError>;
+    async fn put_bucket_cors(&self, bucket: &str, rules: Vec<CorsRule>)
+    -> Result<(), StorageError>;
     async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError>;
     async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError>;
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError>;
@@ -81,11 +74,7 @@ pub trait Storage: Send + Sync {
         tags: HashMap<String, String>,
     ) -> Result<(), StorageError>;
     async fn delete_object_tagging(&self, bucket: &str, key: &str) -> Result<(), StorageError>;
-    async fn delete_object(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<DeleteResult, StorageError>;
+    async fn delete_object(&self, bucket: &str, key: &str) -> Result<DeleteResult, StorageError>;
     async fn list_objects_page(
         &self,
         bucket: &str,
