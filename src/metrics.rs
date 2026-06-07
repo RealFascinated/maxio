@@ -15,6 +15,7 @@ pub struct MetricsSnapshot {
     pub uptime_seconds: f64,
     pub cache: CacheSnapshot,
     pub storage_ops: Vec<StorageOpSnapshot>,
+    pub metadata_ops: Vec<MetadataOpSnapshot>,
     pub process: Option<ProcessSnapshot>,
 }
 
@@ -43,6 +44,14 @@ pub struct StorageOpSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MetadataOpSnapshot {
+    pub operation: String,
+    pub count: u64,
+    pub sum_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessSnapshot {
     pub resident_memory_bytes: u64,
     pub virtual_memory_bytes: u64,
@@ -64,7 +73,9 @@ pub struct MetricsRegistry {
     http_requests_total: CounterVec,
     http_duration: HistogramVec,
     storage_duration: HistogramVec,
+    metadata_duration: HistogramVec,
     storage_op_stats: Mutex<HashMap<String, (u64, f64)>>,
+    metadata_op_stats: Mutex<HashMap<String, (u64, f64)>>,
     cache_hits: prometheus::Counter,
     cache_misses: prometheus::Counter,
     cache_evictions: prometheus::Counter,
@@ -118,6 +129,16 @@ impl MetricsRegistry {
             &["operation"],
         )?;
         registry.register(Box::new(storage_duration.clone()))?;
+
+        let metadata_duration = HistogramVec::new(
+            HistogramOpts::new(
+                "maxio_metadata_operation_duration_seconds",
+                "Postgres metadata operation duration in seconds",
+            )
+            .buckets(vec![0.001, 0.005, 0.025, 0.1, 0.5, 1.0, 5.0, 30.0]),
+            &["operation"],
+        )?;
+        registry.register(Box::new(metadata_duration.clone()))?;
 
         let uptime = prometheus::Gauge::new("maxio_uptime_seconds", "Server uptime in seconds")?;
         registry.register(Box::new(uptime.clone()))?;
@@ -206,7 +227,9 @@ impl MetricsRegistry {
             http_requests_total,
             http_duration,
             storage_duration,
+            metadata_duration,
             storage_op_stats: Mutex::new(HashMap::new()),
+            metadata_op_stats: Mutex::new(HashMap::new()),
             cache_hits,
             cache_misses,
             cache_evictions,
@@ -284,6 +307,17 @@ impl MetricsRegistry {
         entry.1 += secs;
     }
 
+    pub fn record_metadata_op(&self, operation: &str, elapsed: Duration) {
+        let secs = elapsed.as_secs_f64();
+        self.metadata_duration
+            .with_label_values(&[operation])
+            .observe(secs);
+        let mut stats = self.metadata_op_stats.lock().unwrap();
+        let entry = stats.entry(operation.to_string()).or_insert((0, 0.0));
+        entry.0 += 1;
+        entry.1 += secs;
+    }
+
     pub fn update_uptime(&self) {
         self.uptime.set(self.start_time.elapsed().as_secs_f64());
     }
@@ -318,6 +352,20 @@ impl MetricsRegistry {
             ops
         };
 
+        let metadata_ops = {
+            let stats = self.metadata_op_stats.lock().unwrap();
+            let mut ops: Vec<_> = stats
+                .iter()
+                .map(|(operation, (count, sum))| MetadataOpSnapshot {
+                    operation: operation.clone(),
+                    count: *count,
+                    sum_seconds: *sum,
+                })
+                .collect();
+            ops.sort_by(|a, b| a.operation.cmp(&b.operation));
+            ops
+        };
+
         let uptime_seconds = self.uptime.get();
         let process = read_raw_process_metrics().map(|raw| ProcessSnapshot {
             resident_memory_bytes: raw.resident_memory_bytes,
@@ -332,6 +380,7 @@ impl MetricsRegistry {
             uptime_seconds,
             cache,
             storage_ops,
+            metadata_ops,
             process,
         }
     }

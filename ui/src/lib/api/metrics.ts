@@ -19,6 +19,12 @@ export interface StorageOpSnapshot {
   sumSeconds: number
 }
 
+export interface MetadataOpSnapshot {
+  operation: string
+  count: number
+  sumSeconds: number
+}
+
 export interface ProcessSnapshot {
   residentMemoryBytes: number
   virtualMemoryBytes: number
@@ -31,6 +37,7 @@ export interface MetricsSnapshot {
   uptimeSeconds: number
   cache: CacheSnapshot
   storageOps: StorageOpSnapshot[]
+  metadataOps: MetadataOpSnapshot[]
   process: ProcessSnapshot | null
 }
 

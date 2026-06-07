@@ -159,6 +159,34 @@
       {/if}
     </section>
 
+    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
+      <h2 class="mb-3 text-lg font-bold dark:text-white">Metadata operations</h2>
+      {#if data.metadataOps.length === 0}
+        <p class="text-sm text-neutral-500">No metadata operations recorded yet.</p>
+      {:else}
+        <Table.Root>
+          <Table.Header>
+            <Table.Row>
+              <Table.Head>Operation</Table.Head>
+              <Table.Head class="text-right">Count</Table.Head>
+              <Table.Head class="text-right">Avg latency</Table.Head>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {#each data.metadataOps as op}
+              <Table.Row>
+                <Table.Cell class="font-mono text-sm">{op.operation}</Table.Cell>
+                <Table.Cell class="text-right">{op.count.toLocaleString()}</Table.Cell>
+                <Table.Cell class="text-right">
+                  {formatDuration(op.count > 0 ? op.sumSeconds / op.count : 0)}
+                </Table.Cell>
+              </Table.Row>
+            {/each}
+          </Table.Body>
+        </Table.Root>
+      {/if}
+    </section>
+
     {#if data.process}
       <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
         <h2 class="mb-3 text-lg font-bold dark:text-white">Process</h2>
