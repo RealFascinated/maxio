@@ -25,7 +25,7 @@ pub struct CacheSnapshot {
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,
-    pub populate_bytes: u64,
+    pub dirty_bytes: u64,
     pub size_bytes: u64,
     pub entries: u64,
     pub dirty_objects: u64,
@@ -79,13 +79,13 @@ pub struct MetricsRegistry {
     cache_hits: prometheus::Counter,
     cache_misses: prometheus::Counter,
     cache_evictions: prometheus::Counter,
-    cache_populate_bytes: prometheus::Counter,
     cache_flush_total: CounterVec,
     cache_flush_bytes: prometheus::Counter,
     cache_flush_duration: prometheus::Histogram,
     cache_size_bytes: prometheus::Gauge,
     cache_entries: prometheus::Gauge,
     cache_dirty_objects: prometheus::Gauge,
+    cache_dirty_bytes: prometheus::Gauge,
     cache_max_size_bytes: prometheus::Gauge,
     cache_writeback_halted: prometheus::Gauge,
     cache_enabled: prometheus::Gauge,
@@ -159,12 +159,6 @@ impl MetricsRegistry {
         )?;
         registry.register(Box::new(cache_evictions.clone()))?;
 
-        let cache_populate_bytes = prometheus::Counter::new(
-            "maxio_cache_populate_bytes_total",
-            "Bytes copied into cache on read-through miss",
-        )?;
-        registry.register(Box::new(cache_populate_bytes.clone()))?;
-
         let cache_flush_total = CounterVec::new(
             Opts::new("maxio_cache_flush_total", "Writeback flush runs"),
             &["result"],
@@ -204,6 +198,12 @@ impl MetricsRegistry {
         )?;
         registry.register(Box::new(cache_dirty_objects.clone()))?;
 
+        let cache_dirty_bytes = prometheus::Gauge::new(
+            "maxio_cache_dirty_bytes",
+            "Bytes in dirty objects awaiting writeback flush",
+        )?;
+        registry.register(Box::new(cache_dirty_bytes.clone()))?;
+
         let cache_max_size_bytes = prometheus::Gauge::new(
             "maxio_cache_max_size_bytes",
             "Configured maximum cache size in bytes",
@@ -233,13 +233,13 @@ impl MetricsRegistry {
             cache_hits,
             cache_misses,
             cache_evictions,
-            cache_populate_bytes,
             cache_flush_total,
             cache_flush_bytes,
             cache_flush_duration,
             cache_size_bytes,
             cache_entries,
             cache_dirty_objects,
+            cache_dirty_bytes,
             cache_max_size_bytes,
             cache_writeback_halted,
             cache_enabled,
@@ -258,19 +258,25 @@ impl MetricsRegistry {
         self.cache_hits.inc();
     }
 
-    pub fn record_cache_miss(&self, bytes: u64) {
+    pub fn record_cache_miss(&self) {
         self.cache_misses.inc();
-        self.cache_populate_bytes.inc_by(bytes as f64);
     }
 
     pub fn record_cache_eviction(&self) {
         self.cache_evictions.inc();
     }
 
-    pub fn set_cache_state(&self, size_bytes: u64, entries: usize, dirty: usize) {
+    pub fn set_cache_state(
+        &self,
+        size_bytes: u64,
+        entries: usize,
+        dirty_objects: usize,
+        dirty_bytes: u64,
+    ) {
         self.cache_size_bytes.set(size_bytes as f64);
         self.cache_entries.set(entries as f64);
-        self.cache_dirty_objects.set(dirty as f64);
+        self.cache_dirty_objects.set(dirty_objects as f64);
+        self.cache_dirty_bytes.set(dirty_bytes as f64);
     }
 
     pub fn set_cache_writeback_halted(&self, halted: bool) {
@@ -329,7 +335,7 @@ impl MetricsRegistry {
             hits: self.cache_hits.get() as u64,
             misses: self.cache_misses.get() as u64,
             evictions: self.cache_evictions.get() as u64,
-            populate_bytes: self.cache_populate_bytes.get() as u64,
+            dirty_bytes: self.cache_dirty_bytes.get() as u64,
             size_bytes: self.cache_size_bytes.get() as u64,
             entries: self.cache_entries.get() as u64,
             dirty_objects: self.cache_dirty_objects.get() as u64,

@@ -1821,8 +1821,8 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "rate(maxio_cache_populate_bytes_total{job=~\"$job\"}[$__rate_interval])",
-                      "legendFormat": "populate",
+                      "expr": "maxio_cache_dirty_bytes{job=~\"$job\"}",
+                      "legendFormat": "dirty bytes",
                       "range": true,
                       "instant": false
                     }
@@ -1909,7 +1909,20 @@
                 },
                 "unit": "Bps"
               },
-              "overrides": []
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "dirty bytes"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "bytes"
+                    }
+                  ]
+                }
+              ]
             },
             "options": {
               "legend": {

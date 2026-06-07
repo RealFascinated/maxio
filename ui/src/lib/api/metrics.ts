@@ -4,7 +4,7 @@ export interface CacheSnapshot {
   hits: number
   misses: number
   evictions: number
-  populateBytes: number
+  dirtyBytes: number
   sizeBytes: number
   entries: number
   dirtyObjects: number

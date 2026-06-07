@@ -177,7 +177,11 @@ impl CacheLayer {
         };
         let lru = self.lru.lock().await;
         let dirty = self.dirty.lock().await;
-        m.set_cache_state(lru.total_size, lru.entries.len(), dirty.len());
+        let dirty_bytes: u64 = dirty
+            .iter()
+            .filter_map(|k| lru.entries.get(k).map(|(_, size)| *size))
+            .sum();
+        m.set_cache_state(lru.total_size, lru.entries.len(), dirty.len(), dirty_bytes);
         m.set_cache_writeback_halted(self.writeback_halted.load(Ordering::Relaxed));
     }
 
@@ -253,7 +257,7 @@ impl CacheLayer {
         size: u64,
     ) -> Result<PathBuf, StorageError> {
         if let Some(m) = &self.metrics {
-            m.record_cache_miss(size);
+            m.record_cache_miss();
         }
         self.reserve_space(size).await?;
         let cache_path = self.object_path(bucket, key);

@@ -125,8 +125,8 @@
           <dd class="text-lg font-semibold dark:text-white">{data.cache.dirtyObjects.toLocaleString()}</dd>
         </div>
         <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Populated</dt>
-          <dd class="text-lg font-semibold dark:text-white">{formatBytes(data.cache.populateBytes)}</dd>
+          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty bytes</dt>
+          <dd class="text-lg font-semibold dark:text-white">{formatBytes(data.cache.dirtyBytes)}</dd>
         </div>
       </dl>
     </section>
