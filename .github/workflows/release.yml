@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*.*.*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
@@ -22,8 +24,38 @@ env:
   IMAGE_NAME: "coollabsio/maxio"
 
 jobs:
+  resolve:
+    name: Resolve image tag
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+      is_release: ${{ steps.resolve.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "image_tag=main" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          VERSION="$(python3 - <<'PYV'
+          import tomllib
+          with open("Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["package"]["version"])
+          PYV
+          )"
+          test "${TAG#v}" = "$VERSION" || { echo "Cargo version $VERSION does not match tag $TAG"; exit 1; }
+          echo "image_tag=${VERSION}" >> $GITHUB_OUTPUT
+          echo "is_release=true" >> $GITHUB_OUTPUT
+
   build:
     name: Build ${{ matrix.target }}
+    needs: resolve
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -59,17 +91,6 @@ jobs:
         run: bun install --frozen-lockfile
         working-directory: ui
 
-      - name: Check tag matches Cargo version
-        run: |
-          TAG="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="$(python3 - <<'PYV'
-          import tomllib
-          with open("Cargo.toml", "rb") as f:
-              print(tomllib.load(f)["package"]["version"])
-          PYV
-          )"
-          test "${TAG#v}" = "$VERSION" || { echo "Cargo version $VERSION does not match tag $TAG"; exit 1; }
-
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -96,6 +117,7 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
+        if: needs.resolve.outputs.is_release == 'true'
         run: |
           VERSION="$(python3 - <<'PYV'
           import tomllib
@@ -109,6 +131,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
 
       - name: Upload artifact
+        if: needs.resolve.outputs.is_release == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -116,7 +139,7 @@ jobs:
 
   docker:
     name: Docker ${{ matrix.arch }}
-    needs: build
+    needs: [resolve, build]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -145,19 +168,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Get version
-        id: version
-        run: |
-          TAG="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="$(python3 - <<'PYV'
-          import tomllib
-          with open("Cargo.toml", "rb") as f:
-              print(tomllib.load(f)["package"]["version"])
-          PYV
-          )"
-          test "${TAG#v}" = "$VERSION" || { echo "Cargo version $VERSION does not match tag $TAG"; exit 1; }
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Build and Push Image (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
@@ -166,12 +176,12 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.arch }}
-            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.arch }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
+            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
 
   docker-manifest:
     name: Docker Manifest
-    needs: [build, docker]
+    needs: [resolve, build, docker]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -192,38 +202,36 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Get version
-        id: version
-        run: |
-          TAG="${{ github.event.inputs.version || github.ref_name }}"
-          VERSION="$(python3 - <<'PYV'
-          import tomllib
-          with open("Cargo.toml", "rb") as f:
-              print(tomllib.load(f)["package"]["version"])
-          PYV
-          )"
-          test "${TAG#v}" = "$VERSION" || { echo "Cargo version $VERSION does not match tag $TAG"; exit 1; }
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Create & publish manifest on ${{ env.GITHUB_REGISTRY }}
         run: |
+          TAG="${{ needs.resolve.outputs.image_tag }}"
+          EXTRA_TAG=""
+          if [[ "${{ needs.resolve.outputs.is_release }}" == "true" ]]; then
+            EXTRA_TAG="--tag ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          fi
           docker buildx imagetools create \
-          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-amd64 \
-          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-aarch64 \
-          --tag ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }} \
-          --tag ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-amd64 \
+            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-aarch64 \
+            --tag ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} \
+            ${EXTRA_TAG}
 
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
+          TAG="${{ needs.resolve.outputs.image_tag }}"
+          EXTRA_TAG=""
+          if [[ "${{ needs.resolve.outputs.is_release }}" == "true" ]]; then
+            EXTRA_TAG="--tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          fi
           docker buildx imagetools create \
-          ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-amd64 \
-          ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-aarch64 \
-          --tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }} \
-          --tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-amd64 \
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-aarch64 \
+            --tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} \
+            ${EXTRA_TAG}
 
   release:
     name: Create Release
-    needs: build
+    needs: [resolve, build]
+    if: needs.resolve.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
