@@ -20,13 +20,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     let metrics = Arc::new(MetricsRegistry::new()?);
 
     let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(pool.clone()));
-    let blobs = BlobStorage::new(
-        &config.data_dir,
-        config.erasure_coding,
-        config.chunk_size,
-        config.parity_shards,
-    )
-    .await?;
+    let blobs = BlobStorage::new(&config.data_dir).await?;
     let storage: Arc<dyn Storage> =
         Arc::new(ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics)));
 

@@ -57,7 +57,6 @@ pub async fn insert_version(
             object_versions::owner_id.eq(&meta.owner_id),
             object_versions::owner_display_name.eq(&meta.owner_display_name),
             object_versions::is_delete_marker.eq(meta.is_delete_marker),
-            object_versions::storage_format.eq(&meta.storage_format),
             object_versions::is_folder_marker.eq(meta.key.ends_with('/')),
             object_versions::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
             object_versions::is_current.eq(is_current),
@@ -76,7 +75,6 @@ pub async fn insert_version(
             object_versions::owner_id.eq(&meta.owner_id),
             object_versions::owner_display_name.eq(&meta.owner_display_name),
             object_versions::is_delete_marker.eq(meta.is_delete_marker),
-            object_versions::storage_format.eq(&meta.storage_format),
             object_versions::is_folder_marker.eq(meta.key.ends_with('/')),
             object_versions::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
             object_versions::is_current.eq(is_current),
@@ -304,7 +302,6 @@ struct VersionRow {
     owner_id: String,
     owner_display_name: String,
     is_delete_marker: bool,
-    storage_format: Option<String>,
     part_sizes: Option<Vec<i64>>,
 }
 
@@ -375,7 +372,6 @@ async fn version_row_into_meta(
         acl,
         version_id: Some(row.version_id),
         is_delete_marker: row.is_delete_marker,
-        storage_format: row.storage_format,
         checksum_algorithm,
         checksum_value,
         tags: tags_map,

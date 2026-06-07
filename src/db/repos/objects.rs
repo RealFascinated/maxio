@@ -49,7 +49,6 @@ pub async fn upsert_object(
         objects::owner_display_name.eq(&meta.owner_display_name),
         objects::version_id.eq(&meta.version_id),
         objects::is_delete_marker.eq(meta.is_delete_marker),
-        objects::storage_format.eq(&meta.storage_format),
         objects::is_folder_marker.eq(meta.key.ends_with('/')),
         objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
     );
@@ -62,7 +61,6 @@ pub async fn upsert_object(
         objects::owner_display_name.eq(&meta.owner_display_name),
         objects::version_id.eq(&meta.version_id),
         objects::is_delete_marker.eq(meta.is_delete_marker),
-        objects::storage_format.eq(&meta.storage_format),
         objects::is_folder_marker.eq(meta.key.ends_with('/')),
         objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
     );
@@ -276,7 +274,6 @@ pub(crate) fn row_into_read_meta(row: ObjectRow) -> ObjectMeta {
         acl: None,
         version_id: row.version_id,
         is_delete_marker: row.is_delete_marker,
-        storage_format: row.storage_format,
         checksum_algorithm: None,
         checksum_value: None,
         tags: None,
@@ -348,7 +345,6 @@ pub(crate) async fn row_into_meta(
         acl,
         version_id: row.version_id,
         is_delete_marker: row.is_delete_marker,
-        storage_format: row.storage_format,
         checksum_algorithm,
         checksum_value,
         tags: tags_map,
@@ -369,7 +365,6 @@ pub(crate) struct ObjectRow {
     pub owner_display_name: String,
     pub version_id: Option<String>,
     pub is_delete_marker: bool,
-    pub storage_format: Option<String>,
     pub part_sizes: Option<Vec<i64>>,
 }
 

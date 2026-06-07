@@ -63,18 +63,6 @@ pub struct Config {
     #[arg(long, env = "MAXIO_SECURE_COOKIES", default_value = "true")]
     pub secure_cookies: bool,
 
-    /// Enable erasure coding with per-chunk integrity checksums
-    #[arg(long, env = "MAXIO_ERASURE_CODING", default_value = "false")]
-    pub erasure_coding: bool,
-
-    /// Chunk size in bytes for erasure coding (default 10MB)
-    #[arg(long, env = "MAXIO_CHUNK_SIZE", default_value = "10485760")]
-    pub chunk_size: u64,
-
-    /// Number of parity shards for erasure coding (0 = no parity, requires --erasure-coding)
-    #[arg(long, env = "MAXIO_PARITY_SHARDS", default_value = "0")]
-    pub parity_shards: u32,
-
     /// Comma-separated list of bucket names to create on first boot
     /// (MAXIO_DEFAULT_BUCKETS, MINIO_DEFAULT_BUCKETS)
     #[arg(long, env = "MAXIO_DEFAULT_BUCKETS", default_value_t = default_default_buckets().unwrap_or_default())]

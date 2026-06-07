@@ -223,8 +223,7 @@ This runs both processes concurrently (Ctrl+C kills both):
 └── buckets/
     └── my-bucket/
         ├── .uploads/{uploadId}/1    # multipart part bytes
-        ├── photos/vacation.jpg        # object data
-        └── large.bin.ec/              # erasure-coded shards + manifest.json
+        └── photos/vacation.jpg        # object data
 
 Postgres (MAXIO_DATABASE_URL)        # all metadata
 ├── buckets, objects, object_versions
@@ -386,4 +385,4 @@ The web console (`ui/`) follows the Coolify design system. The full specificatio
 
 - **Phase 2**: ~~Multipart upload~~, ~~presigned URLs~~, ~~CopyObject~~, ~~DeleteObjects batch~~, ~~CORS~~, ~~Range headers~~
 - **Phase 3**: ~~Web console (SPA at `/ui/`)~~, ~~versioning~~, lifecycle rules, multi-user, metrics
-- **Phase 4**: Distributed mode, ~~erasure coding~~, replication
+- **Phase 4**: Distributed mode, replication

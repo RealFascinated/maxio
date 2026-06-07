@@ -983,7 +983,6 @@ mod tests {
             last_modified: last_modified.to_string(),
             version_id: None,
             is_delete_marker: false,
-            storage_format: None,
             checksum_algorithm: None,
             checksum_value: None,
             tags: None,

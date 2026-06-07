@@ -61,20 +61,15 @@ impl ObjectStorage {
     ) -> Result<PutResult, StorageError> {
         if written.published {
             if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {
-                let _ =
-                    BlobStorage::discard_payload(&written.final_path, written.payload_is_dir).await;
+                let _ = BlobStorage::discard_payload(&written.final_path).await;
                 return Err(e);
             }
         } else {
             self.meta
                 .upsert_object(bucket, &object_meta, put_ctx)
                 .await?;
-            if let Err(e) = BlobStorage::publish_temp_payload(
-                &written.tmp_path,
-                &written.final_path,
-                written.payload_is_dir,
-            )
-            .await
+            if let Err(e) =
+                BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await
             {
                 let _ = self.meta.delete_object_meta(bucket, key).await;
                 return Err(e);
@@ -83,20 +78,14 @@ impl ObjectStorage {
 
         if versioned {
             self.meta.insert_version(bucket, &object_meta).await?;
-            if written.payload_is_dir {
-                self.blobs
-                    .archive_version_chunked(bucket, key, object_meta.version_id.as_ref().unwrap())
-                    .await?;
-            } else {
-                self.blobs
-                    .archive_version_flat(
-                        bucket,
-                        key,
-                        object_meta.version_id.as_ref().unwrap(),
-                        &written.final_path,
-                    )
-                    .await?;
-            }
+            self.blobs
+                .archive_version(
+                    bucket,
+                    key,
+                    object_meta.version_id.as_ref().unwrap(),
+                    &written.final_path,
+                )
+                .await?;
         }
 
         Ok(PutResult {
@@ -119,12 +108,7 @@ impl ObjectStorage {
                     self.blobs.unlink_object(bucket, key).await?;
                 } else if let Some(ref version_id) = meta.version_id {
                     self.blobs
-                        .restore_current_from_version(
-                            bucket,
-                            key,
-                            version_id,
-                            meta.storage_format.as_deref(),
-                        )
+                        .restore_current_from_version(bucket, key, version_id)
                         .await?;
                 }
             }
@@ -166,7 +150,6 @@ impl ObjectStorage {
                 acl: None,
                 version_id: None,
                 is_delete_marker: false,
-                storage_format: None,
                 checksum_algorithm: None,
                 checksum_value: None,
                 tags: None,
@@ -190,15 +173,10 @@ impl ObjectStorage {
             None
         };
 
-        let written = if self.blobs.erasure_coding_enabled() {
-            self.blobs
-                .write_chunked_object_temp(bucket, key, body, checksum.as_ref().map(|(a, _)| *a))
-                .await?
-        } else {
-            self.blobs
-                .write_flat_object_temp(bucket, key, body, checksum)
-                .await?
-        };
+        let written = self
+            .blobs
+            .write_flat_object_temp(bucket, key, body, checksum)
+            .await?;
 
         let mut object_meta = ObjectMeta {
             key: key.to_string(),
@@ -211,7 +189,6 @@ impl ObjectStorage {
             acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
-            storage_format: written.storage_format.clone(),
             checksum_algorithm: written.checksum_algorithm,
             checksum_value: written.checksum_value.clone(),
             tags: None,
@@ -255,7 +232,6 @@ impl ObjectStorage {
                 acl: None,
                 version_id: Some(version_id.clone()),
                 is_delete_marker: true,
-                storage_format: None,
                 checksum_algorithm: None,
                 checksum_value: None,
                 tags: None,
@@ -387,15 +363,10 @@ impl ObjectStorage {
             None
         };
 
-        let mut written = if self.blobs.erasure_coding_enabled() {
-            self.blobs
-                .assemble_multipart_chunked_temp(bucket, &upload_meta.key, upload_id, &selected)
-                .await?
-        } else {
-            self.blobs
-                .assemble_multipart_flat_temp(bucket, &upload_meta.key, upload_id, &selected)
-                .await?
-        };
+        let mut written = self
+            .blobs
+            .assemble_multipart_temp(bucket, &upload_meta.key, upload_id, &selected)
+            .await?;
 
         let (checksum_algorithm, checksum_value) =
             if let Some(algo) = upload_meta.checksum_algorithm {
@@ -421,7 +392,6 @@ impl ObjectStorage {
             acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
-            storage_format: written.storage_format.clone(),
             checksum_algorithm,
             checksum_value: checksum_value.clone(),
             tags: None,

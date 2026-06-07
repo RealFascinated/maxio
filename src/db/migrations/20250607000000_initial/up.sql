@@ -51,7 +51,6 @@ CREATE TABLE objects (
     owner_display_name TEXT NOT NULL,
     version_id TEXT,
     is_delete_marker BOOLEAN NOT NULL DEFAULT FALSE,
-    storage_format TEXT,
     is_folder_marker BOOLEAN NOT NULL DEFAULT FALSE,
     part_sizes BIGINT[],
     UNIQUE(bucket_id, key)
@@ -98,7 +97,6 @@ CREATE TABLE object_versions (
     owner_id TEXT NOT NULL,
     owner_display_name TEXT NOT NULL,
     is_delete_marker BOOLEAN NOT NULL DEFAULT FALSE,
-    storage_format TEXT,
     is_folder_marker BOOLEAN NOT NULL DEFAULT FALSE,
     part_sizes BIGINT[],
     is_current BOOLEAN NOT NULL DEFAULT FALSE,

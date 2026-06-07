@@ -396,31 +396,6 @@ assert "delete manual multipart object" $AWS s3 rm "s3://$BUCKET/manual-multipar
 assert "delete upc source object" $AWS s3 rm "s3://$BUCKET/upc-source.bin"
 assert "delete upc dest object" $AWS s3 rm "s3://$BUCKET/upc-dest.bin"
 
-# --- Erasure coding corruption detection ---
-echo "hello erasure" > "$TMPDIR/ec-test.txt"
-assert "upload ec test object" $AWS s3 cp "$TMPDIR/ec-test.txt" "s3://$BUCKET/ec-test.txt"
-
-EC_DIR="$DATA_DIR/buckets/$BUCKET/ec-test.txt.ec"
-if [ -d "$EC_DIR" ]; then
-    assert_file_exists "ec chunk dir exists" "$EC_DIR"
-    assert_file_exists "ec manifest exists" "$EC_DIR/manifest.json"
-
-    # Verify download works before corruption
-    assert "download ec object before corruption" $AWS s3 cp "s3://$BUCKET/ec-test.txt" "$TMPDIR/ec-before.txt"
-    assert_eq "ec content before corruption" "hello erasure" "$(cat "$TMPDIR/ec-before.txt")"
-
-    # Corrupt the first chunk
-    printf "CORRUPTED" > "$EC_DIR/000000"
-
-    # Download should fail due to checksum mismatch
-    assert_fail "download ec object after corruption fails" $AWS s3 cp "s3://$BUCKET/ec-test.txt" "$TMPDIR/ec-after.txt"
-
-    green "INFO: erasure coding corruption tests ran (server has EC enabled)"
-else
-    green "INFO: erasure coding corruption tests skipped (server has EC disabled)"
-fi
-assert "delete ec test object" $AWS s3 rm "s3://$BUCKET/ec-test.txt"
-
 # Delete bucket
 assert "delete empty bucket" $AWS s3 rb "s3://$BUCKET"
 assert_file_not_exists "bucket dir gone from disk" "$DATA_DIR/buckets/$BUCKET"

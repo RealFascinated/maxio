@@ -1,5 +1,4 @@
 pub mod blob;
-pub mod chunk_reader;
 pub mod metadata;
 pub mod object_storage;
 pub mod pg_metadata;
@@ -150,8 +149,6 @@ pub struct ObjectMeta {
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_delete_marker: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub storage_format: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum_algorithm: Option<ChecksumAlgorithm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum_value: Option<String>,
@@ -183,47 +180,6 @@ pub struct PartMeta {
     pub checksum_algorithm: Option<ChecksumAlgorithm>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum_value: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ChunkKind {
-    Data,
-    Parity,
-}
-
-impl Default for ChunkKind {
-    fn default() -> Self {
-        ChunkKind::Data
-    }
-}
-
-impl ChunkKind {
-    fn is_data(&self) -> bool {
-        *self == ChunkKind::Data
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkManifest {
-    pub version: u32,
-    pub total_size: u64,
-    pub chunk_size: u64,
-    pub chunk_count: u32,
-    pub chunks: Vec<ChunkInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parity_shards: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shard_size: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkInfo {
-    pub index: u32,
-    pub size: u64,
-    pub sha256: String,
-    #[serde(default, skip_serializing_if = "ChunkKind::is_data")]
-    pub kind: ChunkKind,
 }
 
 /// Returns `true` if `name` is a valid S3 bucket name.

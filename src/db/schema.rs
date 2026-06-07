@@ -54,7 +54,6 @@ diesel::table! {
         owner_display_name -> Text,
         version_id -> Nullable<Text>,
         is_delete_marker -> Bool,
-        storage_format -> Nullable<Text>,
         is_folder_marker -> Bool,
         part_sizes -> Nullable<Array<Int8>>,
     }
@@ -101,7 +100,6 @@ diesel::table! {
         owner_id -> Text,
         owner_display_name -> Text,
         is_delete_marker -> Bool,
-        storage_format -> Nullable<Text>,
         is_folder_marker -> Bool,
         part_sizes -> Nullable<Array<Int8>>,
         is_current -> Bool,

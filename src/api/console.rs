@@ -1868,7 +1868,7 @@ mod tests {
         crate::db::run_migrations(&database_url).await?;
         let pool = crate::db::create_pool(&database_url).await?;
         let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
-        let blobs = BlobStorage::new(data_dir, false, 10 * 1024 * 1024, 0).await?;
+        let blobs = BlobStorage::new(data_dir).await?;
         Ok((Arc::new(ObjectStorage::new(blobs, meta)), postgres))
     }
 
