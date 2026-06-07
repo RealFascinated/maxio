@@ -2,6 +2,122 @@
 
 S3-compatible object storage server written in Rust. Single-binary replacement for MinIO.
 
+## Agent Guidelines
+
+### Behavior
+
+**Think before coding, but don't over-plan. Just do the task.**
+
+- State assumptions explicitly. If uncertain about something critical, ask — don't guess silently.
+- If multiple valid approaches exist, pick the simplest and say why.
+- Don't produce step-by-step plans or loop structures unless the task is genuinely complex and multi-phase. Most tasks are not.
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+**No backward compatibility unless asked.**
+
+- Do not add migration paths, dual-format loaders, deprecated-key fallbacks, or "legacy" shims when changing configs, database schemas, serialized fields, or APIs — unless the user explicitly requests it or confirms it is needed.
+- Default to the new shape only. Many features here are not yet in production; there is usually no existing data to preserve.
+- If a change could break something already live (renamed config key, restructured DB column, removed field), **ask the user** whether backward compatibility or a migration is needed before implementing it. Do not assume it is required.
+
+**Never commit automatically. Let the user commit their own changes.**
+
+After completing changes, suggest a short commit message the user can use — but don't run `git commit` yourself. No conventional commit prefixes (e.g. `refactor:`, `feat:`, `fix:`). Just the message itself.
+
+**Touch only what you must.**
+
+- Don't "improve" adjacent code, formatting, or comments.
+- Don't refactor things that aren't broken.
+- Remove imports/variables/functions that *your* changes made unused — leave pre-existing dead code alone unless asked.
+
+### Project Conventions
+
+**Follow existing project conventions exactly.** Before writing new code, read nearby modules that solve a similar problem and mirror how they do it. This is non-negotiable — do not introduce your own patterns, reorganize structure, or "clean up" code to match a different style.
+
+This applies to everything:
+
+- **Code style** — naming, formatting, module layout, error handling, async patterns, documentation level.
+- **Logic style** — how problems are solved in this codebase (Axum handlers, diesel repos, `MetadataStore`/`BlobStorage` traits, console API routes, Svelte components, TanStack Query hooks, etc.). Reuse the same abstractions and call patterns the surrounding code uses.
+- **Project layout** — new S3 handlers go in `src/api/`; DB access goes through `src/db/repos/`; storage traits in `src/storage/`; console endpoints in `src/api/console.rs`; UI pages and components follow existing `ui/src/` structure.
+
+**Do not deviate** unless:
+
+1. **Explicit user request** — the user has directly asked for a different approach, structure, or style.
+
+If something in the project looks inconsistent, match the local convention for that area — don't pick a "better" alternative on your own.
+
+### Type-Driven Design
+
+**Model variation with types, not branching.** When behaviour differs by kind, category, or role, express that difference through enums, traits, and polymorphic dispatch — not long `match`/`if` chains, string discriminators, or flags that need comments to interpret.
+
+- **Extend existing abstractions** — storage backends implement `MetadataStore`/`BlobStorage`; S3 handlers follow the patterns in sibling `src/api/` modules; console routes register through the console router in `console.rs`.
+- **Shared logic belongs at the right layer** — pull common behaviour into traits, parent modules, or shared helpers; implementations override only what actually varies.
+- **Trait methods document the contract** — a well-named trait method on `MetadataStore` or `S3Error` variant replaces prose explaining "when X happens, do Y."
+
+**Only where it earns its keep.** A single implementation with no realistic second variant stays concrete. Don't add a trait for one implementor — that contradicts minimum-code principles. Use traits and enums when the codebase already has (or clearly needs) multiple implementations of the same contract.
+
+```rust
+// bad — behaviour encoded in branches; reader must trace conditions
+if op == "put" { ... } else if op == "get" { ... }
+
+// good — each operation owns its handler
+async fn put_object(...) -> Result<Response, S3Error> { ... }
+async fn get_object(...) -> Result<Response, S3Error> { ... }
+```
+
+### Surrounding Context
+
+**Read the subsystem before you write code.** A change is never isolated — it sits inside a router, repo, trait, or UI feature area. Before implementing, explore how that area already works: its traits, registration paths, middleware, migrations, and existing implementations. Your change should plug into those mechanisms, not bypass them.
+
+- **Follow the integration points** — new S3 operations wire through `src/api/router.rs`; metadata changes go through `MetadataStore` and diesel repos; console features extend `console.rs` and mirror existing `/api/` patterns; UI features use TanStack Query and the Coolify design system.
+- **No loose workarounds** — don't reach around a trait with one-off DB calls, duplicated logic that an existing abstraction already handles, or ad-hoc state outside `AppState`. If the framework doesn't support what you need, extend it at the right layer — don't glue around it from the call site.
+- **Mirror a nearby example** — pick an existing implementation closest to what you're adding and trace it end to end: handler, storage call, error mapping, test, UI component. That path is the template.
+
+### Code Style
+
+The rules below are part of the project conventions above. They are not suggestions — new and changed code must follow them.
+
+#### Rust
+
+- Use `tracing` (`info`, `warn`, `debug`) — never declare a logger manually.
+- **Log when the event is infrequent and worth an audit trail** — auth failures, admin actions, lifecycle events, security-sensitive operations. **Do not log hot paths** — per-request object reads/writes, signature verification debug on every call, etc. Reserve `tracing::info` for deliberate audit events; use `tracing::warn` for unexpected but handled conditions; use `tracing::debug` sparingly and only for development diagnostics.
+- Methods that may not return a value use `Option<T>`, not nullable pointers or sentinel values.
+- Return `Result<T, E>` with the project's error types (`S3Error`, `StorageError`) — don't panic on expected failure paths.
+- Use `///` doc comments when something non-obvious is happening (side effects, preconditions, return semantics). Skip docs for boilerplate whose behaviour is obvious from the name and signature.
+- Match naming style of nearby code. Clear, full words — not terse abbreviations or overly verbose names.
+- Don't assign a value to a variable if it's only used once immediately after.
+- Don't extract a function if it's only called from one place and the extraction adds no clarity. Inline it.
+- Prefer `HashMap` over ordered maps when order doesn't matter; avoid unnecessary allocation in hot paths; don't iterate a collection multiple times when one pass will do.
+
+#### Frontend (`ui/`)
+
+- Svelte 5 runes, TanStack Query for server state, shadcn-svelte components.
+- Follow [`ui/DESIGN_SYSTEM.md`](ui/DESIGN_SYSTEM.md) — Coolify theme, inset inputs, button variants, 2px border radius.
+- All `fetch` catch blocks log via `console.error` with context (e.g. `'fetchBuckets failed:'`).
+- Use **bun** (not npm).
+
+### Performance
+
+MaxIO handles object storage workloads where throughput matters. Performance is not an afterthought.
+
+- Prefer efficient data structures and avoid unnecessary clones/allocations in request handlers and storage paths.
+- Don't iterate a collection multiple times when one pass will do.
+- Cache lookups that are repeated across the same operation rather than re-fetching.
+- If two approaches are otherwise equal, pick the faster one.
+
+### Testing
+
+**Test-Driven Development (TDD)**: Before implementing any new function or feature, write a failing test first. Then implement until the test passes.
+
+**After every code change**, re-run the full test suite to catch regressions (see [Development Workflow](#development-workflow) below).
+
+Only add tests if requested or they add meaningful coverage of real behavior. Do not add tests that trivially assert the obvious.
+
 ## Naming Convention
 
 Always spell the product name **MaxIO** (capital M, capital I, capital O). Never use "Maxio", "maxio", or "MAXIO" in prose. Lowercase `maxio` is acceptable only for CLI binary names, environment variable prefixes (`MAXIO_`), mc aliases, and code identifiers.
@@ -50,8 +166,6 @@ The binary serves the web console at `/ui/` with proper MIME types, ETags, and c
 Defaults: port 9000, access/secret `maxioadmin`/`maxioadmin`, region `us-east-1`
 
 ## Development Workflow
-
-**Test-Driven Development (TDD)**: Before implementing any new function or feature, write a failing test first. Then implement until the test passes.
 
 **After every code change**, re-run the full test suite to catch regressions:
 
