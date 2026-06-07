@@ -384,11 +384,7 @@ pub async fn login(
 
     let now = chrono::Utc::now().timestamp();
     let token = generate_token(&session_username, &state.config.secret_key, now);
-    let cookie = make_cookie(
-        &token,
-        TOKEN_MAX_AGE_SECS,
-        cookies_require_https(&state),
-    );
+    let cookie = make_cookie(&token, TOKEN_MAX_AGE_SECS, cookies_require_https(&state));
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert("Set-Cookie", cookie.parse().unwrap());
@@ -726,12 +722,7 @@ pub async fn list_objects(
 
     let page = match state
         .storage
-        .list_objects_page(
-            &bucket,
-            &prefix,
-            params.start_after.as_deref(),
-            max_keys,
-        )
+        .list_objects_page(&bucket, &prefix, params.start_after.as_deref(), max_keys)
         .await
     {
         Ok(page) => page,

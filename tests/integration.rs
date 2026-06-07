@@ -1081,11 +1081,7 @@ async fn test_list_objects_v2_empty_delimiter() {
     .await;
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(
-        body.contains("<Key>nested/a.txt</Key>"),
-        "body: {}",
-        body
-    );
+    assert!(body.contains("<Key>nested/a.txt</Key>"), "body: {}", body);
     assert!(body.contains("<Key>b.txt</Key>"), "body: {}", body);
     assert!(body.contains("<KeyCount>2</KeyCount>"), "body: {}", body);
     assert!(
