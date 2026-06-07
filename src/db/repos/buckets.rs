@@ -349,16 +349,13 @@ pub(crate) async fn load_bucket_cache_entry(
 
 pub async fn is_versioned(ctx: &DbContext, bucket: &str) -> Result<bool, StorageError> {
     validate_bucket_name(bucket)?;
+    if let Some(entry) = ctx.bucket_cache().get(bucket) {
+        return Ok(entry.versioning);
+    }
     let mut conn = get_conn(ctx.pool()).await?;
-    buckets::table
-        .filter(buckets::name.eq(bucket))
-        .select(buckets::versioning)
-        .first::<bool>(&mut conn)
-        .await
-        .map_err(|e| match e {
-            diesel::result::Error::NotFound => StorageError::NotFound(bucket.to_string()),
-            other => db_err(other),
-        })
+    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+    ctx.bucket_cache().insert(bucket, entry.clone());
+    Ok(entry.versioning)
 }
 
 pub async fn set_versioning(ctx: &DbContext, bucket: &str, enabled: bool) -> Result<(), StorageError> {

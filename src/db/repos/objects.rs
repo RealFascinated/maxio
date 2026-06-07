@@ -17,52 +17,75 @@ use super::{
     PutBucketContext,
 };
 
+fn object_has_side_tables(meta: &ObjectMeta) -> bool {
+    meta.tags.as_ref().is_some_and(|t| !t.is_empty())
+        || meta.acl.is_some()
+        || (meta.checksum_algorithm.is_some() && meta.checksum_value.is_some())
+}
+
 pub async fn upsert_object(
     ctx: &DbContext,
     bucket_name: &str,
     meta: &ObjectMeta,
     put_ctx: Option<&PutBucketContext>,
-) -> Result<Uuid, StorageError> {
+) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = if let Some(put) = put_ctx {
         put.bucket_id
+    } else if let Some(entry) = ctx.bucket_cache().get(bucket_name) {
+        entry.id
     } else {
         resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
     };
     let last_modified = parse_ts(&meta.last_modified)?;
 
+    let values = (
+        objects::id.eq(Uuid::new_v4()),
+        objects::bucket_id.eq(bucket_id),
+        objects::key.eq(&meta.key),
+        objects::size.eq(meta.size as i64),
+        objects::etag.eq(&meta.etag),
+        objects::content_type.eq(&meta.content_type),
+        objects::last_modified.eq(last_modified),
+        objects::owner_id.eq(&meta.owner_id),
+        objects::owner_display_name.eq(&meta.owner_display_name),
+        objects::version_id.eq(&meta.version_id),
+        objects::is_delete_marker.eq(meta.is_delete_marker),
+        objects::storage_format.eq(&meta.storage_format),
+        objects::is_folder_marker.eq(meta.key.ends_with('/')),
+        objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
+    );
+    let update = (
+        objects::size.eq(meta.size as i64),
+        objects::etag.eq(&meta.etag),
+        objects::content_type.eq(&meta.content_type),
+        objects::last_modified.eq(last_modified),
+        objects::owner_id.eq(&meta.owner_id),
+        objects::owner_display_name.eq(&meta.owner_display_name),
+        objects::version_id.eq(&meta.version_id),
+        objects::is_delete_marker.eq(meta.is_delete_marker),
+        objects::storage_format.eq(&meta.storage_format),
+        objects::is_folder_marker.eq(meta.key.ends_with('/')),
+        objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
+    );
+
+    if !object_has_side_tables(meta) {
+        diesel::insert_into(objects::table)
+            .values(values)
+            .on_conflict((objects::bucket_id, objects::key))
+            .do_update()
+            .set(update)
+            .execute(&mut conn)
+            .await
+            .map_err(db_err)?;
+        return Ok(());
+    }
+
     let object_id: Uuid = diesel::insert_into(objects::table)
-        .values((
-            objects::id.eq(Uuid::new_v4()),
-            objects::bucket_id.eq(bucket_id),
-            objects::key.eq(&meta.key),
-            objects::size.eq(meta.size as i64),
-            objects::etag.eq(&meta.etag),
-            objects::content_type.eq(&meta.content_type),
-            objects::last_modified.eq(last_modified),
-            objects::owner_id.eq(&meta.owner_id),
-            objects::owner_display_name.eq(&meta.owner_display_name),
-            objects::version_id.eq(&meta.version_id),
-            objects::is_delete_marker.eq(meta.is_delete_marker),
-            objects::storage_format.eq(&meta.storage_format),
-            objects::is_folder_marker.eq(meta.key.ends_with('/')),
-            objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
-        ))
+        .values(values)
         .on_conflict((objects::bucket_id, objects::key))
         .do_update()
-        .set((
-            objects::size.eq(meta.size as i64),
-            objects::etag.eq(&meta.etag),
-            objects::content_type.eq(&meta.content_type),
-            objects::last_modified.eq(last_modified),
-            objects::owner_id.eq(&meta.owner_id),
-            objects::owner_display_name.eq(&meta.owner_display_name),
-            objects::version_id.eq(&meta.version_id),
-            objects::is_delete_marker.eq(meta.is_delete_marker),
-            objects::storage_format.eq(&meta.storage_format),
-            objects::is_folder_marker.eq(meta.key.ends_with('/')),
-            objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
-        ))
+        .set(update)
         .returning(objects::id)
         .get_result(&mut conn)
         .await
@@ -84,7 +107,7 @@ pub async fn upsert_object(
         .await?;
     }
 
-    Ok(object_id)
+    Ok(())
 }
 
 /// Load object metadata for GET/HEAD without tags, ACL, or checksum side tables.
@@ -94,7 +117,11 @@ pub async fn get_object_for_read(
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+    let bucket_id = if let Some(entry) = ctx.bucket_cache().get(bucket_name) {
+        entry.id
+    } else {
+        resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
+    };
 
     let row: ObjectRow = objects::table
         .filter(objects::bucket_id.eq(bucket_id))

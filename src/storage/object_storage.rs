@@ -22,8 +22,8 @@ impl ObjectStorage {
     }
 
     async fn bucket_owner(&self, bucket: &str) -> Result<(String, String), StorageError> {
-        let meta = self.meta.get_bucket_meta(bucket).await?;
-        Ok((meta.owner_id, meta.owner_display_name))
+        let prep = self.meta.fetch_put_bucket_context(bucket).await?;
+        Ok((prep.owner_id, prep.owner_display_name))
     }
 
     fn now_ts() -> String {
@@ -41,18 +41,33 @@ impl ObjectStorage {
         versioned: bool,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
-        self.meta
-            .upsert_object(bucket, &object_meta, put_ctx)
-            .await?;
-        if let Err(e) = BlobStorage::publish_temp_payload(
-            &written.tmp_path,
-            &written.final_path,
-            written.payload_is_dir,
-        )
-        .await
-        {
-            let _ = self.meta.delete_object_meta(bucket, key).await;
-            return Err(e);
+        if written.published {
+            if let Err(e) = self
+                .meta
+                .upsert_object(bucket, &object_meta, put_ctx)
+                .await
+            {
+                let _ = BlobStorage::discard_payload(
+                    &written.final_path,
+                    written.payload_is_dir,
+                )
+                .await;
+                return Err(e);
+            }
+        } else {
+            self.meta
+                .upsert_object(bucket, &object_meta, put_ctx)
+                .await?;
+            if let Err(e) = BlobStorage::publish_temp_payload(
+                &written.tmp_path,
+                &written.final_path,
+                written.payload_is_dir,
+            )
+            .await
+            {
+                let _ = self.meta.delete_object_meta(bucket, key).await;
+                return Err(e);
+            }
         }
 
         if versioned {
@@ -127,10 +142,6 @@ impl Storage for ObjectStorage {
 
     async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError> {
         self.meta.list_buckets().await
-    }
-
-    async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
-        self.meta.get_bucket_meta(bucket).await
     }
 
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError> {

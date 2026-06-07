@@ -12,6 +12,7 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 
 pub(crate) const IO_BUFFER_SIZE: usize = 256 * 1024;
+pub(crate) const FLAT_WRITE_BUFFER_SIZE: usize = 8 * 1024;
 pub(crate) const SMALL_OBJECT_THRESHOLD: u64 = 256 * 1024;
 
 pub struct BlobStorage {
@@ -30,6 +31,8 @@ pub struct WrittenPayload {
     pub tmp_path: PathBuf,
     pub final_path: PathBuf,
     pub payload_is_dir: bool,
+    /// Object bytes are already at `final_path` (no rename needed).
+    pub published: bool,
 }
 
 enum ChecksumHasher {
@@ -225,16 +228,26 @@ impl BlobStorage {
             fs::create_dir_all(parent).await?;
         }
 
-        let tmp_obj_path = temp_sibling_path(&obj_path);
-        let mut tmp_obj_guard = TempPathGuard::file(tmp_obj_path.clone());
-        let file = fs::File::create(&tmp_obj_path).await?;
-        let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
+        let direct_write = !fs::try_exists(&obj_path).await?;
+        let write_path = if direct_write {
+            obj_path.clone()
+        } else {
+            temp_sibling_path(&obj_path)
+        };
+        let tmp_obj_guard = if direct_write {
+            None
+        } else {
+            Some(TempPathGuard::file(write_path.clone()))
+        };
+
+        let file = fs::File::create(&write_path).await?;
+        let mut writer = BufWriter::with_capacity(FLAT_WRITE_BUFFER_SIZE, file);
         let mut hasher = Md5::new();
         let mut checksum_hasher = checksum
             .as_ref()
             .map(|(algo, _)| ChecksumHasher::new(*algo));
         let mut size: u64 = 0;
-        let mut buf = vec![0u8; IO_BUFFER_SIZE];
+        let mut buf = [0u8; FLAT_WRITE_BUFFER_SIZE];
 
         loop {
             let n = body.read(&mut buf).await?;
@@ -256,7 +269,7 @@ impl BlobStorage {
             let computed = checksum_hasher.unwrap().finalize_base64();
             if let Some(expected_val) = expected {
                 if computed != expected_val {
-                    let _ = fs::remove_file(&tmp_obj_path).await;
+                    let _ = fs::remove_file(&write_path).await;
                     return Err(StorageError::ChecksumMismatch(format!(
                         "expected {}, got {}",
                         expected_val, computed
@@ -268,16 +281,20 @@ impl BlobStorage {
             (None, None)
         };
 
-        tmp_obj_guard.disarm();
+        if let Some(mut guard) = tmp_obj_guard {
+            guard.disarm();
+        }
+
         Ok(WrittenPayload {
             size,
             etag,
             checksum_algorithm,
             checksum_value,
             storage_format: None,
-            tmp_path: tmp_obj_path,
+            tmp_path: write_path,
             final_path: obj_path,
             payload_is_dir: false,
+            published: direct_write,
         })
     }
 
@@ -385,7 +402,13 @@ impl BlobStorage {
             tmp_path: tmp_ec_dir,
             final_path: ec_dir,
             payload_is_dir: true,
+            published: false,
         })
+    }
+
+    pub async fn discard_payload(path: &Path, is_dir: bool) -> Result<(), StorageError> {
+        remove_path_if_exists(path, is_dir).await;
+        Ok(())
     }
 
     pub async fn publish_temp_payload(
@@ -630,6 +653,7 @@ impl BlobStorage {
             tmp_path: tmp_obj_path,
             final_path: obj_path,
             payload_is_dir: false,
+            published: false,
         })
     }
 
@@ -742,6 +766,7 @@ impl BlobStorage {
             tmp_path: tmp_ec_dir,
             final_path: ec_dir,
             payload_is_dir: true,
+            published: false,
         })
     }
 

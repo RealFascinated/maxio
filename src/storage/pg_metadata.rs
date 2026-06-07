@@ -42,10 +42,6 @@ impl MetadataStore for PgMetadataStore {
         repos::list_buckets(&self.ctx).await
     }
 
-    async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
-        repos::get_bucket_meta(&self.ctx, bucket).await
-    }
-
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError> {
         repos::put_bucket_policy(&self.ctx, bucket, policy).await
     }

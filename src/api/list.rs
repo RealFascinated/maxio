@@ -23,12 +23,6 @@ pub async fn handle_bucket_get(
 ) -> Result<Response<Body>, S3Error> {
     tracing::debug!("GET /{} params={:?}", bucket, params);
 
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
-
     if params.contains_key("policy") {
         return super::bucket::get_bucket_policy(state, bucket, principal).await;
     }

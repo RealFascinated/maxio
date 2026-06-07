@@ -20,7 +20,6 @@ pub trait Storage: Send + Sync {
     async fn head_bucket(&self, name: &str) -> Result<bool, StorageError>;
     async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError>;
     async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError>;
-    async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError>;
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError>;
     async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError>;
     async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError>;

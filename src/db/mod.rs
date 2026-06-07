@@ -18,7 +18,7 @@ pub type DbPool = Pool<AsyncPgConnection>;
 
 pub async fn create_pool(database_url: &str) -> Result<DbPool, anyhow::Error> {
     let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
-    let pool = Pool::builder(config).max_size(16).build()?;
+    let pool = Pool::builder(config).max_size(64).build()?;
     Ok(pool)
 }
 
