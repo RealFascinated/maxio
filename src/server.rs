@@ -17,6 +17,7 @@ use crate::iam::IamStore;
 use crate::metrics::MetricsRegistry;
 use crate::stats::BucketStatsCache;
 use crate::storage::Storage;
+use crate::storage::cache::CacheLayer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -27,6 +28,7 @@ pub struct AppState {
     pub db_pool: Arc<DbPool>,
     pub metrics: Arc<MetricsRegistry>,
     pub stats: Arc<BucketStatsCache>,
+    pub cache: Option<Arc<CacheLayer>>,
 }
 
 pub fn build_router(state: AppState) -> Router {

@@ -106,6 +106,7 @@ async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> AppSt
         db_pool: pool,
         metrics,
         stats,
+        cache: None,
     }
 }
 

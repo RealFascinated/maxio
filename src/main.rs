@@ -202,6 +202,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = app::build_app_state(config.clone()).await?;
+    let cache_for_shutdown = state.cache.clone();
 
     // Background housekeeping: abort stale multipart uploads (>7 days) and
     // remove leftover temp files from crashed writes. Runs once at startup,
@@ -250,7 +251,14 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        if let Some(cache) = cache_for_shutdown {
+            if let Err(e) = cache.flush_dirty().await {
+                tracing::warn!("shutdown writeback flush: {}", e);
+            }
+        }
+    })
     .await?;
 
     Ok(())

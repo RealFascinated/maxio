@@ -105,6 +105,12 @@ impl CacheLayer {
                     Err(_) => continue,
                 };
                 if ft.is_dir() {
+                    if path
+                        .file_name()
+                        .is_some_and(|n| n == ".uploads" || n == ".versions")
+                    {
+                        continue;
+                    }
                     stack.push(path);
                     continue;
                 }
@@ -357,7 +363,11 @@ impl CacheLayer {
         }
         let interval = self.flush_interval;
         tokio::spawn(async move {
+            if let Err(e) = self.flush_dirty().await {
+                tracing::warn!("cache writeback startup flush: {}", e);
+            }
             let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
                 if let Err(e) = self.flush_dirty().await {
@@ -365,5 +375,52 @@ impl CacheLayer {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn scan_and_flush_dirty_after_restart() {
+        let cache_root = TempDir::new().unwrap();
+        let data_root = TempDir::new().unwrap();
+        let data_buckets = data_root.path().join("buckets");
+        tokio::fs::create_dir_all(&data_buckets).await.unwrap();
+
+        let cache_path = cache_root
+            .path()
+            .join("buckets")
+            .join("bucket-a")
+            .join("obj.txt");
+        tokio::fs::create_dir_all(cache_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&cache_path, b"cached payload")
+            .await
+            .unwrap();
+
+        let layer = CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            1024 * 1024,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+
+        let data_path = data_buckets.join("bucket-a").join("obj.txt");
+        assert!(
+            !tokio::fs::try_exists(&data_path).await.unwrap(),
+            "data dir should not have the object before flush"
+        );
+
+        layer.flush_dirty().await.unwrap();
+
+        let data = tokio::fs::read(&data_path).await.unwrap();
+        assert_eq!(data, b"cached payload");
     }
 }
