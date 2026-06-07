@@ -35,9 +35,13 @@ pub struct Config {
     #[arg(long, env = "MAXIO_ADDRESS", default_value = "0.0.0.0")]
     pub address: String,
 
-    /// Root data directory
+    /// Root data directory (object bytes on disk)
     #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
     pub data_dir: String,
+
+    /// PostgreSQL connection URL for metadata
+    #[arg(long, env = "MAXIO_DATABASE_URL")]
+    pub database_url: String,
 
     /// Access key (MAXIO_ACCESS_KEY, MINIO_ROOT_USER, MINIO_ACCESS_KEY)
     #[arg(long, env = "MAXIO_ACCESS_KEY", default_value_t = default_access_key())]
@@ -98,7 +102,11 @@ mod tests {
             std::env::remove_var("MAXIO_ADDRESS");
         }
 
-        let cli = TestCli::parse_from(["maxio"]);
+        let cli = TestCli::parse_from([
+            "maxio",
+            "--database-url",
+            "postgres://localhost/maxio",
+        ]);
 
         assert_eq!(cli.config.address, "0.0.0.0");
     }

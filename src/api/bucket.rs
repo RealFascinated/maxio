@@ -33,7 +33,7 @@ pub async fn list_buckets(
     } else if principal.is_anonymous {
         return Err(S3Error::access_denied("Access Denied"));
     } else {
-        filter_buckets_by_access(&state, &principal, buckets)
+        filter_buckets_by_access(&state, &principal, buckets).await
     };
 
     let owner_id = if principal.is_anonymous {
@@ -86,7 +86,8 @@ pub async fn create_bucket(
         None,
         None,
         None,
-    )?;
+    )
+    .await?;
 
     let now = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
@@ -352,7 +353,9 @@ pub async fn get_bucket_cors(state: AppState, bucket: String) -> Result<Response
             e => S3Error::internal(e),
         })?;
 
-    let rules = rules.ok_or_else(|| S3Error::no_such_cors_configuration())?;
+    if rules.is_empty() {
+        return Err(S3Error::no_such_cors_configuration());
+    }
 
     let config = CorsConfiguration {
         rules: rules

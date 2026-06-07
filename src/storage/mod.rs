@@ -1,5 +1,14 @@
+pub mod blob;
 pub mod chunk_reader;
-pub mod filesystem;
+pub mod metadata;
+pub mod object_storage;
+pub mod pg_metadata;
+pub mod traits;
+
+pub use metadata::MetadataStore;
+pub use object_storage::ObjectStorage;
+pub use pg_metadata::PgMetadataStore;
+pub use traits::{ListPage, Storage};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -306,10 +315,32 @@ pub fn normalize_object_meta(meta: &mut ObjectMeta, bucket_owner_id: &str, bucke
     }
 }
 
+/// List all objects under `prefix` by paging through `list_objects_page`.
+pub async fn list_objects_all(
+    storage: &dyn Storage,
+    bucket: &str,
+    prefix: &str,
+) -> Result<Vec<ObjectMeta>, StorageError> {
+    let mut all = Vec::new();
+    let mut start_after = None;
+    loop {
+        let page = storage
+            .list_objects_page(bucket, prefix, start_after.as_deref(), 1000)
+            .await?;
+        all.extend(page.objects);
+        if !page.is_truncated {
+            break;
+        }
+        start_after = page.next_continuation;
+    }
+    all.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(all)
+}
+
 /// Create each bucket in `default_buckets` (comma-separated) if it does not
 /// already exist. Invalid S3 names are logged and skipped; errors are non-fatal.
 pub async fn provision_default_buckets(
-    storage: &filesystem::FilesystemStorage,
+    storage: &dyn Storage,
     default_buckets: &str,
     region: &str,
 ) {

@@ -7,6 +7,7 @@ cd "$ROOT"
 PORT="${PORT:-9000}"
 HOST="${HOST:-127.0.0.1}"
 DATA_DIR="${DATA_DIR:-./data}"
+DATABASE_URL="${MAXIO_DATABASE_URL:-${DATABASE_URL:-postgres://maxio:maxio@127.0.0.1:5432/maxio}}"
 UI_URL="http://127.0.0.1:5173/ui/"
 
 command -v bun >/dev/null 2>&1 || {
@@ -59,7 +60,7 @@ frontend_pid=$!
       -w Cargo.lock \
       -w build.rs \
       -i target \
-      -x "run -- --address $HOST --data-dir $DATA_DIR --port $PORT --allow-insecure-dev"
+      -x "run -- --address $HOST --data-dir $DATA_DIR --database-url $DATABASE_URL --port $PORT --allow-insecure-dev"
 ) &
 backend_pid=$!
 

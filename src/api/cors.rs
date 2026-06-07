@@ -100,7 +100,7 @@ pub async fn cors_middleware(
 
     // Load CORS rules for this bucket.
     let rules = match state.storage.get_bucket_cors(&bucket).await {
-        Ok(Some(rules)) => rules,
+        Ok(rules) if !rules.is_empty() => rules,
         _ => {
             // No CORS config or storage error — deny preflight, pass through for normal requests.
             if request.method() == Method::OPTIONS {

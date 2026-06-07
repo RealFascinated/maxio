@@ -16,8 +16,10 @@
 )]
 
 mod api;
+mod app;
 mod auth;
 mod config;
+mod db;
 mod iam;
 mod embedded;
 mod error;
@@ -86,32 +88,32 @@ enum UserCmd {
         access_key: Option<String>,
         #[arg(long)]
         secret_key: Option<String>,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     List {
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     Delete {
         #[arg(long)]
         username: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     CreateKey {
         #[arg(long)]
         username: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     DeleteKey {
         #[arg(long)]
         username: String,
         #[arg(long)]
         access_key_id: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     PutPolicy {
         #[arg(long)]
@@ -120,16 +122,16 @@ enum UserCmd {
         policy_name: String,
         #[arg(long)]
         document: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     AttachPolicy {
         #[arg(long)]
         username: String,
         #[arg(long)]
         policy_arn: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
 }
 
@@ -140,24 +142,24 @@ enum PolicyCmd {
         name: String,
         #[arg(long)]
         document: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     List {
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     Show {
         #[arg(long)]
         name: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
     Delete {
         #[arg(long)]
         name: String,
-        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
-        data_dir: String,
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
     },
 }
 
@@ -199,26 +201,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    tokio::fs::create_dir_all(&config.data_dir).await?;
-
-    let storage = storage::filesystem::FilesystemStorage::new(
-        &config.data_dir,
-        config.erasure_coding,
-        config.chunk_size,
-        config.parity_shards,
-    )
-    .await?;
-
-    storage::provision_default_buckets(&storage, &config.default_buckets, &config.region).await;
-
-    let user_store = Arc::new(iam::UserStore::load(&config.data_dir).await?);
-
-    let state = server::AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config.clone()),
-        login_rate_limiter: Arc::new(api::console::LoginRateLimiter::new()),
-        user_store,
-    };
+    let state = app::build_app_state(config.clone()).await?;
 
     // Background housekeeping: abort stale multipart uploads (>7 days) and
     // remove leftover temp files from crashed writes. Runs once at startup,
@@ -341,6 +324,12 @@ async fn run_healthcheck(url: &str, timeout_ms: u64) -> anyhow::Result<()> {
 }
 
 
+async fn load_iam_store(database_url: &str) -> anyhow::Result<Arc<dyn iam::IamStore>> {
+    let pool = db::create_pool(database_url).await?;
+    db::run_migrations(database_url).await?;
+    Ok(Arc::new(iam::PgIamStore::new(Arc::new(pool))))
+}
+
 async fn run_user_cmd(cmd: UserCmd) -> anyhow::Result<()> {
     use iam::types::PolicyDocumentRaw;
     match cmd {
@@ -348,27 +337,27 @@ async fn run_user_cmd(cmd: UserCmd) -> anyhow::Result<()> {
             username,
             access_key,
             secret_key,
-            data_dir,
+            database_url,
         } => {
-            let store = iam::UserStore::load(&data_dir).await?;
-            api::iam::cli_add_user(&store, &username, access_key.as_deref(), secret_key.as_deref())
+            let store = load_iam_store(&database_url).await?;
+            api::iam::cli_add_user(store.as_ref(), &username, access_key.as_deref(), secret_key.as_deref())
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
             println!("✓ user {username} created");
         }
-        UserCmd::List { data_dir } => {
-            let store = iam::UserStore::load(&data_dir).await?;
-            for u in store.list_users() {
+        UserCmd::List { database_url } => {
+            let store = load_iam_store(&database_url).await?;
+            for u in store.list_users().await {
                 println!("{} ({}) keys={}", u.username, u.user_id, u.access_keys.len());
             }
         }
-        UserCmd::Delete { username, data_dir } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+        UserCmd::Delete { username, database_url } => {
+            let store = load_iam_store(&database_url).await?;
             store.delete_user(&username).await.map_err(|e| anyhow::anyhow!(e))?;
             println!("✓ user {username} deleted");
         }
-        UserCmd::CreateKey { username, data_dir } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+        UserCmd::CreateKey { username, database_url } => {
+            let store = load_iam_store(&database_url).await?;
             let key = store
                 .create_access_key(&username)
                 .await
@@ -379,9 +368,9 @@ async fn run_user_cmd(cmd: UserCmd) -> anyhow::Result<()> {
         UserCmd::DeleteKey {
             username,
             access_key_id,
-            data_dir,
+            database_url,
         } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+            let store = load_iam_store(&database_url).await?;
             store
                 .delete_access_key(&username, &access_key_id)
                 .await
@@ -392,9 +381,9 @@ async fn run_user_cmd(cmd: UserCmd) -> anyhow::Result<()> {
             username,
             policy_name,
             document,
-            data_dir,
+            database_url,
         } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+            let store = load_iam_store(&database_url).await?;
             let doc: PolicyDocumentRaw = serde_json::from_str(&document)?;
             store
                 .put_user_policy(&username, &policy_name, doc)
@@ -405,9 +394,9 @@ async fn run_user_cmd(cmd: UserCmd) -> anyhow::Result<()> {
         UserCmd::AttachPolicy {
             username,
             policy_arn,
-            data_dir,
+            database_url,
         } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+            let store = load_iam_store(&database_url).await?;
             store
                 .attach_user_policy(&username, &policy_arn)
                 .await
@@ -424,9 +413,9 @@ async fn run_policy_cmd(cmd: PolicyCmd) -> anyhow::Result<()> {
         PolicyCmd::Create {
             name,
             document,
-            data_dir,
+            database_url,
         } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+            let store = load_iam_store(&database_url).await?;
             let doc: PolicyDocumentRaw = serde_json::from_str(&document)?;
             let policy = store
                 .create_managed_policy(&name, doc)
@@ -434,21 +423,22 @@ async fn run_policy_cmd(cmd: PolicyCmd) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e))?;
             println!("✓ policy {} ({})", policy.policy_name, policy.arn);
         }
-        PolicyCmd::List { data_dir } => {
-            let store = iam::UserStore::load(&data_dir).await?;
-            for p in store.list_managed_policies() {
+        PolicyCmd::List { database_url } => {
+            let store = load_iam_store(&database_url).await?;
+            for p in store.list_managed_policies().await {
                 println!("{} {}", p.policy_name, p.arn);
             }
         }
-        PolicyCmd::Show { name, data_dir } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+        PolicyCmd::Show { name, database_url } => {
+            let store = load_iam_store(&database_url).await?;
             let policy = store
                 .get_managed_policy(&name)
+                .await
                 .ok_or_else(|| anyhow::anyhow!("policy not found"))?;
             println!("{}", serde_json::to_string_pretty(&policy.document)?);
         }
-        PolicyCmd::Delete { name, data_dir } => {
-            let store = iam::UserStore::load(&data_dir).await?;
+        PolicyCmd::Delete { name, database_url } => {
+            let store = load_iam_store(&database_url).await?;
             store
                 .delete_managed_policy(&name)
                 .await

@@ -1,0 +1,793 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use super::blob::{validate_key, validate_upload_id, BlobStorage};
+use super::metadata::MetadataStore;
+use super::traits::{ListPage, Storage};
+use super::{
+    normalize_object_meta, validate_bucket_name, BucketMeta, ByteStream, ChecksumAlgorithm,
+    CorsRule, DeleteResult, MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError,
+};
+
+pub struct ObjectStorage {
+    blobs: BlobStorage,
+    meta: Arc<dyn MetadataStore>,
+}
+
+impl ObjectStorage {
+    pub fn new(blobs: BlobStorage, meta: Arc<dyn MetadataStore>) -> Self {
+        Self { blobs, meta }
+    }
+
+    async fn bucket_owner(&self, bucket: &str) -> Result<(String, String), StorageError> {
+        let meta = self.meta.get_bucket_meta(bucket).await?;
+        Ok((meta.owner_id, meta.owner_display_name))
+    }
+
+    fn now_ts() -> String {
+        chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string()
+    }
+
+    async fn finalize_written_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        mut object_meta: ObjectMeta,
+        written: super::blob::WrittenPayload,
+        versioned: bool,
+    ) -> Result<PutResult, StorageError> {
+        self.meta.upsert_object(bucket, &object_meta).await?;
+        if let Err(e) = BlobStorage::publish_temp_payload(
+            &written.tmp_path,
+            &written.final_path,
+            written.payload_is_dir,
+        )
+        .await
+        {
+            let _ = self.meta.delete_object_meta(bucket, key).await;
+            return Err(e);
+        }
+
+        if versioned {
+            self.meta.insert_version(bucket, &object_meta).await?;
+            if written.payload_is_dir {
+                self.blobs
+                    .archive_version_chunked(bucket, key, object_meta.version_id.as_ref().unwrap())
+                    .await?;
+            } else {
+                self.blobs
+                    .archive_version_flat(
+                        bucket,
+                        key,
+                        object_meta.version_id.as_ref().unwrap(),
+                        &written.final_path,
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(PutResult {
+            size: written.size,
+            etag: object_meta.etag.clone(),
+            version_id: object_meta.version_id.take(),
+            checksum_algorithm: written.checksum_algorithm,
+            checksum_value: written.checksum_value,
+        })
+    }
+
+    async fn sync_current_blobs_after_version_change(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<(), StorageError> {
+        match self.meta.get_object_meta(bucket, key).await {
+            Ok(meta) => {
+                if meta.is_delete_marker {
+                    self.blobs.unlink_object(bucket, key).await?;
+                } else if let Some(ref version_id) = meta.version_id {
+                    self.blobs
+                        .restore_current_from_version(
+                            bucket,
+                            key,
+                            version_id,
+                            meta.storage_format.as_deref(),
+                        )
+                        .await?;
+                }
+            }
+            Err(StorageError::NotFound(_)) => {
+                self.blobs.unlink_object(bucket, key).await?;
+            }
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Storage for ObjectStorage {
+    async fn create_bucket(&self, meta: &BucketMeta) -> Result<bool, StorageError> {
+        self.meta.create_bucket(meta).await
+    }
+
+    async fn head_bucket(&self, name: &str) -> Result<bool, StorageError> {
+        self.meta.head_bucket(name).await
+    }
+
+    async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError> {
+        self.meta.delete_bucket(name).await
+    }
+
+    async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError> {
+        self.meta.list_buckets().await
+    }
+
+    async fn load_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
+        self.meta.get_bucket_meta(bucket).await
+    }
+
+    async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
+        self.meta.get_bucket_meta(bucket).await
+    }
+
+    async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError> {
+        self.meta.put_bucket_policy(bucket, policy).await
+    }
+
+    async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError> {
+        self.meta.get_bucket_policy(bucket).await
+    }
+
+    async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError> {
+        self.meta.delete_bucket_policy(bucket).await
+    }
+
+    async fn put_bucket_acl(
+        &self,
+        bucket: &str,
+        acl: crate::iam::Acl,
+    ) -> Result<(), StorageError> {
+        self.meta.put_bucket_acl(bucket, acl).await
+    }
+
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<crate::iam::Acl, StorageError> {
+        self.meta.get_bucket_acl(bucket).await
+    }
+
+    async fn put_bucket_cors(
+        &self,
+        bucket: &str,
+        rules: Vec<CorsRule>,
+    ) -> Result<(), StorageError> {
+        self.meta.put_bucket_cors(bucket, rules).await
+    }
+
+    async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError> {
+        self.meta.get_bucket_cors(bucket).await
+    }
+
+    async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError> {
+        self.meta.delete_bucket_cors(bucket).await
+    }
+
+    async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
+        self.meta.is_versioned(bucket).await
+    }
+
+    async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
+        self.meta.set_versioning(bucket, enabled).await
+    }
+
+    async fn get_bucket_auth_info(
+        &self,
+        bucket: &str,
+    ) -> Result<(Option<String>, crate::iam::Acl), StorageError> {
+        let meta = self.meta.get_bucket_meta(bucket).await?;
+        let acl = meta
+            .acl
+            .unwrap_or_else(|| crate::iam::Acl::private(&meta.owner_id, &meta.owner_display_name));
+        Ok((meta.policy, acl))
+    }
+
+    async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: &str,
+        body: ByteStream,
+        checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+    ) -> Result<PutResult, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+
+        if key.ends_with('/') {
+            self.blobs.write_folder_marker(bucket, key).await?;
+            let etag = "\"d41d8cd98f00b204e9800998ecf8427e\"".to_string();
+            let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
+            let mut meta = ObjectMeta {
+                key: key.to_string(),
+                size: 0,
+                etag: etag.clone(),
+                content_type: "application/x-directory".to_string(),
+                last_modified: Self::now_ts(),
+                owner_id,
+                owner_display_name: owner_name,
+                acl: None,
+                version_id: None,
+                is_delete_marker: false,
+                storage_format: None,
+                checksum_algorithm: None,
+                checksum_value: None,
+                tags: None,
+                part_sizes: None,
+            };
+            let owner_id = meta.owner_id.clone();
+            let owner_name = meta.owner_display_name.clone();
+            normalize_object_meta(&mut meta, &owner_id, &owner_name);
+            self.meta.upsert_object(bucket, &meta).await?;
+            return Ok(PutResult {
+                size: 0,
+                etag,
+                version_id: None,
+                checksum_algorithm: None,
+                checksum_value: None,
+            });
+        }
+
+        let versioned = self.meta.is_versioned(bucket).await.unwrap_or(false);
+        let version_id = if versioned {
+            Some(BlobStorage::generate_version_id())
+        } else {
+            None
+        };
+
+        let written = if self.blobs.erasure_coding_enabled() {
+            self.blobs
+                .write_chunked_object_temp(
+                    bucket,
+                    key,
+                    body,
+                    checksum.as_ref().map(|(a, _)| *a),
+                )
+                .await?
+        } else {
+            self.blobs
+                .write_flat_object_temp(bucket, key, body, checksum)
+                .await?
+        };
+
+        let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
+        let mut object_meta = ObjectMeta {
+            key: key.to_string(),
+            size: written.size,
+            etag: written.etag.clone(),
+            content_type: content_type.to_string(),
+            last_modified: Self::now_ts(),
+            owner_id,
+            owner_display_name: owner_name,
+            acl: None,
+            version_id: version_id.clone(),
+            is_delete_marker: false,
+            storage_format: written.storage_format.clone(),
+            checksum_algorithm: written.checksum_algorithm,
+            checksum_value: written.checksum_value.clone(),
+            tags: None,
+            part_sizes: None,
+        };
+        let owner_id = object_meta.owner_id.clone();
+        let owner_name = object_meta.owner_display_name.clone();
+        normalize_object_meta(&mut object_meta, &owner_id, &owner_name);
+
+        self.finalize_written_object(bucket, key, object_meta, written, versioned)
+            .await
+    }
+
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+        let meta = self.meta.get_object_meta(bucket, key).await?;
+        if meta.is_delete_marker {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+        let stream = self.blobs.open_object(bucket, key, &meta).await?;
+        Ok((stream, meta))
+    }
+
+    async fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+        let meta = self.meta.get_object_meta(bucket, key).await?;
+        if meta.is_delete_marker {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+        let stream = self
+            .blobs
+            .open_object_range(bucket, key, &meta, offset, length)
+            .await?;
+        Ok((stream, meta))
+    }
+
+    async fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+        let meta = self.meta.get_object_meta(bucket, key).await?;
+        if meta.is_delete_marker {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+        Ok(meta)
+    }
+
+    async fn get_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<HashMap<String, String>, StorageError> {
+        validate_key(key)?;
+        self.meta.get_object_tags(bucket, key).await
+    }
+
+    async fn put_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        validate_key(key)?;
+        self.meta.put_object_tags(bucket, key, tags).await
+    }
+
+    async fn delete_object_tagging(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
+        validate_key(key)?;
+        self.meta.delete_object_tags(bucket, key).await
+    }
+
+    async fn delete_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<DeleteResult, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+
+        let versioned = self.meta.is_versioned(bucket).await.unwrap_or(false);
+        if versioned {
+            let version_id = BlobStorage::generate_version_id();
+            let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
+            let marker = ObjectMeta {
+                key: key.to_string(),
+                size: 0,
+                etag: String::new(),
+                content_type: String::new(),
+                last_modified: Self::now_ts(),
+                owner_id,
+                owner_display_name: owner_name,
+                acl: None,
+                version_id: Some(version_id.clone()),
+                is_delete_marker: true,
+                storage_format: None,
+                checksum_algorithm: None,
+                checksum_value: None,
+                tags: None,
+                part_sizes: None,
+            };
+            self.meta.insert_version(bucket, &marker).await?;
+            self.meta.delete_object_meta(bucket, key).await?;
+            self.blobs.unlink_object(bucket, key).await?;
+            return Ok(DeleteResult {
+                version_id: Some(version_id),
+                is_delete_marker: true,
+            });
+        }
+
+        if !self.meta.object_exists(bucket, key).await? {
+            return Ok(DeleteResult {
+                version_id: None,
+                is_delete_marker: false,
+            });
+        }
+
+        self.meta.delete_object_meta(bucket, key).await?;
+        self.blobs.unlink_object(bucket, key).await?;
+        Ok(DeleteResult {
+            version_id: None,
+            is_delete_marker: false,
+        })
+    }
+
+    async fn list_objects_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        start_after: Option<&str>,
+        max_keys: usize,
+    ) -> Result<ListPage, StorageError> {
+        self.meta
+            .list_objects_page(bucket, prefix, start_after, max_keys)
+            .await
+    }
+
+    async fn put_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+        acl: crate::iam::Acl,
+    ) -> Result<(), StorageError> {
+        self.meta.put_object_acl(bucket, key, acl).await
+    }
+
+    async fn get_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<crate::iam::Acl, StorageError> {
+        self.meta.get_object_acl(bucket, key).await
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: &str,
+        checksum_algorithm: Option<ChecksumAlgorithm>,
+    ) -> Result<MultipartUploadMeta, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+        let upload_id = uuid::Uuid::new_v4().to_string();
+        self.blobs.ensure_upload_dir(bucket, &upload_id).await?;
+
+        let meta = MultipartUploadMeta {
+            upload_id: upload_id.clone(),
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            content_type: content_type.to_string(),
+            initiated: Self::now_ts(),
+            checksum_algorithm,
+        };
+        self.meta.create_multipart_upload(&meta).await?;
+        Ok(meta)
+    }
+
+    async fn upload_part(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        body: ByteStream,
+        checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+    ) -> Result<PartMeta, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_upload_id(upload_id)?;
+        if part_number == 0 || part_number > 10_000 {
+            return Err(StorageError::InvalidKey(
+                "part number must be 1..=10000".into(),
+            ));
+        }
+
+        let upload = self.meta.get_multipart_upload(upload_id).await?;
+        if upload.bucket != bucket {
+            return Err(StorageError::UploadNotFound(upload_id.to_string()));
+        }
+
+        let (etag, size, checksum_algorithm, checksum_value) = match self
+            .blobs
+            .write_part(bucket, upload_id, part_number, body, checksum)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = self
+                    .blobs
+                    .remove_part_file(bucket, upload_id, part_number)
+                    .await;
+                return Err(e);
+            }
+        };
+
+        let part = PartMeta {
+            part_number,
+            etag,
+            size,
+            last_modified: Self::now_ts(),
+            checksum_algorithm,
+            checksum_value,
+        };
+
+        if let Err(e) = self.meta.upsert_part(upload_id, &part).await {
+            let _ = self
+                .blobs
+                .remove_part_file(bucket, upload_id, part_number)
+                .await;
+            return Err(e);
+        }
+
+        Ok(part)
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<PutResult, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_upload_id(upload_id)?;
+        if parts.is_empty() {
+            return Err(StorageError::InvalidKey(
+                "at least one part is required to complete upload".into(),
+            ));
+        }
+
+        let upload_meta = self.meta.get_multipart_upload(upload_id).await?;
+        if upload_meta.bucket != bucket {
+            return Err(StorageError::UploadNotFound(upload_id.to_string()));
+        }
+
+        let all_parts = self.meta.list_parts(upload_id).await?;
+        let mut selected = Vec::with_capacity(parts.len());
+        for (idx, (part_number, requested_etag)) in parts.iter().enumerate() {
+            let meta = all_parts
+                .iter()
+                .find(|p| p.part_number == *part_number)
+                .cloned()
+                .ok_or_else(|| {
+                    StorageError::InvalidKey(format!("missing part {}", part_number))
+                })?;
+            if meta.etag != *requested_etag {
+                return Err(StorageError::InvalidKey(format!(
+                    "etag mismatch for part {}",
+                    part_number
+                )));
+            }
+            if idx + 1 < parts.len() && meta.size < 5 * 1024 * 1024 {
+                return Err(StorageError::InvalidKey("part too small".into()));
+            }
+            selected.push(meta);
+        }
+
+        let versioned = self.meta.is_versioned(bucket).await.unwrap_or(false);
+        let version_id = if versioned {
+            Some(BlobStorage::generate_version_id())
+        } else {
+            None
+        };
+
+        let mut written = if self.blobs.erasure_coding_enabled() {
+            self.blobs
+                .assemble_multipart_chunked_temp(
+                    bucket,
+                    &upload_meta.key,
+                    upload_id,
+                    &selected,
+                )
+                .await?
+        } else {
+            self.blobs
+                .assemble_multipart_flat_temp(bucket, &upload_meta.key, upload_id, &selected)
+                .await?
+        };
+
+        let (checksum_algorithm, checksum_value) =
+            if let Some(algo) = upload_meta.checksum_algorithm {
+                (
+                    Some(algo),
+                    BlobStorage::composite_multipart_checksum(algo, &selected),
+                )
+            } else {
+                (None, None)
+            };
+        written.checksum_algorithm = checksum_algorithm;
+        written.checksum_value = checksum_value.clone();
+
+        let part_sizes: Vec<u64> = selected.iter().map(|p| p.size).collect();
+        let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
+        let object_meta = ObjectMeta {
+            key: upload_meta.key.clone(),
+            size: written.size,
+            etag: written.etag.clone(),
+            content_type: upload_meta.content_type,
+            last_modified: Self::now_ts(),
+            owner_id,
+            owner_display_name: owner_name,
+            acl: None,
+            version_id: version_id.clone(),
+            is_delete_marker: false,
+            storage_format: written.storage_format.clone(),
+            checksum_algorithm,
+            checksum_value: checksum_value.clone(),
+            tags: None,
+            part_sizes: Some(part_sizes),
+        };
+
+        let result = self
+            .finalize_written_object(
+                bucket,
+                &upload_meta.key,
+                object_meta,
+                written,
+                versioned,
+            )
+            .await?;
+
+        self.meta.abort_multipart_upload(upload_id).await?;
+        self.blobs.remove_upload_dir(bucket, upload_id).await?;
+
+        Ok(result)
+    }
+
+    async fn abort_multipart_upload(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+    ) -> Result<(), StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_upload_id(upload_id)?;
+        let upload = self.meta.get_multipart_upload(upload_id).await?;
+        if upload.bucket != bucket {
+            return Err(StorageError::UploadNotFound(upload_id.to_string()));
+        }
+        self.meta.abort_multipart_upload(upload_id).await?;
+        self.blobs.remove_upload_dir(bucket, upload_id).await
+    }
+
+    async fn list_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number_marker: Option<u32>,
+        max_parts: usize,
+    ) -> Result<(Vec<PartMeta>, bool), StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_upload_id(upload_id)?;
+        let upload = self.meta.get_multipart_upload(upload_id).await?;
+        if upload.bucket != bucket {
+            return Err(StorageError::UploadNotFound(upload_id.to_string()));
+        }
+
+        let mut parts = self.meta.list_parts(upload_id).await?;
+        parts.sort_by_key(|p| p.part_number);
+        let filtered: Vec<PartMeta> = parts
+            .into_iter()
+            .filter(|p| part_number_marker.is_none_or(|m| p.part_number > m))
+            .collect();
+        let is_truncated = filtered.len() > max_parts;
+        let page = filtered.into_iter().take(max_parts).collect();
+        Ok((page, is_truncated))
+    }
+
+    async fn list_multipart_uploads(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+    ) -> Result<Vec<MultipartUploadMeta>, StorageError> {
+        validate_bucket_name(bucket)?;
+        self.meta.list_multipart_uploads(bucket, prefix).await
+    }
+
+    async fn get_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<(ByteStream, ObjectMeta), StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+        if version_id == "null" {
+            return self.get_object(bucket, key).await;
+        }
+        let meta = self
+            .meta
+            .get_object_version_meta(bucket, key, version_id)
+            .await?;
+        if meta.is_delete_marker {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+        let stream = self.blobs.open_version(bucket, key, version_id).await?;
+        Ok((stream, meta))
+    }
+
+    async fn head_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<ObjectMeta, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+        if version_id == "null" {
+            return self.head_object(bucket, key).await;
+        }
+        let meta = self
+            .meta
+            .get_object_version_meta(bucket, key, version_id)
+            .await?;
+        if meta.is_delete_marker {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+        Ok(meta)
+    }
+
+    async fn delete_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<DeleteResult, StorageError> {
+        validate_bucket_name(bucket)?;
+        validate_key(key)?;
+
+        if version_id == "null" {
+            let existed = self.meta.object_exists(bucket, key).await?;
+            if !existed {
+                return Ok(DeleteResult {
+                    version_id: None,
+                    is_delete_marker: false,
+                });
+            }
+            let meta = self.meta.get_object_meta(bucket, key).await?;
+            self.meta.delete_object_meta(bucket, key).await?;
+            self.blobs.unlink_object(bucket, key).await?;
+            self.meta.update_current_after_delete(bucket, key).await?;
+            self.sync_current_blobs_after_version_change(bucket, key)
+                .await?;
+            return Ok(DeleteResult {
+                version_id: meta.version_id,
+                is_delete_marker: meta.is_delete_marker,
+            });
+        }
+
+        let meta = self
+            .meta
+            .get_object_version_meta(bucket, key, version_id)
+            .await?;
+        self.meta
+            .delete_object_version_meta(bucket, key, version_id)
+            .await?;
+        self.blobs.unlink_version_blobs(bucket, key, version_id)
+            .await?;
+        self.meta.update_current_after_delete(bucket, key).await?;
+        self.sync_current_blobs_after_version_change(bucket, key)
+            .await?;
+
+        Ok(DeleteResult {
+            version_id: Some(version_id.to_string()),
+            is_delete_marker: meta.is_delete_marker,
+        })
+    }
+
+    async fn list_object_versions(
+        &self,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Vec<ObjectMeta>, StorageError> {
+        validate_bucket_name(bucket)?;
+        self.meta.list_object_versions(bucket, prefix).await
+    }
+
+    async fn housekeeping_sweep(&self, stale_after: chrono::Duration) -> (u64, u64) {
+        let stale_before = chrono::Utc::now() - stale_after;
+        let uploads_removed = self
+            .meta
+            .cleanup_stale_uploads(stale_before)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("housekeeping: stale upload cleanup failed: {}", e);
+                0
+            });
+        let temp_removed = self.blobs.housekeeping_temp_sweep().await;
+        (uploads_removed, temp_removed)
+    }
+}

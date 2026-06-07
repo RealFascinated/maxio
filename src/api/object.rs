@@ -846,7 +846,7 @@ pub async fn delete_object(
 
     // Permanent version deletion
     if let Some(version_id) = params.get("versionId") {
-        let deleted_meta = state
+        let deleted = state
             .storage
             .delete_object_version(&bucket, &key, version_id)
             .await
@@ -857,7 +857,7 @@ pub async fn delete_object(
 
         let mut builder = Response::builder().status(StatusCode::NO_CONTENT);
         builder = builder.header("x-amz-version-id", version_id.as_str());
-        if deleted_meta.is_delete_marker {
+        if deleted.is_delete_marker {
             builder = builder.header("x-amz-delete-marker", "true");
         }
         return Ok(builder.body(Body::empty()).unwrap());

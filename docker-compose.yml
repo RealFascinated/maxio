@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: maxio
+      POSTGRES_PASSWORD: maxio
+      POSTGRES_DB: maxio
+    ports:
+      - "5432:5432"
+    volumes:
+      - maxio-pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maxio -d maxio"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  maxio:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "9000:9000"
+    environment:
+      MAXIO_DATABASE_URL: postgres://maxio:maxio@postgres:5432/maxio
+      MAXIO_DATA_DIR: /data
+      MAXIO_ACCESS_KEY: maxioadmin
+      MAXIO_SECRET_KEY: maxioadmin
+      MAXIO_ALLOW_INSECURE_DEV: "true"
+    volumes:
+      - maxio-data:/data
+
+volumes:
+  maxio-pg:
+  maxio-data:

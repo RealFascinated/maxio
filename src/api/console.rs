@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::signature_v4;
 use crate::server::AppState;
-use crate::storage::filesystem::FilesystemStorage;
+use crate::storage::Storage;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -113,11 +113,11 @@ fn verify_token(token: &str, username: &str, secret_key: &str) -> bool {
     constant_time_eq(signature.as_bytes(), expected.as_bytes())
 }
 
-fn resolve_session_username(token: &str, state: &AppState) -> Option<String> {
+async fn resolve_session_username(token: &str, state: &AppState) -> Option<String> {
     if verify_token(token, crate::iam::ROOT_USERNAME, &state.config.secret_key) {
         return Some(crate::iam::ROOT_USERNAME.to_string());
     }
-    for user in state.user_store.list_users() {
+    for user in state.user_store.list_users().await {
         if verify_token(token, &user.username, &state.config.secret_key) {
             return Some(user.username);
         }
@@ -203,19 +203,19 @@ async fn console_auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let session = extract_cookie(request.headers())
-        .and_then(|token| resolve_session_username(&token, &state))
-        .map(|username| {
-            if username == crate::iam::ROOT_USERNAME {
-                ConsoleSession::root()
-            } else {
-                state
-                    .user_store
-                    .get_user(&username)
-                    .map(|u| ConsoleSession::from_user(&u))
-                    .unwrap_or_else(|| ConsoleSession::root())
-            }
-        });
+    let session = match extract_cookie(request.headers()) {
+        Some(token) => match resolve_session_username(&token, &state).await {
+            Some(username) if username == crate::iam::ROOT_USERNAME => Some(ConsoleSession::root()),
+            Some(username) => state
+                .user_store
+                .get_user(&username)
+                .await
+                .map(|u| ConsoleSession::from_user(&u))
+                .or(Some(ConsoleSession::root())),
+            None => None,
+        },
+        None => None,
+    };
 
     let Some(session) = session else {
         return (
@@ -238,7 +238,7 @@ fn console_forbidden() -> ConsoleDeny {
     )
 }
 
-fn console_check(
+async fn console_check(
     state: &AppState,
     session: &ConsoleSession,
     action: &str,
@@ -255,16 +255,19 @@ fn console_check(
         bucket_acl,
         None,
     )
+    .await
     .map_err(|_| console_forbidden())
 }
 
-fn console_can(
+async fn console_can(
     state: &AppState,
     session: &ConsoleSession,
     action: &str,
     resource: &str,
 ) -> bool {
-    console_check(state, session, action, resource, None, None).is_ok()
+    console_check(state, session, action, resource, None, None)
+        .await
+        .is_ok()
 }
 
 async fn console_bucket_check(
@@ -280,8 +283,9 @@ async fn console_bucket_check(
             action,
             &crate::iam::authz::bucket_arn(bucket),
             policy.as_deref(),
-            acl.as_ref(),
+            Some(&acl),
         )
+        .await
         .map_err(|deny| deny.into_response()),
         Err(_) if session.is_root => Ok(()),
         Err(_) => Err((
@@ -306,8 +310,9 @@ async fn console_object_check(
             action,
             &crate::iam::authz::object_arn(bucket, key),
             policy.as_deref(),
-            acl.as_ref(),
+            Some(&acl),
         )
+        .await
         .map_err(|deny| deny.into_response()),
         Err(_) if session.is_root => Ok(()),
         Err(_) => Err((
@@ -318,12 +323,12 @@ async fn console_object_check(
     }
 }
 
-fn session_capabilities(state: &AppState, session: &ConsoleSession) -> serde_json::Value {
+async fn session_capabilities(state: &AppState, session: &ConsoleSession) -> serde_json::Value {
     serde_json::json!({
         "canCreateBucket": session.is_root
-            || console_can(state, session, "s3:CreateBucket", "arn:aws:s3:::*"),
+            || console_can(state, session, "s3:CreateBucket", "arn:aws:s3:::*").await,
         "canListAllBuckets": session.is_root
-            || console_can(state, session, "s3:ListAllMyBuckets", "arn:aws:s3:::*"),
+            || console_can(state, session, "s3:ListAllMyBuckets", "arn:aws:s3:::*").await,
         "canManageUsers": session.is_root,
     })
 }
@@ -366,6 +371,7 @@ pub async fn login(
     } else if let Some(user) = state
         .user_store
         .lookup_by_credentials(&body.access_key, &body.secret_key)
+        .await
     {
         user.username
     } else {
@@ -393,6 +399,7 @@ pub async fn login(
         state
             .user_store
             .get_user(&session_username)
+            .await
             .map(|u| ConsoleSession::from_user(&u))
             .unwrap_or_else(ConsoleSession::root)
     };
@@ -404,15 +411,17 @@ pub async fn login(
             "ok": true,
             "username": session_username,
             "isRoot": session.is_root,
-            "capabilities": session_capabilities(&state, &session),
+            "capabilities": session_capabilities(&state, &session).await,
         })),
     )
         .into_response()
 }
 
 pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let authenticated = extract_cookie(&headers)
-        .and_then(|token| resolve_session_username(&token, &state));
+    let authenticated = match extract_cookie(&headers) {
+        Some(token) => resolve_session_username(&token, &state).await,
+        None => None,
+    };
 
     if let Some(username) = authenticated {
         let session = if username == crate::iam::ROOT_USERNAME {
@@ -421,6 +430,7 @@ pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl In
             state
                 .user_store
                 .get_user(&username)
+                .await
                 .map(|u| ConsoleSession::from_user(&u))
                 .unwrap_or_else(ConsoleSession::root)
         };
@@ -430,7 +440,7 @@ pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl In
                 "ok": true,
                 "username": username,
                 "isRoot": session.is_root,
-                "capabilities": session_capabilities(&state, &session),
+                "capabilities": session_capabilities(&state, &session).await,
             })),
         )
     } else {
@@ -541,8 +551,12 @@ pub async fn list_buckets(
 ) -> impl IntoResponse {
     match state.storage.list_buckets().await {
         Ok(buckets) => {
-            let buckets =
-                crate::iam::authz::filter_buckets_by_access(&state, &session.principal(), buckets);
+            let buckets = crate::iam::authz::filter_buckets_by_access(
+                &state,
+                &session.principal(),
+                buckets,
+            )
+            .await;
             let list: Vec<serde_json::Value> = buckets
                 .into_iter()
                 .map(|b| {
@@ -580,7 +594,9 @@ pub async fn create_bucket(
         &crate::iam::authz::bucket_arn(&body.name),
         None,
         None,
-    ) {
+    )
+    .await
+    {
         return deny.into_response();
     }
 
@@ -702,7 +718,7 @@ pub async fn list_objects(
     let prefix = params.prefix.unwrap_or_default();
     let delimiter = params.delimiter.unwrap_or_else(|| "/".to_string());
 
-    let all_objects = match state.storage.list_objects(&bucket, &prefix).await {
+    let all_objects = match crate::storage::list_objects_all(state.storage.as_ref(), &bucket, &prefix).await {
         Ok(objects) => objects,
         Err(e) => {
             return (
@@ -856,7 +872,7 @@ pub async fn delete_object_api(
     match state.storage.delete_object(&bucket, &key).await {
         Ok(_) => {
             if let Err(e) =
-                preserve_empty_parent_folder_after_object_delete(&state.storage, &bucket, &key)
+                preserve_empty_parent_folder_after_object_delete(state.storage.as_ref(), &bucket, &key)
                     .await
             {
                 return (
@@ -885,7 +901,7 @@ fn parent_folder_prefix_for_deleted_object(key: &str) -> Option<String> {
 }
 
 async fn preserve_empty_parent_folder_after_object_delete(
-    storage: &FilesystemStorage,
+    storage: &dyn Storage,
     bucket: &str,
     key: &str,
 ) -> Result<(), String> {
@@ -893,8 +909,7 @@ async fn preserve_empty_parent_folder_after_object_delete(
         return Ok(());
     };
 
-    let remaining = storage
-        .list_objects(bucket, &parent_prefix)
+    let remaining = crate::storage::list_objects_all(storage, bucket, &parent_prefix)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1420,6 +1435,7 @@ pub async fn list_users_api(State(state): State<AppState>) -> impl IntoResponse 
     let users: Vec<_> = state
         .user_store
         .list_users()
+        .await
         .into_iter()
         .map(|u| {
             serde_json::json!({
@@ -1517,7 +1533,7 @@ pub async fn get_user_policy_api(
     State(state): State<AppState>,
     Path((username, policy_name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let user = match state.user_store.get_user(&username) {
+    let user = match state.user_store.get_user(&username).await {
         Some(u) => u,
         None => {
             return (
@@ -1614,6 +1630,7 @@ pub async fn list_policies_api(State(state): State<AppState>) -> impl IntoRespon
     let policies: Vec<_> = state
         .user_store
         .list_managed_policies()
+        .await
         .into_iter()
         .map(|p| {
             serde_json::json!({
@@ -1672,7 +1689,7 @@ pub async fn get_policy_api(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.user_store.get_managed_policy(&name) {
+    match state.user_store.get_managed_policy(&name).await {
         Some(p) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -1836,15 +1853,30 @@ pub fn console_router(state: AppState) -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::{BucketMeta, ByteStream};
+    use std::sync::Arc;
+
+    use crate::storage::blob::BlobStorage;
+    use crate::storage::{BucketMeta, ByteStream, MetadataStore, ObjectStorage, PgMetadataStore};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
 
     use super::*;
 
-    async fn test_storage(data_dir: &str) -> Result<FilesystemStorage, Box<dyn std::error::Error>> {
-        Ok(FilesystemStorage::new(data_dir, false, 10 * 1024 * 1024, 0).await?)
+    async fn test_storage(
+        data_dir: &str,
+    ) -> Result<(Arc<dyn Storage>, testcontainers::ContainerAsync<Postgres>), Box<dyn std::error::Error>>
+    {
+        let postgres = Postgres::default().start().await?;
+        let port = postgres.get_host_port_ipv4(5432).await?;
+        let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        crate::db::run_migrations(&database_url).await?;
+        let pool = crate::db::create_pool(&database_url).await?;
+        let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
+        let blobs = BlobStorage::new(data_dir, false, 10 * 1024 * 1024, 0).await?;
+        Ok((Arc::new(ObjectStorage::new(blobs, meta)), postgres))
     }
 
-    async fn create_test_bucket(storage: &FilesystemStorage, bucket: &str) {
+    async fn create_test_bucket(storage: &dyn Storage, bucket: &str) {
         storage
             .create_bucket(&BucketMeta {
                 name: bucket.to_string(),
@@ -1887,8 +1919,8 @@ mod tests {
     #[tokio::test]
     async fn deleting_last_console_file_preserves_parent_folder_marker() {
         let temp = tempfile::tempdir().unwrap();
-        let storage = test_storage(temp.path().to_str().unwrap()).await.unwrap();
-        create_test_bucket(&storage, "bucket").await;
+        let (storage, _pg) = test_storage(temp.path().to_str().unwrap()).await.unwrap();
+        create_test_bucket(storage.as_ref(), "bucket").await;
 
         storage
             .put_object(
@@ -1905,11 +1937,13 @@ mod tests {
             .delete_object("bucket", "folder/file.txt")
             .await
             .unwrap();
-        preserve_empty_parent_folder_after_object_delete(&storage, "bucket", "folder/file.txt")
+        preserve_empty_parent_folder_after_object_delete(storage.as_ref(), "bucket", "folder/file.txt")
             .await
             .unwrap();
 
-        let objects = storage.list_objects("bucket", "folder/").await.unwrap();
+        let objects = crate::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
+            .await
+            .unwrap();
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].key, "folder/");
         assert_eq!(objects[0].content_type, "application/x-directory");
@@ -1918,8 +1952,8 @@ mod tests {
     #[tokio::test]
     async fn deleting_folder_marker_does_not_recreate_it() {
         let temp = tempfile::tempdir().unwrap();
-        let storage = test_storage(temp.path().to_str().unwrap()).await.unwrap();
-        create_test_bucket(&storage, "bucket").await;
+        let (storage, _pg) = test_storage(temp.path().to_str().unwrap()).await.unwrap();
+        create_test_bucket(storage.as_ref(), "bucket").await;
 
         storage
             .put_object(
@@ -1933,11 +1967,13 @@ mod tests {
             .unwrap();
 
         storage.delete_object("bucket", "folder/").await.unwrap();
-        preserve_empty_parent_folder_after_object_delete(&storage, "bucket", "folder/")
+        preserve_empty_parent_folder_after_object_delete(storage.as_ref(), "bucket", "folder/")
             .await
             .unwrap();
 
-        let objects = storage.list_objects("bucket", "folder/").await.unwrap();
+        let objects = crate::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
+            .await
+            .unwrap();
         assert!(objects.is_empty());
     }
 }

@@ -14,7 +14,7 @@ pub fn object_arn(bucket: &str, key: &str) -> String {
 }
 
 /// Authorize an authenticated principal for an S3 action.
-pub fn authorize(
+pub async fn authorize(
     state: &AppState,
     principal: &Principal,
     action: &str,
@@ -31,8 +31,8 @@ pub fn authorize(
         return authorize_anonymous(action, resource, bucket_policy_json, bucket_acl, object_acl);
     }
 
-    let identity_policies = if let Some(user) = state.user_store.get_user(&principal.username) {
-        state.user_store.effective_policies(&user)
+    let identity_policies = if let Some(user) = state.user_store.get_user(&principal.username).await {
+        state.user_store.effective_policies(&user).await
     } else {
         vec![]
     };
@@ -135,7 +135,7 @@ pub fn bucket_policy_allows_anonymous_read(
     )
 }
 
-pub fn filter_buckets_by_access(
+pub async fn filter_buckets_by_access(
     state: &AppState,
     principal: &Principal,
     buckets: Vec<crate::storage::BucketMeta>,
@@ -143,31 +143,35 @@ pub fn filter_buckets_by_access(
     if principal.is_root {
         return buckets;
     }
-    buckets
-        .into_iter()
-        .filter(|b| {
-            authorize(
+    let mut out = Vec::new();
+    for b in buckets {
+        let allowed = authorize(
+            state,
+            principal,
+            "s3:ListBucket",
+            &bucket_arn(&b.name),
+            b.policy.as_deref(),
+            b.acl.as_ref(),
+            None,
+        )
+        .await
+        .is_ok()
+            || authorize(
                 state,
                 principal,
-                "s3:ListBucket",
+                "s3:GetBucketLocation",
                 &bucket_arn(&b.name),
                 b.policy.as_deref(),
                 b.acl.as_ref(),
                 None,
             )
-            .is_ok()
-                || authorize(
-                    state,
-                    principal,
-                    "s3:GetBucketLocation",
-                    &bucket_arn(&b.name),
-                    b.policy.as_deref(),
-                    b.acl.as_ref(),
-                    None,
-                )
-                .is_ok()
-        })
-        .collect()
+            .await
+            .is_ok();
+        if allowed {
+            out.push(b);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

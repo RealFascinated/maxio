@@ -17,7 +17,7 @@ pub async fn iam_handler(
     req: axum::extract::Request,
 ) -> Result<Response<Body>, S3Error> {
     let principal = crate::api::authz::get_principal(req.extensions());
-    require_iam_admin(&state, &principal)?;
+    require_iam_admin(&state, &principal).await?;
 
     let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
         .await
@@ -33,23 +33,23 @@ pub async fn iam_handler(
     let xml = match action.as_str() {
         "CreateUser" => create_user(&state, &form).await?,
         "DeleteUser" => delete_user(&state, &form).await?,
-        "GetUser" => get_user(&state, &form)?,
-        "ListUsers" => list_users(&state)?,
+        "GetUser" => get_user(&state, &form).await?,
+        "ListUsers" => list_users(&state).await?,
         "CreateAccessKey" => create_access_key(&state, &form).await?,
         "DeleteAccessKey" => delete_access_key(&state, &form).await?,
         "UpdateAccessKey" => update_access_key(&state, &form).await?,
-        "ListAccessKeys" => list_access_keys(&state, &form)?,
+        "ListAccessKeys" => list_access_keys(&state, &form).await?,
         "PutUserPolicy" => put_user_policy(&state, &form).await?,
-        "GetUserPolicy" => get_user_policy(&state, &form)?,
+        "GetUserPolicy" => get_user_policy(&state, &form).await?,
         "DeleteUserPolicy" => delete_user_policy(&state, &form).await?,
-        "ListUserPolicies" => list_user_policies(&state, &form)?,
+        "ListUserPolicies" => list_user_policies(&state, &form).await?,
         "CreatePolicy" => create_policy(&state, &form).await?,
         "DeletePolicy" => delete_policy(&state, &form).await?,
-        "GetPolicy" => get_policy(&state, &form)?,
-        "ListPolicies" => list_policies(&state)?,
+        "GetPolicy" => get_policy(&state, &form).await?,
+        "ListPolicies" => list_policies(&state).await?,
         "AttachUserPolicy" => attach_user_policy(&state, &form).await?,
         "DetachUserPolicy" => detach_user_policy(&state, &form).await?,
-        "ListAttachedUserPolicies" => list_attached_user_policies(&state, &form)?,
+        "ListAttachedUserPolicies" => list_attached_user_policies(&state, &form).await?,
         other => return Err(S3Error::invalid_argument(&format!("Unknown Action: {other}"))),
     };
 
@@ -60,12 +60,12 @@ pub async fn iam_handler(
         .unwrap())
 }
 
-fn require_iam_admin(state: &AppState, principal: &Principal) -> Result<(), S3Error> {
+async fn require_iam_admin(state: &AppState, principal: &Principal) -> Result<(), S3Error> {
     if principal.is_root {
         return Ok(());
     }
-    if let Some(user) = state.user_store.get_user(&principal.username) {
-        let policies = state.user_store.effective_policies(&user);
+    if let Some(user) = state.user_store.get_user(&principal.username).await {
+        let policies = state.user_store.effective_policies(&user).await;
         for doc in &policies {
             for stmt in &doc.statements {
                 if stmt.effect == crate::iam::policy::Effect::Allow
@@ -106,13 +106,14 @@ async fn delete_user(state: &AppState, form: &HashMap<String, String>) -> Result
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteUserResponse/>".into())
 }
 
-fn get_user(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn get_user(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
     let username = form
         .get("UserName")
         .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
     let user = state
         .user_store
         .get_user(username)
+        .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><GetUserResponse><GetUserResult><User><UserId>{}</UserId><UserName>{}</UserName><CreateDate>{}</CreateDate></User></GetUserResult></GetUserResponse>",
@@ -120,8 +121,8 @@ fn get_user(state: &AppState, form: &HashMap<String, String>) -> Result<String, 
     ))
 }
 
-fn list_users(state: &AppState) -> Result<String, S3Error> {
-    let users = state.user_store.list_users();
+async fn list_users(state: &AppState) -> Result<String, S3Error> {
+    let users = state.user_store.list_users().await;
     let mut members = String::new();
     for u in users {
         members.push_str(&format!(
@@ -188,13 +189,17 @@ async fn update_access_key(state: &AppState, form: &HashMap<String, String>) -> 
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><UpdateAccessKeyResponse/>".into())
 }
 
-fn list_access_keys(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn list_access_keys(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form
         .get("UserName")
         .ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
     let user = state
         .user_store
         .get_user(username)
+        .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let mut members = String::new();
     for k in &user.access_keys {
@@ -227,10 +232,17 @@ async fn put_user_policy(state: &AppState, form: &HashMap<String, String>) -> Re
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><PutUserPolicyResponse/>".into())
 }
 
-fn get_user_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn get_user_policy(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
     let policy_name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
-    let user = state.user_store.get_user(username).ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
+    let user = state
+        .user_store
+        .get_user(username)
+        .await
+        .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let policy = user
         .inline_policies
         .iter()
@@ -254,9 +266,16 @@ async fn delete_user_policy(state: &AppState, form: &HashMap<String, String>) ->
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteUserPolicyResponse/>".into())
 }
 
-fn list_user_policies(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn list_user_policies(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let user = state.user_store.get_user(username).ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
+    let user = state
+        .user_store
+        .get_user(username)
+        .await
+        .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let mut members = String::new();
     for p in &user.inline_policies {
         members.push_str(&format!("<member>{}</member>", p.policy_name));
@@ -293,11 +312,12 @@ async fn delete_policy(state: &AppState, form: &HashMap<String, String>) -> Resu
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeletePolicyResponse/>".into())
 }
 
-fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
     let name = form.get("PolicyName").ok_or_else(|| S3Error::invalid_argument("Missing PolicyName"))?;
     let policy = state
         .user_store
         .get_managed_policy(name)
+        .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let doc = serde_json::to_string(&policy.document).map_err(S3Error::internal)?;
     Ok(format!(
@@ -306,8 +326,8 @@ fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String
     ))
 }
 
-fn list_policies(state: &AppState) -> Result<String, S3Error> {
-    let policies = state.user_store.list_managed_policies();
+async fn list_policies(state: &AppState) -> Result<String, S3Error> {
+    let policies = state.user_store.list_managed_policies().await;
     let mut members = String::new();
     for p in policies {
         members.push_str(&format!(
@@ -343,9 +363,16 @@ async fn detach_user_policy(state: &AppState, form: &HashMap<String, String>) ->
     Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DetachUserPolicyResponse/>".into())
 }
 
-fn list_attached_user_policies(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
+async fn list_attached_user_policies(
+    state: &AppState,
+    form: &HashMap<String, String>,
+) -> Result<String, S3Error> {
     let username = form.get("UserName").ok_or_else(|| S3Error::invalid_argument("Missing UserName"))?;
-    let user = state.user_store.get_user(username).ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
+    let user = state
+        .user_store
+        .get_user(username)
+        .await
+        .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let mut members = String::new();
     for arn in &user.attached_policies {
         members.push_str(&format!("<member><PolicyArn>{}</PolicyArn></member>", arn));
@@ -357,7 +384,7 @@ fn list_attached_user_policies(state: &AppState, form: &HashMap<String, String>)
 }
 
 pub async fn cli_add_user(
-    store: &crate::iam::UserStore,
+    store: &dyn crate::iam::IamStore,
     username: &str,
     access_key: Option<&str>,
     secret_key: Option<&str>,

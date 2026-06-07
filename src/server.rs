@@ -12,15 +12,17 @@ use crate::api::router::s3_router;
 use crate::auth::middleware::auth_middleware;
 use crate::config::Config;
 use crate::embedded::ui_handler;
-use crate::iam::UserStore;
-use crate::storage::filesystem::FilesystemStorage;
+use crate::db::DbPool;
+use crate::iam::IamStore;
+use crate::storage::Storage;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub storage: Arc<FilesystemStorage>,
+    pub storage: Arc<dyn Storage>,
     pub config: Arc<Config>,
     pub login_rate_limiter: Arc<LoginRateLimiter>,
-    pub user_store: Arc<UserStore>,
+    pub user_store: Arc<dyn IamStore>,
+    pub db_pool: Arc<DbPool>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -59,8 +61,12 @@ async fn healthz() -> StatusCode {
     StatusCode::OK
 }
 
-async fn readyz(State(_state): State<AppState>) -> StatusCode {
-    StatusCode::OK
+async fn readyz(State(state): State<AppState>) -> StatusCode {
+    if crate::db::health_check(&state.db_pool).await {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 async fn request_id_middleware(

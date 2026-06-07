@@ -12,12 +12,12 @@ Rust · Axum · Svelte 5 · Tailwind CSS v4 · shadcn-svelte
 
 > **Warning:** MaxIO is under active development. Do not use it in production yet.
 
-MaxIO is a lightweight, single-binary S3-compatible object storage server written in Rust. No JVM, no database, no runtime dependencies — just one binary and a data directory. Buckets are directories, objects are files. Back up by copying the data dir.
+MaxIO is a lightweight, single-binary S3-compatible object storage server written in Rust. Metadata lives in PostgreSQL; object bytes are stored on a local filesystem path (`--data-dir`). You need Postgres and a data directory — back up both.
 
 ## Features
 
 - **Single Binary** — Frontend assets are compiled into the binary via `rust-embed`. Nothing extra to deploy
-- **Pure Filesystem Storage** — No database. Buckets are directories, objects are files, metadata in `.meta.json` sidecars
+- **Postgres + Filesystem Storage** — Metadata in PostgreSQL (indexed listing, IAM, multipart state); object bytes on disk under `--data-dir`
 - **AWS Signature V4** — Compatible with `mc`, AWS CLI, and any S3 SDK
 - **Web Console** — Built-in UI at `/ui/` for browsing, uploading, and managing objects
 - **S3 API Coverage** — ListBuckets, CreateBucket, HeadBucket, DeleteBucket, GetBucketLocation, ListObjectsV1/V2, ListObjectVersions, PutObject, GetObject, HeadObject, DeleteObject, DeleteObjects (batch), CopyObject, Multipart Upload (including UploadPartCopy), Object Tagging, CORS, Versioning

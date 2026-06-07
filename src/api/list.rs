@@ -123,36 +123,21 @@ async fn list_objects_v2(
         })
         .or(start_after.clone());
 
-    let all_objects = state
+    let page_result = state
         .storage
-        .list_objects(&bucket, &prefix)
+        .list_objects_page(&bucket, &prefix, effective_start.as_deref(), max_keys)
         .await
         .map_err(|e| S3Error::internal(e))?;
 
-    let filtered: Vec<&ObjectMeta> = all_objects
-        .iter()
-        .filter(|o| {
-            if let Some(ref start) = effective_start {
-                o.key.as_str() > start.as_str()
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    let is_truncated = filtered.len() > max_keys;
-    let page: Vec<&ObjectMeta> = filtered.into_iter().take(max_keys).collect();
+    let is_truncated = page_result.is_truncated;
+    let page: Vec<&ObjectMeta> = page_result.objects.iter().collect();
 
     let (contents, common_prefixes) = split_by_delimiter(&page, &prefix, &delimiter);
 
-    let next_token = if is_truncated {
-        page.last().map(|o| {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(&o.key)
-        })
-    } else {
-        None
-    };
+    let next_token = page_result.next_continuation.map(|key| {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(key)
+    });
 
     let result = ListBucketResult {
         name: bucket,
@@ -189,33 +174,18 @@ async fn list_objects_v1(
     let max_keys = parse_max_keys(&params)?;
     let marker = params.get("marker").cloned();
 
-    let all_objects = state
+    let page_result = state
         .storage
-        .list_objects(&bucket, &prefix)
+        .list_objects_page(&bucket, &prefix, marker.as_deref(), max_keys)
         .await
         .map_err(|e| S3Error::internal(e))?;
 
-    let filtered: Vec<&ObjectMeta> = all_objects
-        .iter()
-        .filter(|o| {
-            if let Some(ref m) = marker {
-                o.key.as_str() > m.as_str()
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    let is_truncated = filtered.len() > max_keys;
-    let page: Vec<&ObjectMeta> = filtered.into_iter().take(max_keys).collect();
+    let is_truncated = page_result.is_truncated;
+    let page: Vec<&ObjectMeta> = page_result.objects.iter().collect();
 
     let (contents, common_prefixes) = split_by_delimiter(&page, &prefix, &delimiter);
 
-    let next_marker = if is_truncated {
-        page.last().map(|o| o.key.clone())
-    } else {
-        None
-    };
+    let next_marker = page_result.next_continuation;
 
     let result = ListBucketResultV1 {
         name: bucket,

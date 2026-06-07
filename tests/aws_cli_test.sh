@@ -92,7 +92,6 @@ echo ""
 # --- Bucket operations ---
 assert "create bucket" $AWS s3 mb "s3://$BUCKET"
 assert_file_exists "bucket dir exists on disk" "$DATA_DIR/buckets/$BUCKET"
-assert_file_exists "bucket meta exists on disk" "$DATA_DIR/buckets/$BUCKET/.bucket.json"
 
 # List buckets
 OUTPUT=$($AWS s3 ls 2>&1)
@@ -106,7 +105,6 @@ echo "hello maxio" > "$TMPDIR/test.txt"
 
 assert "upload object" $AWS s3 cp "$TMPDIR/test.txt" "s3://$BUCKET/test.txt"
 assert_file_exists "object file exists on disk" "$DATA_DIR/buckets/$BUCKET/test.txt"
-assert_file_exists "object meta exists on disk" "$DATA_DIR/buckets/$BUCKET/test.txt.meta.json"
 assert_eq "on-disk content matches" "hello maxio" "$(cat "$DATA_DIR/buckets/$BUCKET/test.txt")"
 
 # List objects
@@ -125,7 +123,6 @@ assert_eq "head object has content-length" "true" "$(echo "$OUTPUT" | grep -q "C
 # --- Nested keys ---
 assert "upload nested object" $AWS s3 cp "$TMPDIR/test.txt" "s3://$BUCKET/folder/nested/file.txt"
 assert_file_exists "nested object exists on disk" "$DATA_DIR/buckets/$BUCKET/folder/nested/file.txt"
-assert_file_exists "nested meta exists on disk" "$DATA_DIR/buckets/$BUCKET/folder/nested/file.txt.meta.json"
 
 OUTPUT=$($AWS s3 ls "s3://$BUCKET/folder/" 2>&1)
 assert_eq "list nested prefix" "true" "$(echo "$OUTPUT" | grep -q "nested" && echo true || echo false)"
@@ -270,7 +267,6 @@ assert "delete range-test file" $AWS s3 rm "s3://$BUCKET/alphabet.txt"
 # --- Folder operations ---
 assert "create folder via put-object" $AWS s3api put-object --bucket "$BUCKET" --key "empty-folder/" --content-length 0
 assert_file_exists "folder marker exists on disk" "$DATA_DIR/buckets/$BUCKET/empty-folder/.folder"
-assert_file_exists "folder marker meta exists on disk" "$DATA_DIR/buckets/$BUCKET/empty-folder/.folder.meta.json"
 
 OUTPUT=$($AWS s3 ls "s3://$BUCKET/" 2>&1)
 assert_eq "list shows folder prefix" "true" "$(echo "$OUTPUT" | grep -q "empty-folder/" && echo true || echo false)"
@@ -389,7 +385,6 @@ assert "delete conditional test object" $AWS s3 rm "s3://$BUCKET/cond.txt"
 # --- Delete operations ---
 assert "delete object" $AWS s3 rm "s3://$BUCKET/test.txt"
 assert_file_not_exists "deleted object gone from disk" "$DATA_DIR/buckets/$BUCKET/test.txt"
-assert_file_not_exists "deleted meta gone from disk" "$DATA_DIR/buckets/$BUCKET/test.txt.meta.json"
 assert_fail "get deleted object" $AWS s3 cp "s3://$BUCKET/test.txt" "$TMPDIR/should-not-exist.txt"
 
 assert "delete copied object" $AWS s3 rm "s3://$BUCKET/test-copy.txt"
@@ -531,15 +526,6 @@ assert_eq "get-object-tagging sees env=prod" "prod" \
 assert_eq "get-object-tagging sees app=maxio" "maxio" \
     "$(echo "$TAG_GET" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((t["Value"] for t in d.get("TagSet",[]) if t["Key"]=="app"), ""))' 2>/dev/null)"
 
-# Storage sidecar carries tags
-if grep -q '"tags"' "$DATA_DIR/buckets/$TAG_BUCKET/tag.txt.meta.json"; then
-    green "PASS: tag.txt.meta.json records tags"
-    PASS=$((PASS + 1))
-else
-    red "FAIL: tag.txt.meta.json missing tags"
-    FAIL=$((FAIL + 1))
-fi
-
 # delete-object-tagging → empty tag set
 assert "delete-object-tagging" $AWS s3api delete-object-tagging \
     --bucket "$TAG_BUCKET" --key tag.txt
@@ -574,7 +560,6 @@ assert_eq "delete-objects removed 3" "3" "$DEL_COUNT"
 assert_file_not_exists "a.txt gone" "$DATA_DIR/buckets/$BATCH_BUCKET/a.txt"
 assert_file_not_exists "b.txt gone" "$DATA_DIR/buckets/$BATCH_BUCKET/b.txt"
 assert_file_not_exists "c.txt gone" "$DATA_DIR/buckets/$BATCH_BUCKET/c.txt"
-assert_file_not_exists "a.txt.meta.json gone" "$DATA_DIR/buckets/$BATCH_BUCKET/a.txt.meta.json"
 
 # Batch delete with one missing key — still returns 200; S3 treats missing as deleted.
 echo "x" > "$TMPDIR/x.txt"
@@ -801,18 +786,12 @@ KEY_BUCKET="keys-$$"
 assert "create keys bucket" $AWS s3api create-bucket --bucket "$KEY_BUCKET"
 echo "edge" > "$TMPDIR/edge.txt"
 
-# NOTE: MaxIO's filesystem backend stores the key as an on-disk path, so
-# key length is ultimately bounded by the OS filesystem limits:
-#   - Per-component: NAME_MAX (255 bytes on ext4/APFS) — minus `.meta.json`
-#     suffix (10 bytes) for the sidecar, so ≤ 245 bytes per single-component key
-#   - Total path:    PATH_MAX (1024 bytes on APFS) including `{data_dir}/buckets/{bucket}/`
-#
-# The S3 spec allows 1024-byte UTF-8 keys; MaxIO enforces that upper bound in
-# `validate_key`, but actually storing a 1024-byte key requires a short
-# data_dir and a short bucket name on systems with PATH_MAX = 1024. We test
-# the MaxIO-enforced contract (1025 rejection) and a comfortably-safe key.
+# NOTE: Object bytes are stored as on-disk paths under `{data_dir}/buckets/{bucket}/`,
+# so key length is ultimately bounded by OS filesystem limits (NAME_MAX per
+# component, PATH_MAX for the full path). The S3 spec allows 1024-byte UTF-8
+# keys; MaxIO enforces that upper bound in `validate_key`.
 
-# 240-byte single-component key (room for `.meta.json` suffix under NAME_MAX)
+# 240-byte single-component key (comfortably under NAME_MAX on common filesystems)
 MAX_KEY_SINGLE=$(python3 -c 'print("a"*240)')
 assert "PUT with 240-byte single-component key" $AWS s3api put-object \
     --bucket "$KEY_BUCKET" --key "$MAX_KEY_SINGLE" --body "$TMPDIR/edge.txt"

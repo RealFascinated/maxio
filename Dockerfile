@@ -1,5 +1,9 @@
 FROM rust:1-bookworm AS builder
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libpq-dev \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 
@@ -18,7 +22,7 @@ RUN cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates libpq5 \
   && rm -rf /var/lib/apt/lists/* \
   && useradd --system --create-home --home-dir /nonexistent --shell /usr/sbin/nologin maxio \
   && mkdir -p /data \

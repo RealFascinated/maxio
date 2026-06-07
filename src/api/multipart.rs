@@ -172,9 +172,19 @@ pub async fn list_parts(
         .get("uploadId")
         .ok_or_else(|| S3Error::invalid_argument("missing uploadId"))?;
 
-    let (upload, parts) = state
+    let uploads = state
         .storage
-        .list_parts(&bucket, upload_id)
+        .list_multipart_uploads(&bucket, None)
+        .await
+        .map_err(map_storage_err)?;
+    let upload = uploads
+        .into_iter()
+        .find(|u| u.upload_id == *upload_id)
+        .ok_or_else(|| S3Error::invalid_argument("upload not found"))?;
+
+    let (parts, _) = state
+        .storage
+        .list_parts(&bucket, upload_id, None, 1000)
         .await
         .map_err(map_storage_err)?;
 
@@ -210,7 +220,7 @@ pub async fn list_multipart_uploads(
 
     let uploads = state
         .storage
-        .list_multipart_uploads(&bucket)
+        .list_multipart_uploads(&bucket, None)
         .await
         .map_err(map_storage_err)?;
 

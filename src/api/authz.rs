@@ -39,7 +39,7 @@ pub async fn load_bucket_auth(
     })
 }
 
-pub fn check_access(
+pub async fn check_access(
     state: &AppState,
     principal: &Principal,
     action: &str,
@@ -63,6 +63,7 @@ pub fn check_access(
         ctx.acl.as_ref(),
         object_acl,
     )
+    .await
 }
 
 pub async fn check_bucket_access(
@@ -77,7 +78,7 @@ pub async fn check_bucket_access(
     } else {
         crate::iam::authz::bucket_arn(bucket)
     };
-    check_access(state, principal, action, &resource, &ctx, None)?;
+    check_access(state, principal, action, &resource, &ctx, None).await?;
     Ok(ctx)
 }
 
@@ -97,6 +98,7 @@ pub async fn check_object_access(
         &crate::iam::authz::object_arn(bucket, key),
         &ctx,
         object_acl.as_ref(),
-    )?;
+    )
+    .await?;
     Ok(ctx)
 }

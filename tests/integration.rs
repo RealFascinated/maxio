@@ -6,11 +6,14 @@
 )]
 
 use maxio::config::Config;
-use maxio::iam::UserStore;
+use maxio::iam::{IamStore, PgIamStore};
 use maxio::server::{self, AppState};
-use maxio::storage::filesystem::FilesystemStorage;
+use maxio::storage::blob::BlobStorage;
+use maxio::storage::{MetadataStore, ObjectStorage, PgMetadataStore, Storage};
 use std::sync::Arc;
 use tempfile::TempDir;
+use testcontainers::runners::AsyncRunner;
+use testcontainers_modules::postgres::Postgres;
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -22,45 +25,116 @@ const ACCESS_KEY: &str = "maxioadmin";
 const SECRET_KEY: &str = "maxioadmin";
 const REGION: &str = "us-east-1";
 
-async fn test_app_state(
-    storage: Arc<FilesystemStorage>,
-    config: Arc<Config>,
-) -> AppState {
-    let user_store = Arc::new(UserStore::load(&config.data_dir).await.unwrap());
-    AppState {
-        storage,
-        config,
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-        user_store,
+struct ServerHandle {
+    url: String,
+    data_dir: String,
+    _keep_alive: TestKeepAlive,
+}
+
+impl ServerHandle {
+    fn data_dir(&self) -> &str {
+        &self.data_dir
     }
 }
 
-/// Spin up a test server on a random port, return the base URL.
-async fn start_server() -> (String, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().to_str().unwrap().to_string();
+struct TestKeepAlive {
+    _dir: TempDir,
+    _postgres: testcontainers::ContainerAsync<Postgres>,
+}
 
-    let storage = FilesystemStorage::new(&data_dir, false, 10 * 1024 * 1024, 0)
+impl std::ops::Deref for ServerHandle {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.url
+    }
+}
+
+impl std::fmt::Display for ServerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.url)
+    }
+}
+
+async fn start_postgres() -> (testcontainers::ContainerAsync<Postgres>, String) {
+    let postgres = Postgres::default().start().await.unwrap();
+    let port = postgres.get_host_port_ipv4(5432).await.unwrap();
+    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    (postgres, database_url)
+}
+
+async fn create_storage(
+    data_dir: &str,
+    database_url: &str,
+    erasure_coding: bool,
+    chunk_size: u64,
+    parity_shards: u32,
+) -> Arc<dyn Storage> {
+    maxio::db::run_migrations(database_url).await.unwrap();
+    let pool = maxio::db::create_pool(database_url).await.unwrap();
+    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
+    let blobs = BlobStorage::new(data_dir, erasure_coding, chunk_size, parity_shards)
         .await
         .unwrap();
+    Arc::new(ObjectStorage::new(blobs, meta))
+}
 
-    let config = Config {
+fn test_config(
+    data_dir: String,
+    database_url: String,
+    erasure_coding: bool,
+    chunk_size: u64,
+    parity_shards: u32,
+    default_buckets: &str,
+) -> Config {
+    Config {
         port: 0,
         address: "127.0.0.1".to_string(),
         data_dir,
+        database_url,
         access_key: ACCESS_KEY.to_string(),
         secret_key: SECRET_KEY.to_string(),
         region: REGION.to_string(),
         allow_insecure_dev: true,
         secure_cookies: false,
-        erasure_coding: false,
-        chunk_size: 10 * 1024 * 1024,
-        parity_shards: 0,
-        default_buckets: String::new(),
+        erasure_coding,
+        chunk_size,
+        parity_shards,
+        default_buckets: default_buckets.to_string(),
         max_console_body_bytes: 1024 * 1024,
-    };
+    }
+}
 
-    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
+async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> AppState {
+    maxio::db::run_migrations(&config.database_url).await.unwrap();
+    let pool = maxio::db::create_pool(&config.database_url).await.unwrap();
+    let pool = Arc::new(pool);
+    let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
+    AppState {
+        storage,
+        config,
+        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
+        user_store,
+        db_pool: pool,
+    }
+}
+
+/// Spin up a test server on a random port.
+async fn start_server() -> ServerHandle {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap().to_string();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
+    let config = test_config(
+        data_dir.clone(),
+        database_url,
+        false,
+        10 * 1024 * 1024,
+        0,
+        "",
+    );
+
+    let state = test_app_state(storage, Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -76,7 +150,14 @@ async fn start_server() -> (String, TempDir) {
         .unwrap();
     });
 
-    (base_url, tmp)
+    ServerHandle {
+        url: base_url,
+        data_dir,
+        _keep_alive: TestKeepAlive {
+            _dir: tmp,
+            _postgres: postgres,
+        },
+    }
 }
 
 /// Sign a request with AWS Signature V4.
@@ -172,33 +253,24 @@ fn sign_request(method: &str, url: &str, headers: &mut Vec<(String, String)>, bo
 
 // ---- Default buckets tests ----
 
-async fn start_server_with_default_buckets(default_buckets: &str) -> (String, TempDir) {
+async fn start_server_with_default_buckets(default_buckets: &str) -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
 
-    let storage = FilesystemStorage::new(&data_dir, false, 10 * 1024 * 1024, 0)
-        .await
-        .unwrap();
+    maxio::storage::provision_default_buckets(storage.as_ref(), default_buckets, REGION).await;
 
-    maxio::storage::provision_default_buckets(&storage, default_buckets, REGION).await;
+    let config = test_config(
+        data_dir.clone(),
+        database_url,
+        false,
+        10 * 1024 * 1024,
+        0,
+        default_buckets,
+    );
 
-    let config = Config {
-        port: 0,
-        address: "127.0.0.1".to_string(),
-        data_dir: data_dir.clone(),
-        access_key: ACCESS_KEY.to_string(),
-        secret_key: SECRET_KEY.to_string(),
-        region: REGION.to_string(),
-        allow_insecure_dev: true,
-        secure_cookies: false,
-        erasure_coding: false,
-        chunk_size: 10 * 1024 * 1024,
-        parity_shards: 0,
-        default_buckets: default_buckets.to_string(),
-        max_console_body_bytes: 1024 * 1024,
-    };
-
-    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
+    let state = test_app_state(storage, Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -214,12 +286,19 @@ async fn start_server_with_default_buckets(default_buckets: &str) -> (String, Te
         .unwrap();
     });
 
-    (base_url, tmp)
+    ServerHandle {
+        url: base_url,
+        data_dir,
+        _keep_alive: TestKeepAlive {
+            _dir: tmp,
+            _postgres: postgres,
+        },
+    }
 }
 
 #[tokio::test]
 async fn test_default_buckets_created_on_boot() {
-    let (base_url, _tmp) = start_server_with_default_buckets("alpha,beta,gamma").await;
+    let base_url = start_server_with_default_buckets("alpha,beta,gamma").await;
 
     // All buckets should exist
     let resp = s3_request("HEAD", &format!("{}/alpha", base_url), vec![]).await;
@@ -242,32 +321,17 @@ async fn test_default_buckets_created_on_boot() {
 async fn test_default_buckets_skip_existing() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
-
-    let storage = FilesystemStorage::new(&data_dir, false, 10 * 1024 * 1024, 0)
-        .await
-        .unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
 
     // First provision: creates the bucket
-    maxio::storage::provision_default_buckets(&storage, "existing", REGION).await;
+    maxio::storage::provision_default_buckets(storage.as_ref(), "existing", REGION).await;
     // Second provision: must be idempotent — no error, no duplicate
-    maxio::storage::provision_default_buckets(&storage, "existing", REGION).await;
+    maxio::storage::provision_default_buckets(storage.as_ref(), "existing", REGION).await;
 
-    let config = Config {
-        port: 0,
-        address: "127.0.0.1".to_string(),
-        data_dir: data_dir.clone(),
-        access_key: ACCESS_KEY.to_string(),
-        secret_key: SECRET_KEY.to_string(),
-        region: REGION.to_string(),
-        allow_insecure_dev: true,
-        secure_cookies: false,
-        erasure_coding: false,
-        chunk_size: 10 * 1024 * 1024,
-        parity_shards: 0,
-        default_buckets: String::new(),
-        max_console_body_bytes: 1024 * 1024,
-    };
-    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
+    let config = test_config(data_dir.clone(), database_url, false, 10 * 1024 * 1024, 0, "");
+    let state = test_app_state(storage, Arc::new(config)).await;
+    let _postgres = postgres;
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -292,7 +356,7 @@ async fn test_default_buckets_skip_existing() {
 
 #[tokio::test]
 async fn test_default_buckets_skips_invalid_names() {
-    let (base_url, _tmp) =
+    let base_url =
         start_server_with_default_buckets("INVALID,valid,b..a,a.-b,a-.b,192.168.0.1").await;
 
     for bucket in ["INVALID", "b..a", "a.-b", "a-.b", "192.168.0.1"] {
@@ -306,7 +370,7 @@ async fn test_default_buckets_skips_invalid_names() {
 
 #[tokio::test]
 async fn test_empty_default_buckets() {
-    let (base_url, _tmp) = start_server_with_default_buckets("").await;
+    let base_url = start_server_with_default_buckets("").await;
 
     // No default buckets should exist
     let resp = s3_request("GET", &format!("{}/", base_url), vec![]).await;
@@ -317,7 +381,7 @@ async fn test_empty_default_buckets() {
 
 #[tokio::test]
 async fn test_default_buckets_single() {
-    let (base_url, _tmp) = start_server_with_default_buckets("only-one").await;
+    let base_url = start_server_with_default_buckets("only-one").await;
 
     let resp = s3_request("HEAD", &format!("{}/only-one", base_url), vec![]).await;
     assert_eq!(resp.status(), 200);
@@ -642,7 +706,7 @@ fn extract_xml_tag(body: &str, tag: &str) -> Option<String> {
 
 #[tokio::test]
 async fn test_healthz_is_public_and_returns_ok() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let resp = client()
         .get(format!("{}/healthz", base_url))
         .send()
@@ -653,7 +717,7 @@ async fn test_healthz_is_public_and_returns_ok() {
 
 #[tokio::test]
 async fn test_readyz_is_public_and_returns_ok() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let resp = client()
         .get(format!("{}/readyz", base_url))
         .send()
@@ -664,7 +728,7 @@ async fn test_readyz_is_public_and_returns_ok() {
 
 #[tokio::test]
 async fn test_security_headers_are_applied() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let resp = client()
         .get(format!("{}/healthz", base_url))
         .send()
@@ -681,7 +745,7 @@ async fn test_security_headers_are_applied() {
 
 #[tokio::test]
 async fn test_ui_deep_link_uses_spa_fallback() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let resp = client()
         .get(format!("{}/ui/buckets/example/settings", base_url))
         .send()
@@ -706,15 +770,15 @@ async fn test_ui_deep_link_uses_spa_fallback() {
 
 #[tokio::test]
 async fn test_auth_rejects_bad_key() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     // Request with no auth header
-    let resp = client().get(&base_url).send().await.unwrap();
+    let resp = client().get(&*base_url).send().await.unwrap();
     assert_eq!(resp.status(), 403);
 
     // Request with garbage auth
     let resp = client()
-        .get(&base_url)
+        .get(&*base_url)
         .header("authorization", "garbage")
         .send()
         .await
@@ -724,14 +788,14 @@ async fn test_auth_rejects_bad_key() {
 
 #[tokio::test]
 async fn test_auth_accepts_valid_signature() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let resp = s3_request("GET", &format!("{}/", base_url), vec![]).await;
     assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
 async fn test_create_bucket() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     // Create bucket
     let resp = s3_request("PUT", &format!("{}/test-bucket", base_url), vec![]).await;
@@ -744,7 +808,7 @@ async fn test_create_bucket() {
 
 #[tokio::test]
 async fn test_create_bucket_rejects_canonical_invalid_names() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     for bucket in ["a.-b", "a-.b", "192.168.0.1"] {
         let resp = s3_request("PUT", &format!("{}/{}", base_url, bucket), vec![]).await;
@@ -759,7 +823,7 @@ async fn test_create_bucket_rejects_canonical_invalid_names() {
 
 #[tokio::test]
 async fn test_create_bucket_duplicate() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let resp = s3_request("PUT", &format!("{}/test-bucket", base_url), vec![]).await;
     assert_eq!(resp.status(), 200);
@@ -771,7 +835,7 @@ async fn test_create_bucket_duplicate() {
 
 #[tokio::test]
 async fn test_head_bucket_not_found() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let resp = s3_request("HEAD", &format!("{}/nonexistent", base_url), vec![]).await;
     assert_eq!(resp.status(), 404);
@@ -779,7 +843,7 @@ async fn test_head_bucket_not_found() {
 
 #[tokio::test]
 async fn test_list_buckets() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     // Create two buckets
     s3_request("PUT", &format!("{}/alpha", base_url), vec![]).await;
@@ -795,7 +859,7 @@ async fn test_list_buckets() {
 
 #[tokio::test]
 async fn test_delete_bucket() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/to-delete", base_url), vec![]).await;
 
@@ -811,7 +875,7 @@ async fn test_delete_bucket() {
 // (put + delete) even when metadata sidecars or empty dirs remain.
 #[tokio::test]
 async fn test_delete_bucket_after_object_lifecycle() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/bucket-one", base_url), vec![]).await;
     let r = s3_request(
@@ -839,7 +903,7 @@ async fn test_delete_bucket_after_object_lifecycle() {
 // sweep empty parents.
 #[tokio::test]
 async fn test_delete_bucket_with_nested_path() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/bucket-two", base_url), vec![]).await;
     let r = s3_request(
@@ -868,7 +932,7 @@ async fn test_delete_bucket_with_nested_path() {
 // Ensure we did not weaken the real emptiness check.
 #[tokio::test]
 async fn test_delete_bucket_rejects_real_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/bucket-three", base_url), vec![]).await;
     s3_request(
@@ -893,9 +957,8 @@ async fn test_delete_bucket_rejects_real_object() {
 async fn test_delete_bucket_sweeps_nested_versions() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
-    let storage = FilesystemStorage::new(&data_dir, false, 10 * 1024 * 1024, 0)
-        .await
-        .unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
 
     storage
         .create_bucket(&maxio::storage::BucketMeta {
@@ -917,26 +980,23 @@ async fn test_delete_bucket_sweeps_nested_versions() {
         .await
         .unwrap();
 
-    // Simulate an orphan `.versions/` dir deep in the tree plus a stray
-    // `.meta.json` sidecar.
+    // Orphan on-disk artifacts must not block metadata-only bucket deletion.
     let bucket_root = tmp.path().join("buckets").join("leftover");
     let stale_versions = bucket_root.join("photos").join(".versions");
     tokio::fs::create_dir_all(&stale_versions).await.unwrap();
-    tokio::fs::write(bucket_root.join("orphan.txt.meta.json"), b"{}")
+    tokio::fs::write(bucket_root.join("orphan.txt"), b"orphan bytes")
         .await
         .unwrap();
 
     let deleted = storage.delete_bucket("leftover").await.unwrap();
-    assert!(
-        deleted,
-        "delete_bucket should succeed on sweepable artifacts"
-    );
-    assert!(!tokio::fs::try_exists(&bucket_root).await.unwrap());
+    assert!(deleted, "delete_bucket should succeed when metadata has no objects");
+    assert!(!storage.head_bucket("leftover").await.unwrap());
+    let _postgres = postgres;
 }
 
 #[tokio::test]
 async fn test_put_and_get_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
@@ -959,7 +1019,7 @@ async fn test_put_and_get_object() {
 
 #[tokio::test]
 async fn test_head_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     s3_request(
@@ -976,7 +1036,7 @@ async fn test_head_object() {
 
 #[tokio::test]
 async fn test_delete_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     s3_request(
@@ -996,7 +1056,7 @@ async fn test_delete_object() {
 
 #[tokio::test]
 async fn test_delete_object_missing_bucket_returns_404() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let resp = s3_request(
         "DELETE",
@@ -1011,7 +1071,7 @@ async fn test_delete_object_missing_bucket_returns_404() {
 
 #[tokio::test]
 async fn test_list_objects() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     s3_request(
@@ -1041,7 +1101,7 @@ async fn test_list_objects() {
 async fn test_auth_compact_header_no_spaces() {
     // mc sends Authorization header with commas but no spaces:
     // Credential=...,SignedHeaders=...,Signature=...
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let resp = s3_request_compact("GET", &format!("{}/", base_url), vec![]).await;
     assert_eq!(resp.status(), 200);
@@ -1054,7 +1114,7 @@ async fn test_auth_compact_header_no_spaces() {
 #[tokio::test]
 async fn test_last_modified_http_date_format() {
     // Last-Modified header must be RFC 7231 format: "Tue, 17 Feb 2026 22:17:45 GMT"
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     s3_request(
@@ -1122,7 +1182,7 @@ async fn test_last_modified_http_date_format() {
 async fn test_put_object_aws_chunked_encoding() {
     // mc sends uploads with x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD
     // and the body is in AWS chunked format
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
@@ -1144,7 +1204,7 @@ async fn test_put_object_aws_chunked_encoding() {
 
 #[tokio::test]
 async fn test_put_object_response_headers() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
@@ -1182,7 +1242,7 @@ async fn test_put_object_response_headers() {
 #[tokio::test]
 async fn test_delete_objects_batch() {
     // mc uses POST /{bucket}?delete to delete objects (DeleteObjects API)
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     s3_request(
@@ -1239,7 +1299,7 @@ async fn test_delete_objects_batch() {
 
 #[tokio::test]
 async fn test_delete_objects_batch_missing_bucket_returns_404() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let delete_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Delete>
@@ -1260,7 +1320,7 @@ async fn test_delete_objects_batch_missing_bucket_returns_404() {
 #[tokio::test]
 async fn test_trailing_slash_bucket_routes() {
     // mc sends PUT /bucket/ (with trailing slash)
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     // Create with trailing slash
     let resp = s3_request("PUT", &format!("{}/mybucket/", base_url), vec![]).await;
@@ -1289,7 +1349,7 @@ async fn test_chunked_upload_interrupted_then_retry() {
     // Simulate: send a truncated/incomplete chunked upload, then retry with a valid one.
     // The server should not leave corrupt data from the partial upload, and the retry
     // should succeed with correct content.
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
@@ -1404,7 +1464,7 @@ async fn test_chunked_upload_interrupted_then_retry() {
 #[tokio::test]
 async fn test_chunked_upload_multi_chunk() {
     // Test chunked upload with multiple chunks (not just one chunk + terminator)
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
@@ -1525,7 +1585,7 @@ async fn test_chunked_upload_multi_chunk() {
 
 #[tokio::test]
 async fn test_multipart_create_upload() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     let resp = s3_request(
@@ -1542,7 +1602,7 @@ async fn test_multipart_create_upload() {
 
 #[tokio::test]
 async fn test_multipart_upload_part() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1568,7 +1628,7 @@ async fn test_multipart_upload_part() {
 
 #[tokio::test]
 async fn test_multipart_complete() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1635,7 +1695,7 @@ async fn test_multipart_complete() {
 
 #[tokio::test]
 async fn test_multipart_get_part_number() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1742,7 +1802,7 @@ async fn test_multipart_get_part_number() {
 
 #[tokio::test]
 async fn test_multipart_complete_part_too_small() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1802,7 +1862,7 @@ async fn test_multipart_complete_part_too_small() {
 
 #[tokio::test]
 async fn test_multipart_abort() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1823,7 +1883,7 @@ async fn test_multipart_abort() {
 
 #[tokio::test]
 async fn test_multipart_list_parts() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1856,7 +1916,7 @@ async fn test_multipart_list_parts() {
 
 #[tokio::test]
 async fn test_multipart_list_uploads() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1875,7 +1935,7 @@ async fn test_multipart_list_uploads() {
 
 #[tokio::test]
 async fn test_multipart_no_such_upload() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     let resp = s3_request(
@@ -1891,7 +1951,7 @@ async fn test_multipart_no_such_upload() {
 
 #[tokio::test]
 async fn test_multipart_excluded_from_list_objects() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1918,7 +1978,7 @@ async fn test_multipart_excluded_from_list_objects() {
 
 #[tokio::test]
 async fn test_multipart_etag_format() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     let create = s3_request(
         "POST",
@@ -1980,7 +2040,7 @@ async fn test_multipart_etag_format() {
 
 #[tokio::test]
 async fn test_copy_object_basic() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     // Upload source object
@@ -2014,7 +2074,7 @@ async fn test_copy_object_basic() {
 
 #[tokio::test]
 async fn test_copy_object_cross_bucket() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/src-bucket", base_url), vec![]).await;
     s3_request("PUT", &format!("{}/dst-bucket", base_url), vec![]).await;
 
@@ -2041,7 +2101,7 @@ async fn test_copy_object_cross_bucket() {
 
 #[tokio::test]
 async fn test_copy_object_metadata_copy() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     // Upload with specific content-type
@@ -2076,7 +2136,7 @@ async fn test_copy_object_metadata_copy() {
 
 #[tokio::test]
 async fn test_copy_object_metadata_replace() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -2113,7 +2173,7 @@ async fn test_copy_object_metadata_replace() {
 
 #[tokio::test]
 async fn test_copy_object_source_not_found() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     let resp = s3_request_with_headers(
@@ -2130,7 +2190,7 @@ async fn test_copy_object_source_not_found() {
 
 #[tokio::test]
 async fn test_copy_object_no_leading_slash() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
     s3_request(
         "PUT",
@@ -2231,7 +2291,7 @@ fn percent_encode_s3(input: &str) -> String {
 
 #[tokio::test]
 async fn test_presigned_get_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let url = format!("{}/presign-bucket", base_url);
     s3_request("PUT", &url, vec![]).await;
@@ -2248,7 +2308,7 @@ async fn test_presigned_get_object() {
 
 #[tokio::test]
 async fn test_presigned_put_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let url = format!("{}/presign-put-bucket", base_url);
     s3_request("PUT", &url, vec![]).await;
@@ -2271,7 +2331,7 @@ async fn test_presigned_put_object() {
 
 #[tokio::test]
 async fn test_presigned_head_object() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let url = format!("{}/presign-head-bucket", base_url);
     s3_request("PUT", &url, vec![]).await;
@@ -2294,7 +2354,7 @@ async fn test_presigned_head_object() {
 
 #[tokio::test]
 async fn test_presigned_expired_url() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let url = format!("{}/presign-expire-bucket", base_url);
     s3_request("PUT", &url, vec![]).await;
@@ -2372,7 +2432,7 @@ async fn test_presigned_expired_url() {
 
 #[tokio::test]
 async fn test_presigned_bad_signature() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     let url = format!("{}/presign-bad-sig-bucket", base_url);
     s3_request("PUT", &url, vec![]).await;
@@ -2419,7 +2479,7 @@ async fn console_login(base_url: &str) -> String {
 
 #[tokio::test]
 async fn test_console_mutation_allows_dev_loopback_origin_via_vite_proxy() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let session = console_login(&base_url).await;
 
     let resp = client()
@@ -2436,7 +2496,7 @@ async fn test_console_mutation_allows_dev_loopback_origin_via_vite_proxy() {
 
 #[tokio::test]
 async fn test_console_mutation_rejects_cross_site_origin() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let session = console_login(&base_url).await;
 
     let resp = client()
@@ -2453,7 +2513,7 @@ async fn test_console_mutation_rejects_cross_site_origin() {
 
 #[tokio::test]
 async fn test_console_delete_object_missing_bucket_returns_404() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     let session = console_login(&base_url).await;
 
     let resp = client()
@@ -2473,7 +2533,7 @@ async fn test_console_delete_object_missing_bucket_returns_404() {
 
 #[tokio::test]
 async fn test_console_presign_simple_key() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     // Create bucket and upload object via S3 API
     s3_request("PUT", &format!("{}/cpresign-bucket", base_url), vec![]).await;
@@ -2517,7 +2577,7 @@ async fn test_console_presign_simple_key() {
 
 #[tokio::test]
 async fn test_console_presign_key_with_spaces() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/cpresign-space", base_url), vec![]).await;
     let body = b"file with spaces";
@@ -2559,7 +2619,7 @@ async fn test_console_presign_key_with_spaces() {
 
 #[tokio::test]
 async fn test_console_presign_nested_key() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     s3_request("PUT", &format!("{}/cpresign-nested", base_url), vec![]).await;
     let body = b"nested key content";
@@ -2601,7 +2661,7 @@ async fn test_console_presign_nested_key() {
 
 #[tokio::test]
 async fn test_get_object_range_first_bytes() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-bucket", base_url), vec![]).await;
 
     let content: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
@@ -2631,7 +2691,7 @@ async fn test_get_object_range_first_bytes() {
 
 #[tokio::test]
 async fn test_get_object_range_middle_bytes() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-mid-bucket", base_url), vec![]).await;
 
     let content: Vec<u8> = (0..100).map(|i| (i % 256) as u8).collect();
@@ -2660,7 +2720,7 @@ async fn test_get_object_range_middle_bytes() {
 
 #[tokio::test]
 async fn test_get_object_range_suffix() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-sfx-bucket", base_url), vec![]).await;
 
     let content: Vec<u8> = (0u16..1000).map(|i| (i % 256) as u8).collect();
@@ -2689,7 +2749,7 @@ async fn test_get_object_range_suffix() {
 
 #[tokio::test]
 async fn test_get_object_range_open_end() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-open-bucket", base_url), vec![]).await;
 
     let content: Vec<u8> = (0u16..1000).map(|i| (i % 256) as u8).collect();
@@ -2718,7 +2778,7 @@ async fn test_get_object_range_open_end() {
 
 #[tokio::test]
 async fn test_get_object_range_clamp_beyond_end() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-clamp-bucket", base_url), vec![]).await;
 
     let content: Vec<u8> = (0..100).map(|i| (i % 256) as u8).collect();
@@ -2747,7 +2807,7 @@ async fn test_get_object_range_clamp_beyond_end() {
 
 #[tokio::test]
 async fn test_get_object_range_invalid_416() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-416-bucket", base_url), vec![]).await;
 
     let content: Vec<u8> = (0..100).map(|i| (i % 256) as u8).collect();
@@ -2772,7 +2832,7 @@ async fn test_get_object_range_invalid_416() {
 
 #[tokio::test]
 async fn test_get_object_no_range_has_accept_ranges() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-ar-bucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -2797,7 +2857,7 @@ async fn test_get_object_no_range_has_accept_ranges() {
 
 #[tokio::test]
 async fn test_get_object_range_preserves_headers() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-hdr-bucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -2824,7 +2884,7 @@ async fn test_get_object_range_preserves_headers() {
 
 #[tokio::test]
 async fn test_head_object_accept_ranges() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/range-head-bucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -2849,7 +2909,7 @@ async fn test_head_object_accept_ranges() {
 
 #[tokio::test]
 async fn test_put_folder_marker() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     // Create folder marker via PutObject with trailing slash
@@ -2874,7 +2934,7 @@ async fn test_put_folder_marker() {
 
 #[tokio::test]
 async fn test_folder_marker_with_children() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     // Create folder marker
@@ -2933,7 +2993,7 @@ async fn test_folder_marker_with_children() {
 
 #[tokio::test]
 async fn test_delete_folder_marker() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
 
     // Create and then delete folder marker
@@ -2953,32 +3013,14 @@ async fn test_delete_folder_marker() {
 // --- Erasure Coding Tests ---
 
 /// Start a server with erasure coding enabled (small chunk size for testing).
-async fn start_server_ec() -> (String, TempDir) {
+async fn start_server_ec() -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url, true, 1024, 0).await;
+    let config = test_config(data_dir.clone(), database_url, true, 1024, 0, "");
 
-    // Use 1KB chunk size for easy multi-chunk testing
-    let storage = FilesystemStorage::new(&data_dir, true, 1024, 0)
-        .await
-        .unwrap();
-
-    let config = Config {
-        port: 0,
-        address: "127.0.0.1".to_string(),
-        data_dir,
-        access_key: ACCESS_KEY.to_string(),
-        secret_key: SECRET_KEY.to_string(),
-        region: REGION.to_string(),
-        allow_insecure_dev: true,
-        secure_cookies: false,
-        erasure_coding: true,
-        chunk_size: 1024,
-        parity_shards: 0,
-        default_buckets: String::new(),
-        max_console_body_bytes: 1024 * 1024,
-    };
-
-    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
+    let state = test_app_state(storage, Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2994,12 +3036,19 @@ async fn start_server_ec() -> (String, TempDir) {
         .unwrap();
     });
 
-    (base_url, tmp)
+    ServerHandle {
+        url: base_url,
+        data_dir,
+        _keep_alive: TestKeepAlive {
+            _dir: tmp,
+            _postgres: postgres,
+        },
+    }
 }
 
 #[tokio::test]
 async fn test_ec_put_and_get_object() {
-    let (base_url, _tmp) = start_server_ec().await;
+    let base_url = start_server_ec().await;
     s3_request("PUT", &format!("{}/testbucket", base_url), vec![]).await;
 
     // Upload 3KB of data (should create 3 chunks with 1KB chunk size)
@@ -3027,7 +3076,7 @@ async fn test_ec_put_and_get_object() {
 
 #[tokio::test]
 async fn test_ec_small_object() {
-    let (base_url, _tmp) = start_server_ec().await;
+    let base_url = start_server_ec().await;
     s3_request("PUT", &format!("{}/testbucket", base_url), vec![]).await;
 
     // Upload less than one chunk
@@ -3048,7 +3097,7 @@ async fn test_ec_small_object() {
 
 #[tokio::test]
 async fn test_ec_range_request() {
-    let (base_url, _tmp) = start_server_ec().await;
+    let base_url = start_server_ec().await;
     s3_request("PUT", &format!("{}/testbucket", base_url), vec![]).await;
 
     // 3KB of sequential bytes so we can verify exact ranges
@@ -3077,7 +3126,8 @@ async fn test_ec_range_request() {
 
 #[tokio::test]
 async fn test_ec_delete_object() {
-    let (base_url, tmp) = start_server_ec().await;
+    let server = start_server_ec().await;
+    let base_url = &*server;
     s3_request("PUT", &format!("{}/testbucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -3089,7 +3139,7 @@ async fn test_ec_delete_object() {
     .await;
 
     // Verify .ec directory exists
-    let ec_dir = tmp.path().join("buckets/testbucket/todelete.txt.ec");
+    let ec_dir = std::path::Path::new(server.data_dir()).join("buckets/testbucket/todelete.txt.ec");
     assert!(ec_dir.exists(), "EC dir should exist after PUT");
 
     s3_request(
@@ -3112,8 +3162,8 @@ async fn test_ec_delete_object() {
 #[tokio::test]
 async fn test_ec_etag_matches_flat_file() {
     // Verify that EC objects produce the same ETag as flat-file objects
-    let (base_url_flat, _tmp1) = start_server().await;
-    let (base_url_ec, _tmp2) = start_server_ec().await;
+    let base_url_flat = start_server().await;
+    let base_url_ec = start_server_ec().await;
 
     for base in [&base_url_flat, &base_url_ec] {
         s3_request("PUT", &format!("{}/testbucket", base), vec![]).await;
@@ -3157,7 +3207,8 @@ async fn test_ec_etag_matches_flat_file() {
 
 #[tokio::test]
 async fn test_ec_bitrot_detection() {
-    let (base_url, tmp) = start_server_ec().await;
+    let server = start_server_ec().await;
+    let base_url = &*server;
     s3_request("PUT", &format!("{}/testbucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -3169,7 +3220,8 @@ async fn test_ec_bitrot_detection() {
     .await;
 
     // Corrupt chunk 0 on disk
-    let chunk_path = tmp.path().join("buckets/testbucket/corrupt.bin.ec/000000");
+    let chunk_path =
+        std::path::Path::new(server.data_dir()).join("buckets/testbucket/corrupt.bin.ec/000000");
     std::fs::write(&chunk_path, vec![0xFF; 1024]).unwrap();
 
     // GET should fail — either a 500 response or a connection error
@@ -3195,7 +3247,7 @@ async fn test_ec_bitrot_detection() {
 
 #[tokio::test]
 async fn test_ec_list_objects() {
-    let (base_url, _tmp) = start_server_ec().await;
+    let base_url = start_server_ec().await;
     s3_request("PUT", &format!("{}/testbucket", base_url), vec![]).await;
 
     s3_request_with_headers(
@@ -3234,7 +3286,7 @@ async fn test_ec_list_objects() {
 
 #[tokio::test]
 async fn test_put_object_with_crc32_checksum() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
 
     // Create bucket
     s3_request("PUT", &format!("{}/checksum-bucket", base_url), vec![]).await;
@@ -3299,7 +3351,7 @@ async fn test_put_object_with_crc32_checksum() {
 
 #[tokio::test]
 async fn test_put_object_with_wrong_checksum() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/checksum-bucket", base_url), vec![]).await;
 
     // Send a wrong CRC32 value
@@ -3321,7 +3373,7 @@ async fn test_put_object_with_wrong_checksum() {
 
 #[tokio::test]
 async fn test_put_object_with_algorithm_only() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/checksum-bucket", base_url), vec![]).await;
 
     let body_bytes = b"compute my checksum please";
@@ -3353,7 +3405,7 @@ async fn test_put_object_with_algorithm_only() {
 
 #[tokio::test]
 async fn test_put_object_no_checksum_backward_compat() {
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/checksum-bucket", base_url), vec![]).await;
 
     let resp = s3_request_with_headers(
@@ -3376,7 +3428,7 @@ async fn test_put_object_no_checksum_backward_compat() {
 async fn test_put_object_with_sha256_checksum() {
     use base64::Engine;
 
-    let (base_url, _tmp) = start_server().await;
+    let base_url = start_server().await;
     s3_request("PUT", &format!("{}/checksum-bucket", base_url), vec![]).await;
 
     let body = b"sha256 test data";
@@ -3404,32 +3456,14 @@ async fn test_put_object_with_sha256_checksum() {
 // --- Parity / Reed-Solomon Tests ---
 
 /// Start a server with erasure coding + parity enabled (small chunks for testing).
-async fn start_server_parity(parity_shards: u32) -> (String, TempDir) {
+async fn start_server_parity(parity_shards: u32) -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url, true, 100, parity_shards).await;
+    let config = test_config(data_dir.clone(), database_url, true, 100, parity_shards, "");
 
-    // 100-byte chunks for easy multi-chunk testing
-    let storage = FilesystemStorage::new(&data_dir, true, 100, parity_shards)
-        .await
-        .unwrap();
-
-    let config = Config {
-        port: 0,
-        address: "127.0.0.1".to_string(),
-        data_dir,
-        access_key: ACCESS_KEY.to_string(),
-        secret_key: SECRET_KEY.to_string(),
-        region: REGION.to_string(),
-        allow_insecure_dev: true,
-        secure_cookies: false,
-        erasure_coding: true,
-        chunk_size: 100,
-        parity_shards,
-        default_buckets: String::new(),
-        max_console_body_bytes: 1024 * 1024,
-    };
-
-    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
+    let state = test_app_state(storage, Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3445,12 +3479,20 @@ async fn start_server_parity(parity_shards: u32) -> (String, TempDir) {
         .unwrap();
     });
 
-    (base_url, tmp)
+    ServerHandle {
+        url: base_url,
+        data_dir,
+        _keep_alive: TestKeepAlive {
+            _dir: tmp,
+            _postgres: postgres,
+        },
+    }
 }
 
 #[tokio::test]
 async fn test_parity_write_creates_parity_chunks() {
-    let (base_url, tmp) = start_server_parity(2).await;
+    let server = start_server_parity(2).await;
+    let base_url = &*server;
 
     // Create bucket
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
@@ -3460,7 +3502,8 @@ async fn test_parity_write_creates_parity_chunks() {
     s3_request("PUT", &format!("{}/parity-test/file.bin", base_url), data).await;
 
     // Check the .ec directory
-    let ec_dir = tmp.path().join("buckets/parity-test/file.bin.ec");
+    let ec_dir =
+        std::path::Path::new(server.data_dir()).join("buckets/parity-test/file.bin.ec");
     assert!(ec_dir.is_dir());
 
     // Should have 6 chunk files + manifest.json = 7 entries
@@ -3489,7 +3532,7 @@ async fn test_parity_write_creates_parity_chunks() {
 
 #[tokio::test]
 async fn test_parity_read_healthy() {
-    let (base_url, _tmp) = start_server_parity(2).await;
+    let base_url = start_server_parity(2).await;
 
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
 
@@ -3509,7 +3552,8 @@ async fn test_parity_read_healthy() {
 
 #[tokio::test]
 async fn test_parity_recovery_corrupted_chunk() {
-    let (base_url, tmp) = start_server_parity(2).await;
+    let server = start_server_parity(2).await;
+    let base_url = &*server;
 
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
 
@@ -3522,7 +3566,8 @@ async fn test_parity_recovery_corrupted_chunk() {
     .await;
 
     // Corrupt data chunk 1 (overwrite with zeros)
-    let chunk_path = tmp.path().join("buckets/parity-test/file.bin.ec/000001");
+    let chunk_path =
+        std::path::Path::new(server.data_dir()).join("buckets/parity-test/file.bin.ec/000001");
     std::fs::write(&chunk_path, vec![0u8; 100]).unwrap();
 
     // Read should still succeed via RS recovery
@@ -3534,7 +3579,8 @@ async fn test_parity_recovery_corrupted_chunk() {
 
 #[tokio::test]
 async fn test_parity_recovery_missing_chunk() {
-    let (base_url, tmp) = start_server_parity(2).await;
+    let server = start_server_parity(2).await;
+    let base_url = &*server;
 
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
 
@@ -3547,7 +3593,8 @@ async fn test_parity_recovery_missing_chunk() {
     .await;
 
     // Delete data chunk 0
-    let chunk_path = tmp.path().join("buckets/parity-test/file.bin.ec/000000");
+    let chunk_path =
+        std::path::Path::new(server.data_dir()).join("buckets/parity-test/file.bin.ec/000000");
     std::fs::remove_file(&chunk_path).unwrap();
 
     let resp = s3_request("GET", &format!("{}/parity-test/file.bin", base_url), vec![]).await;
@@ -3558,7 +3605,8 @@ async fn test_parity_recovery_missing_chunk() {
 
 #[tokio::test]
 async fn test_parity_too_many_failures() {
-    let (base_url, tmp) = start_server_parity(2).await;
+    let server = start_server_parity(2).await;
+    let base_url = &*server;
 
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
 
@@ -3567,8 +3615,7 @@ async fn test_parity_too_many_failures() {
 
     // Delete 3 chunks (more than m=2 parity can handle)
     for i in 0..3 {
-        let chunk_path = tmp
-            .path()
+        let chunk_path = std::path::Path::new(server.data_dir())
             .join(format!("buckets/parity-test/file.bin.ec/{:06}", i));
         std::fs::remove_file(&chunk_path).unwrap();
     }
@@ -3594,7 +3641,8 @@ async fn test_parity_too_many_failures() {
 
 #[tokio::test]
 async fn test_parity_range_read_degraded() {
-    let (base_url, tmp) = start_server_parity(2).await;
+    let server = start_server_parity(2).await;
+    let base_url = &*server;
 
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
 
@@ -3613,7 +3661,8 @@ async fn test_parity_range_read_degraded() {
     .await;
 
     // Corrupt chunk 1
-    let chunk_path = tmp.path().join("buckets/parity-test/file.bin.ec/000001");
+    let chunk_path =
+        std::path::Path::new(server.data_dir()).join("buckets/parity-test/file.bin.ec/000001");
     std::fs::write(&chunk_path, vec![0u8; 100]).unwrap();
 
     // Range read spanning chunk 0 and chunk 1 (bytes 50-149)
@@ -3632,7 +3681,7 @@ async fn test_parity_range_read_degraded() {
 #[tokio::test]
 async fn test_parity_backward_compat_v1_manifest() {
     // EC without parity should still work (v1 manifest, no parity fields)
-    let (base_url, _tmp) = start_server_ec().await;
+    let base_url = start_server_ec().await;
 
     s3_request("PUT", &format!("{}/compat-test", base_url), vec![]).await;
 
@@ -3652,7 +3701,8 @@ async fn test_parity_backward_compat_v1_manifest() {
 
 #[tokio::test]
 async fn test_parity_empty_object() {
-    let (base_url, tmp) = start_server_parity(2).await;
+    let server = start_server_parity(2).await;
+    let base_url = &*server;
 
     s3_request("PUT", &format!("{}/parity-test", base_url), vec![]).await;
 
@@ -3664,7 +3714,8 @@ async fn test_parity_empty_object() {
     )
     .await;
 
-    let ec_dir = tmp.path().join("buckets/parity-test/empty.bin.ec");
+    let ec_dir =
+        std::path::Path::new(server.data_dir()).join("buckets/parity-test/empty.bin.ec");
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(ec_dir.join("manifest.json")).unwrap())
             .unwrap();
@@ -3685,7 +3736,7 @@ async fn test_parity_empty_object() {
 
 #[tokio::test]
 async fn test_put_and_get_object_tagging() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/tag-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -3719,7 +3770,7 @@ async fn test_put_and_get_object_tagging() {
 
 #[tokio::test]
 async fn test_get_object_tagging_no_tags() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/notag-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -3742,7 +3793,7 @@ async fn test_get_object_tagging_no_tags() {
 
 #[tokio::test]
 async fn test_delete_object_tagging() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/deltag-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -3781,7 +3832,7 @@ async fn test_delete_object_tagging() {
 
 #[tokio::test]
 async fn test_get_object_tagging_no_such_key() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/nsk-bucket", base), vec![]).await;
 
     let resp = s3_request(
@@ -3797,7 +3848,7 @@ async fn test_get_object_tagging_no_such_key() {
 
 #[tokio::test]
 async fn test_put_object_tagging_too_many_tags() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/manytagbucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -3823,7 +3874,7 @@ async fn test_put_object_tagging_too_many_tags() {
 
 #[tokio::test]
 async fn test_put_object_tagging_key_too_long() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/longtag-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -3850,7 +3901,7 @@ async fn test_put_object_tagging_key_too_long() {
 
 #[tokio::test]
 async fn test_put_object_tagging_value_too_long() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/longval-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -3878,7 +3929,7 @@ async fn test_put_object_tagging_value_too_long() {
 // UploadPartCopy: copy entire source object as a multipart part
 #[tokio::test]
 async fn test_upload_part_copy_full() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
 
     // Create source bucket and object
     s3_request("PUT", &format!("{}/src-upc", base), vec![]).await;
@@ -3946,7 +3997,7 @@ async fn test_upload_part_copy_full() {
 // UploadPartCopy: copy a byte range from source object as a multipart part
 #[tokio::test]
 async fn test_upload_part_copy_range() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
 
     // Create source with known content
     s3_request("PUT", &format!("{}/src-upcr", base), vec![]).await;
@@ -4061,7 +4112,7 @@ const CORS_XML_EXACT_ORIGIN: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 
 #[tokio::test]
 async fn test_put_get_delete_bucket_cors() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/cors-bucket", base), vec![]).await;
 
     // GetBucketCors on bucket with no CORS → 404 NoSuchCORSConfiguration
@@ -4098,7 +4149,7 @@ async fn test_put_get_delete_bucket_cors() {
 
 #[tokio::test]
 async fn test_put_cors_invalid_method() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/cors-invalid", base), vec![]).await;
 
     let bad_cors = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -4122,7 +4173,7 @@ async fn test_put_cors_invalid_method() {
 
 #[tokio::test]
 async fn test_cors_preflight_allowed() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/preflight-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -4151,7 +4202,7 @@ async fn test_cors_preflight_allowed() {
 
 #[tokio::test]
 async fn test_cors_preflight_no_config_returns_403() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/no-cors-bucket", base), vec![]).await;
 
     let resp = client()
@@ -4170,7 +4221,7 @@ async fn test_cors_preflight_no_config_returns_403() {
 
 #[tokio::test]
 async fn test_cors_preflight_unmatched_origin_returns_403() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/exact-origin-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -4195,7 +4246,7 @@ async fn test_cors_preflight_unmatched_origin_returns_403() {
 
 #[tokio::test]
 async fn test_cors_normal_request_gets_headers() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/cors-normal-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -4233,7 +4284,7 @@ async fn test_cors_normal_request_gets_headers() {
 
 #[tokio::test]
 async fn test_cors_no_origin_no_cors_headers() {
-    let (base, _tmp) = start_server().await;
+    let base = start_server().await;
     s3_request("PUT", &format!("{}/cors-noorigin-bucket", base), vec![]).await;
     s3_request(
         "PUT",
@@ -4257,5 +4308,180 @@ async fn test_cors_no_origin_no_cors_headers() {
 
     assert_eq!(resp.status(), 200);
     assert!(!resp.headers().contains_key("access-control-allow-origin"));
+}
+
+#[tokio::test]
+async fn test_list_objects_page_db_pagination() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "page-bucket".to_string(),
+            created_at: "2026-06-07T00:00:00.000Z".to_string(),
+            region: REGION.to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    for key in ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"] {
+        storage
+            .put_object(
+                "page-bucket",
+                key,
+                "text/plain",
+                Box::pin(std::io::Cursor::new(b"x")),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let page1 = storage
+        .list_objects_page("page-bucket", "", None, 2)
+        .await
+        .unwrap();
+    assert_eq!(page1.objects.len(), 2);
+    assert!(page1.is_truncated);
+    assert_eq!(page1.next_continuation.as_deref(), Some("b.txt"));
+
+    let page2 = storage
+        .list_objects_page("page-bucket", "", page1.next_continuation.as_deref(), 2)
+        .await
+        .unwrap();
+    assert_eq!(page2.objects.len(), 2);
+    assert!(page2.is_truncated);
+    assert_eq!(page2.next_continuation.as_deref(), Some("d.txt"));
+
+    let page3 = storage
+        .list_objects_page(
+            "page-bucket",
+            "",
+            page2.next_continuation.as_deref(),
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(page3.objects.len(), 1);
+    assert!(!page3.is_truncated);
+    let _postgres = postgres;
+}
+
+#[tokio::test]
+async fn test_put_rollback_when_publish_fails() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "rollback-bucket".to_string(),
+            created_at: "2026-06-07T00:00:00.000Z".to_string(),
+            region: REGION.to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    // Block publish by occupying the final object path with a directory.
+    let blocked = tmp
+        .path()
+        .join("buckets")
+        .join("rollback-bucket")
+        .join("blocked.txt");
+    tokio::fs::create_dir_all(&blocked).await.unwrap();
+
+    let put_err = storage
+        .put_object(
+            "rollback-bucket",
+            "blocked.txt",
+            "text/plain",
+            Box::pin(std::io::Cursor::new(b"data")),
+            None,
+        )
+        .await;
+    assert!(matches!(put_err, Err(maxio::storage::StorageError::Io(_))));
+
+    assert!(
+        storage
+            .head_object("rollback-bucket", "blocked.txt")
+            .await
+            .is_err()
+    );
+    let _postgres = postgres;
+}
+
+#[tokio::test]
+async fn test_housekeeping_removes_stale_multipart_uploads() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(data_dir, &database_url, false, 10 * 1024 * 1024, 0).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "mp-bucket".to_string(),
+            created_at: "2026-06-07T00:00:00.000Z".to_string(),
+            region: REGION.to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    let upload = storage
+        .create_multipart_upload("mp-bucket", "stale.txt", "text/plain", None)
+        .await
+        .unwrap();
+    let upload_id = upload.upload_id.clone();
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let (removed, _) = storage
+        .housekeeping_sweep(chrono::Duration::milliseconds(10))
+        .await;
+    assert!(removed >= 1);
+
+    assert!(
+        storage
+            .list_multipart_uploads("mp-bucket", None)
+            .await
+            .unwrap()
+            .iter()
+            .all(|u| u.upload_id != upload_id)
+    );
+    let _postgres = postgres;
 }
 

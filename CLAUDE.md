@@ -13,13 +13,19 @@ Always spell the product name **MaxIO** (capital M, capital I, capital O). Never
 ## Build & Run
 
 ```bash
-# Build frontend (optional — cargo build also builds and embeds it)
+# Start Postgres (or use docker compose up postgres -d)
+export MAXIO_DATABASE_URL=postgres://maxio:maxio@localhost:5432/maxio
+
 # Build binary (build.rs runs the UI build and embeds it)
 cargo build --release
-./target/release/maxio --data-dir ./data --port 9000
+./target/release/maxio --data-dir ./data --database-url "$MAXIO_DATABASE_URL" --port 9000
 ```
 
-Environment variables: `MAXIO_PORT`, `MAXIO_ADDRESS`, `MAXIO_DATA_DIR`, `MAXIO_ACCESS_KEY` (aliases: `MINIO_ROOT_USER`, `MINIO_ACCESS_KEY`), `MAXIO_SECRET_KEY` (aliases: `MINIO_ROOT_PASSWORD`, `MINIO_SECRET_KEY`), `MAXIO_REGION` (aliases: `MINIO_REGION_NAME`, `MINIO_REGION`)
+**Prerequisites**: `libpq` dev package for building (`postgresql-libs` on Arch, `libpq-dev` on Debian).
+
+Environment variables: `MAXIO_DATABASE_URL` (required), `MAXIO_PORT`, `MAXIO_ADDRESS`, `MAXIO_DATA_DIR`, `MAXIO_ACCESS_KEY` (aliases: `MINIO_ROOT_USER`, `MINIO_ACCESS_KEY`), `MAXIO_SECRET_KEY` (aliases: `MINIO_ROOT_PASSWORD`, `MINIO_SECRET_KEY`), `MAXIO_REGION` (aliases: `MINIO_REGION_NAME`, `MINIO_REGION`)
+
+**Docker Compose** (Postgres + MaxIO): `docker compose up -d`
 
 ## Production Build
 
@@ -54,7 +60,9 @@ Defaults: port 9000, access/secret `maxioadmin`/`maxioadmin`, region `us-east-1`
 cargo test
 
 # 2. AWS CLI integration tests (start server, run tests, stop server)
-cargo build && RUST_LOG=info ./target/debug/maxio --data-dir /tmp/maxio-test --port 9876 &
+docker compose up postgres -d  # or local Postgres
+export MAXIO_DATABASE_URL=postgres://maxio:maxio@localhost:5432/maxio
+cargo build && RUST_LOG=info ./target/debug/maxio --data-dir /tmp/maxio-test --database-url "$MAXIO_DATABASE_URL" --port 9876 &
 ./tests/aws_cli_test.sh 9876 /tmp/maxio-test
 kill %1 && rm -rf /tmp/maxio-test
 ```
@@ -79,13 +87,16 @@ This runs both processes concurrently (Ctrl+C kills both):
 - `src/error.rs` — S3Error with XML error response rendering
 - `src/auth/` — AWS Signature V4 verification + Axum middleware
 - `src/api/` — S3 API handlers (bucket.rs, object.rs, multipart.rs, list.rs, router.rs, console.rs)
-- `src/storage/` — Filesystem storage (buckets as dirs, objects as files, JSON sidecar metadata)
+- `src/db/` — Postgres schema, migrations, diesel-async repos
+- `src/storage/` — `BlobStorage` (bytes on disk) + `PgMetadataStore` (Postgres metadata) composed by `ObjectStorage`
+- `src/iam/` — `PgIamStore` (IAM users/policies in Postgres)
 - `src/xml/` — S3 XML response types (serde + quick-xml)
 
 ### Key Design Decisions
 
-- **Pure filesystem storage**: No database. Buckets are directories, objects are files at their key path, metadata in `.meta.json` sidecars. Backup-friendly — just copy the data dir
-- **Storage layout**: `{data_dir}/buckets/{bucket-name}/{key-path}` for data, `{key-path}.meta.json` for metadata, `.bucket.json` for bucket metadata
+- **Split storage**: Object **bytes** on filesystem (`data_dir`); all **metadata** (buckets, objects, IAM, multipart sessions) in **PostgreSQL** via diesel-async
+- **Storage layout**: `{data_dir}/buckets/{bucket-name}/{key-path}` for object/part/version bytes and EC manifests only — no `.meta.json` sidecars
+- **Unraid tip**: Run Postgres on the cache pool (fast SSD); point `MAXIO_DATA_DIR` at the array for bulk object storage
 - **Path-style only**: `/{bucket}/{key}` routing. No virtual-hosted-style yet
 - **UNSIGNED-PAYLOAD accepted**: Skips body hashing for PutObject (AWS CLI default)
 - **Embedded UI assets**: Frontend is compiled into the binary via `rust-embed`. In debug builds, assets are read from the SvelteKit static build (`ui/build/`) when embedded; dev uses Vite/SvelteKit HMR. In release builds, assets are baked in — single binary, no external files needed
@@ -94,20 +105,17 @@ This runs both processes concurrently (Ctrl+C kills both):
 ### Data Layout
 
 ```
-{data_dir}/
+{data_dir}/                          # object bytes only
 └── buckets/
     └── my-bucket/
-        ├── .bucket.json                    # bucket metadata
-        ├── .uploads/                       # in-progress multipart uploads
-        │   └── {uploadId}/
-        │       ├── .meta.json              # MultipartUploadMeta (key, content_type, initiated)
-        │       ├── 1                       # part 1 bytes
-        │       └── 1.meta.json             # PartMeta (part_number, etag, size)
-        ├── photos/
-        │   ├── vacation.jpg                # object data
-        │   └── vacation.jpg.meta.json      # object metadata (etag, size, content_type, last_modified)
-        └── readme.txt
-            └── readme.txt.meta.json
+        ├── .uploads/{uploadId}/1    # multipart part bytes
+        ├── photos/vacation.jpg        # object data
+        └── large.bin.ec/              # erasure-coded shards + manifest.json
+
+Postgres (MAXIO_DATABASE_URL)        # all metadata
+├── buckets, objects, object_versions
+├── multipart_uploads, multipart_parts
+└── iam_users, iam_access_keys, policies, ACLs, tags
 ```
 
 ### S3 Operations Implemented

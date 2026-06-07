@@ -82,7 +82,7 @@ pub async fn auth_middleware(
     }
 
     let path = request.uri().path().to_string();
-    let (secret_key, principal) = resolve_credentials(&state, &parsed.access_key)?;
+    let (secret_key, principal) = resolve_credentials(&state, &parsed.access_key).await?;
 
     let valid = signature_v4::verify_signature(
         &method,
@@ -102,7 +102,10 @@ pub async fn auth_middleware(
     Ok(response)
 }
 
-fn resolve_credentials(state: &AppState, access_key: &str) -> Result<(String, Principal), S3Error> {
+async fn resolve_credentials(
+    state: &AppState,
+    access_key: &str,
+) -> Result<(String, Principal), S3Error> {
     if signature_v4::constant_time_eq(
         access_key.as_bytes(),
         state.config.access_key.as_bytes(),
@@ -110,7 +113,7 @@ fn resolve_credentials(state: &AppState, access_key: &str) -> Result<(String, Pr
         return Ok((state.config.secret_key.clone(), Principal::root()));
     }
 
-    if let Some((user, key)) = state.user_store.lookup_by_access_key(access_key) {
+    if let Some((user, key)) = state.user_store.lookup_by_access_key(access_key).await {
         if key.status == KeyStatus::Active {
             return Ok((key.secret_access_key.clone(), Principal::from_user(&user)));
         }
@@ -168,14 +171,14 @@ async fn is_public_bypass_allowed(
             "s3:ListBucket",
             &bucket_arn(bucket),
             policy.as_deref(),
-            acl.as_ref(),
+            Some(&acl),
         ) || bucket_policy_allows_anonymous_list(policy.as_deref(), bucket)
     } else {
         anonymous_allowed(
             "s3:GetObject",
             &object_arn(bucket, rest),
             policy.as_deref(),
-            acl.as_ref(),
+            Some(&acl),
         ) || bucket_policy_allows_anonymous_read(policy.as_deref(), bucket, rest)
     }
 }
@@ -219,7 +222,7 @@ async fn handle_presigned(
     }
 
     let path = request.uri().path().to_string();
-    let (secret_key, principal) = resolve_credentials(state, &parsed.access_key)?;
+    let (secret_key, principal) = resolve_credentials(state, &parsed.access_key).await?;
 
     let valid = signature_v4::verify_presigned_signature(
         method,
