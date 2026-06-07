@@ -1402,6 +1402,10 @@ pub async fn download_version(
         .into_response()
 }
 
+pub async fn get_metrics_api(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.metrics.snapshot())
+}
+
 async fn require_root_middleware(request: Request, next: Next) -> Response {
     let authorized = request
         .extensions()
@@ -1774,6 +1778,7 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .layer(json_body_limit);
 
     let admin_routes: Router<AppState> = Router::new()
+        .route("/metrics", get(get_metrics_api))
         .route("/users", get(list_users_api))
         .route("/users", post(create_user_api))
         .route("/users/{username}", delete(delete_user_api))

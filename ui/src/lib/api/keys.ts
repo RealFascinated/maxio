@@ -33,3 +33,8 @@ export const userKeys = {
   userPolicy: (username: string, policyName: string) =>
     [...userKeys.all, 'policy', username, policyName] as const,
 }
+
+export const metricsKeys = {
+  all: ['metrics'] as const,
+  snapshot: () => [...metricsKeys.all, 'snapshot'] as const,
+}

@@ -1,16 +1,70 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use prometheus::{
     CounterVec, Encoder, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
+use serde::Serialize;
 
 use crate::stats::BucketStatsCache;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsSnapshot {
+    pub uptime_seconds: f64,
+    pub cache: CacheSnapshot,
+    pub storage_ops: Vec<StorageOpSnapshot>,
+    pub process: Option<ProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheSnapshot {
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    pub populate_bytes: u64,
+    pub size_bytes: u64,
+    pub entries: u64,
+    pub dirty_objects: u64,
+    pub max_size_bytes: u64,
+    pub writeback_halted: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageOpSnapshot {
+    pub operation: String,
+    pub count: u64,
+    pub sum_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessSnapshot {
+    pub resident_memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub cpu_usage_percent: f64,
+    pub open_fds: u64,
+    pub max_fds: u64,
+}
+
+struct RawProcessMetrics {
+    resident_memory_bytes: u64,
+    virtual_memory_bytes: u64,
+    cpu_seconds_total: f64,
+    open_fds: u64,
+    max_fds: u64,
+}
 
 pub struct MetricsRegistry {
     registry: Registry,
     http_requests_total: CounterVec,
     http_duration: HistogramVec,
     storage_duration: HistogramVec,
+    storage_op_stats: Mutex<HashMap<String, (u64, f64)>>,
     cache_hits: prometheus::Counter,
     cache_misses: prometheus::Counter,
     cache_evictions: prometheus::Counter,
@@ -26,6 +80,7 @@ pub struct MetricsRegistry {
     cache_enabled: prometheus::Gauge,
     uptime: prometheus::Gauge,
     start_time: Instant,
+    last_process_cpu: Mutex<Option<(f64, Instant)>>,
 }
 
 impl MetricsRegistry {
@@ -153,6 +208,7 @@ impl MetricsRegistry {
             http_requests_total,
             http_duration,
             storage_duration,
+            storage_op_stats: Mutex::new(HashMap::new()),
             cache_hits,
             cache_misses,
             cache_evictions,
@@ -168,6 +224,7 @@ impl MetricsRegistry {
             cache_enabled,
             uptime,
             start_time: Instant::now(),
+            last_process_cpu: Mutex::new(None),
         })
     }
 
@@ -218,13 +275,88 @@ impl MetricsRegistry {
     }
 
     pub fn record_storage_op(&self, operation: &str, elapsed: Duration) {
+        let secs = elapsed.as_secs_f64();
         self.storage_duration
             .with_label_values(&[operation])
-            .observe(elapsed.as_secs_f64());
+            .observe(secs);
+        let mut stats = self.storage_op_stats.lock().unwrap();
+        let entry = stats.entry(operation.to_string()).or_insert((0, 0.0));
+        entry.0 += 1;
+        entry.1 += secs;
     }
 
     pub fn update_uptime(&self) {
         self.uptime.set(self.start_time.elapsed().as_secs_f64());
+    }
+
+    pub fn snapshot(&self) -> MetricsSnapshot {
+        self.update_uptime();
+
+        let cache = CacheSnapshot {
+            hits: self.cache_hits.get() as u64,
+            misses: self.cache_misses.get() as u64,
+            evictions: self.cache_evictions.get() as u64,
+            populate_bytes: self.cache_populate_bytes.get() as u64,
+            size_bytes: self.cache_size_bytes.get() as u64,
+            entries: self.cache_entries.get() as u64,
+            dirty_objects: self.cache_dirty_objects.get() as u64,
+            max_size_bytes: self.cache_max_size_bytes.get() as u64,
+            writeback_halted: self.cache_writeback_halted.get() > 0.0,
+            enabled: self.cache_enabled.get() > 0.0,
+        };
+
+        let storage_ops = {
+            let stats = self.storage_op_stats.lock().unwrap();
+            let mut ops: Vec<_> = stats
+                .iter()
+                .map(|(operation, (count, sum))| StorageOpSnapshot {
+                    operation: operation.clone(),
+                    count: *count,
+                    sum_seconds: *sum,
+                })
+                .collect();
+            ops.sort_by(|a, b| a.operation.cmp(&b.operation));
+            ops
+        };
+
+        let uptime_seconds = self.uptime.get();
+        let process = read_raw_process_metrics().map(|raw| ProcessSnapshot {
+            resident_memory_bytes: raw.resident_memory_bytes,
+            virtual_memory_bytes: raw.virtual_memory_bytes,
+            cpu_usage_percent: self.process_cpu_usage_percent(raw.cpu_seconds_total, uptime_seconds),
+            open_fds: raw.open_fds,
+            max_fds: raw.max_fds,
+        });
+
+        MetricsSnapshot {
+            uptime_seconds,
+            cache,
+            storage_ops,
+            process,
+        }
+    }
+
+    fn process_cpu_usage_percent(&self, cpu_seconds_total: f64, uptime_seconds: f64) -> f64 {
+        let now = Instant::now();
+        let mut last = self.last_process_cpu.lock().unwrap();
+
+        let percent = match *last {
+            Some((prev_cpu, prev_at)) => {
+                let elapsed = prev_at.elapsed().as_secs_f64();
+                if elapsed > 0.0 {
+                    ((cpu_seconds_total - prev_cpu) / elapsed) * 100.0
+                } else if uptime_seconds > 0.0 {
+                    (cpu_seconds_total / uptime_seconds) * 100.0
+                } else {
+                    0.0
+                }
+            }
+            None if uptime_seconds > 0.0 => (cpu_seconds_total / uptime_seconds) * 100.0,
+            None => 0.0,
+        };
+
+        *last = Some((cpu_seconds_total, now));
+        percent.max(0.0)
     }
 
     /// Encode all metrics to Prometheus text format. Bucket stats are read
@@ -265,4 +397,73 @@ impl MetricsRegistry {
         let _ = encoder.encode(&all_families, &mut buf);
         String::from_utf8(buf).unwrap_or_default()
     }
+}
+
+fn read_raw_process_metrics() -> Option<RawProcessMetrics> {
+    #[cfg(target_os = "linux")]
+    {
+        read_linux_process_metrics()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_process_metrics() -> Option<RawProcessMetrics> {
+    const CLOCK_TICKS_PER_SEC: f64 = 100.0;
+
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let resident_kb = parse_proc_status_kb(&status, "VmRSS:")?;
+    let virtual_kb = parse_proc_status_kb(&status, "VmSize:")?;
+
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let (utime, stime) = parse_proc_stat_cpu(&stat)?;
+    let cpu_seconds_total = (utime + stime) as f64 / CLOCK_TICKS_PER_SEC;
+
+    let open_fds = std::fs::read_dir("/proc/self/fd").ok()?.count() as u64;
+    let max_fds = parse_proc_max_open_files().unwrap_or(0);
+
+    Some(RawProcessMetrics {
+        resident_memory_bytes: resident_kb * 1024,
+        virtual_memory_bytes: virtual_kb * 1024,
+        cpu_seconds_total,
+        open_fds,
+        max_fds,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_status_kb(status: &str, key: &str) -> Option<u64> {
+    status.lines().find_map(|line| {
+        let (label, value) = line.split_once(':')?;
+        if label.trim() != key.trim_end_matches(':') {
+            return None;
+        }
+        let kb = value.trim().split_whitespace().next()?.parse().ok()?;
+        Some(kb)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_stat_cpu(stat: &str) -> Option<(u64, u64)> {
+    let close_paren = stat.rfind(')')?;
+    let rest = stat[close_paren + 1..].trim_start();
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    let utime = fields.get(11)?.parse().ok()?;
+    let stime = fields.get(12)?.parse().ok()?;
+    Some((utime, stime))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_max_open_files() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").ok()?;
+    for line in limits.lines() {
+        if line.starts_with("Max open files") {
+            let soft = line.split_whitespace().nth(3)?;
+            return soft.parse().ok();
+        }
+    }
+    None
 }

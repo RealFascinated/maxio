@@ -6,6 +6,7 @@
   import ObjectBrowser from "$lib/ObjectBrowser.svelte";
   import BucketSettings from "$lib/BucketSettings.svelte";
   import UserList from "$lib/UserList.svelte";
+  import Metrics from "$lib/Metrics.svelte";
   import AppSidebar from "$lib/app/sidebar/AppSidebar.svelte";
   import { buildSidebarNavItems } from "$lib/app/sidebar/navigation";
   import {
@@ -38,7 +39,7 @@
   let sessionIsRoot = $state<boolean | null>(null);
   let collapsed = $state(false);
   let selectedBucket = $state<string | null>(null);
-  let currentView = $state<"objects" | "settings" | "users">("objects");
+  let currentView = $state<"objects" | "settings" | "users" | "metrics">("objects");
   let objectBrowserRef = $state<ObjectBrowser | null>(null);
   let currentPrefix = $state("");
   let currentBreadcrumbs = $state<{ label: string; prefix: string }[]>([]);
@@ -63,7 +64,7 @@
   const sidebarNavItems = $derived(
     buildSidebarNavItems(
       { currentView, selectedBucket, isRootUser },
-      { goHome, goUsers },
+      { goHome, goUsers, goMetrics },
     ),
   );
 
@@ -79,7 +80,10 @@
   });
 
   $effect(() => {
-    if (currentView === "users" && !isRootUser) {
+    const authResolved =
+      authenticatedOverride !== null || authQuery.isSuccess || authQuery.isError;
+    if (!authResolved) return;
+    if ((currentView === "users" || currentView === "metrics") && !isRootUser) {
       goHome();
     }
   });
@@ -94,6 +98,11 @@
     } else if (hash === "/users") {
       selectedBucket = null;
       currentView = "users";
+      currentPrefix = "";
+      currentBreadcrumbs = [];
+    } else if (hash === "/metrics") {
+      selectedBucket = null;
+      currentView = "metrics";
       currentPrefix = "";
       currentBreadcrumbs = [];
     } else {
@@ -214,6 +223,14 @@
     window.location.hash = "/users";
   }
 
+  function goMetrics() {
+    selectedBucket = null;
+    currentView = "metrics";
+    currentPrefix = "";
+    currentBreadcrumbs = [];
+    window.location.hash = "/metrics";
+  }
+
   function handlePrefixChange(p: string, crumbs: { label: string; prefix: string }[]) {
     currentPrefix = p;
     currentBreadcrumbs = crumbs;
@@ -311,6 +328,8 @@
       <div class="flex-1 overflow-auto p-6">
         {#if currentView === "users" && isRootUser}
           <UserList />
+        {:else if currentView === "metrics" && isRootUser}
+          <Metrics />
         {:else if selectedBucket && currentView === "settings"}
           <BucketSettings
             bucket={selectedBucket}
