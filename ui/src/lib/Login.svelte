@@ -6,7 +6,7 @@
   import { createMutation } from "@tanstack/svelte-query";
   import Eye from "lucide-svelte/icons/eye";
   import EyeOff from "lucide-svelte/icons/eye-off";
-  import { login } from "$lib/api/auth";
+  import { login, type AuthCheckResponse } from "$lib/api/auth";
   import { ApiError } from "$lib/api/http";
 
   let accessKey = $state('')
@@ -16,11 +16,11 @@
 
   const loginMutation = createMutation(() => ({
     mutationFn: login,
-    onSuccess: () => onLogin(),
+    onSuccess: (data) => onLogin(data),
   }))
 
   interface Props {
-    onLogin: () => void
+    onLogin: (session: AuthCheckResponse) => void
   }
   let { onLogin }: Props = $props()
 

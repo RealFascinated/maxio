@@ -20,8 +20,9 @@
   interface Props {
     onSelect: (bucket: string) => void
     onSettings: (bucket: string) => void
+    canCreateBucket?: boolean
   }
-  let { onSelect, onSettings }: Props = $props()
+  let { onSelect, onSettings, canCreateBucket = true }: Props = $props()
 
   let showCreate = $state(false)
   let newBucketName = $state('')
@@ -95,25 +96,38 @@
   }
 </script>
 
-<div class="flex flex-col gap-4">
-  {#if bucketsQuery.isError}
-    <Callout type="danger">{bucketsQuery.error instanceof ApiError ? bucketsQuery.error.message : 'Failed to load buckets'}</Callout>
-  {/if}
-
-  <div class="flex items-center gap-2">
-    <Button variant="highlighted" class="h-8" onclick={() => (showCreate = true)}>
-      <Plus class="size-4 mr-1" /> Create Bucket
-    </Button>
+<div class="space-y-6">
+  <div class="flex items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <Database class="size-5 text-coollabs dark:text-warning" />
+      <h2 class="text-lg font-semibold">Buckets</h2>
+    </div>
+    {#if canCreateBucket}
+      <Button variant="brand" onclick={() => (showCreate = true)}>
+        <Plus class="size-4" />
+        Create bucket
+      </Button>
+    {/if}
   </div>
 
-  {#if bucketsQuery.isPending}
+  {#if bucketsQuery.isError}
+    <Callout type="danger">{bucketsQuery.error instanceof ApiError ? bucketsQuery.error.message : 'Failed to load buckets'}</Callout>
+  {:else if bucketsQuery.isPending}
     <p class="text-sm text-muted-foreground">Loading...</p>
   {:else if (bucketsQuery.data?.buckets ?? []).length === 0 && !bucketsQuery.isError}
     <Callout type="info">
-      <span class="inline-flex items-center gap-2">
-        <Database class="size-4 opacity-70" />
-        No buckets yet — create your first bucket to get started.
-      </span>
+      <div class="flex flex-col gap-3">
+        <span class="inline-flex items-center gap-2">
+          <Database class="size-4 opacity-70" />
+          No buckets yet — create your first bucket to get started.
+        </span>
+        {#if canCreateBucket}
+          <Button variant="brand" class="w-fit" onclick={() => (showCreate = true)}>
+            <Plus class="size-4" />
+            Create bucket
+          </Button>
+        {/if}
+      </div>
     </Callout>
   {:else}
     <Table.Root>

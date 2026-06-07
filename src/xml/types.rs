@@ -301,3 +301,53 @@ pub struct CorsRuleXml {
     #[serde(rename = "MaxAgeSeconds", skip_serializing_if = "Option::is_none")]
     pub max_age_seconds: Option<u32>,
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename = "AccessControlPolicy")]
+pub struct AccessControlPolicy {
+    #[serde(rename = "Owner")]
+    pub owner: OwnerXml,
+    #[serde(rename = "AccessControlList")]
+    pub access_control_list: AccessControlList,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OwnerXml {
+    #[serde(rename = "ID", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "DisplayName", skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AccessControlList {
+    #[serde(rename = "Grant", default)]
+    pub grants: Vec<GrantXml>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GrantXml {
+    #[serde(rename = "Grantee")]
+    pub grantee: GranteeXml,
+    #[serde(rename = "Permission")]
+    pub permission: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GranteeXml {
+    #[serde(rename = "ID", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "DisplayName", skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(rename = "URI", skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(rename = "@xsi:type", skip_serializing_if = "Option::is_none")]
+    pub xsi_type: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename = "PolicyStatus")]
+pub struct PolicyStatus {
+    #[serde(rename = "IsPublic")]
+    pub is_public: bool,
+}

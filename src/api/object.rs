@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_util::io::ReaderStream;
 
+use crate::iam::principal::Principal;
+use crate::api::authz::{check_bucket_access, check_object_access, get_principal};
 use crate::error::S3Error;
 use crate::server::AppState;
 use crate::storage::{
@@ -231,9 +233,23 @@ pub async fn put_object(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-    body: Body,
+    req: axum::extract::Request,
 ) -> Result<Response<Body>, S3Error> {
+    let principal = get_principal(req.extensions());
+    let headers = req.headers().clone();
+    let body = req.into_body();
+    if params.contains_key("acl") {
+        return super::acl::handle_object_put_acl(
+            state,
+            bucket,
+            key,
+            params,
+            headers,
+            body,
+            principal,
+        )
+        .await;
+    }
     if params.contains_key("uploadId") && headers.contains_key("x-amz-copy-source") {
         return upload_part_copy(State(state), Path((bucket, key)), Query(params), headers).await;
     }
@@ -262,6 +278,8 @@ pub async fn put_object(
         Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
         Err(e) => return Err(S3Error::internal(e)),
     }
+
+    check_object_access(&state, &principal, &bucket, &key, "s3:PutObject").await?;
 
     let content_type = headers
         .get("content-type")
@@ -324,6 +342,27 @@ pub async fn put_object(
             StorageError::IntegrityError(msg) => S3Error::invalid_argument(&msg),
             _ => S3Error::internal(e),
         })?;
+
+    let (owner_id, owner_display_name) = if principal.is_root {
+        (
+            crate::iam::ROOT_CANONICAL_ID.to_string(),
+            crate::iam::ROOT_DISPLAY_NAME.to_string(),
+        )
+    } else {
+        (
+            principal.canonical_id.clone(),
+            principal.display_name.clone(),
+        )
+    };
+    super::acl::apply_put_object_acl(
+        &state,
+        &bucket,
+        &key,
+        &headers,
+        &owner_id,
+        &owner_display_name,
+    )
+    .await?;
 
     let mut builder = Response::builder()
         .status(StatusCode::OK)
@@ -743,7 +782,11 @@ pub async fn get_object(
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
+    if params.contains_key("acl") {
+        return super::acl::handle_object_get_acl(state, bucket, key, params, principal).await;
+    }
     if params.contains_key("tagging") {
         return get_object_tagging(State(state), Path((bucket, key))).await;
     }
@@ -751,6 +794,8 @@ pub async fn get_object(
     if params.contains_key("uploadId") {
         return multipart::list_parts(State(state), Path((bucket, key)), Query(params)).await;
     }
+
+    check_object_access(&state, &principal, &bucket, &key, "s3:GetObject").await?;
 
     let customer_key = extract_customer_key(&headers)?;
 
@@ -928,7 +973,9 @@ pub async fn head_object(
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
+    check_object_access(&state, &principal, &bucket, &key, "s3:GetObject").await?;
     let meta = if let Some(version_id) = params.get("versionId") {
         state
             .storage
@@ -1013,6 +1060,7 @@ pub async fn delete_object(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
     if params.contains_key("tagging") {
         return delete_object_tagging(State(state), Path((bucket, key))).await;
@@ -1028,6 +1076,8 @@ pub async fn delete_object(
         Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
         Err(e) => return Err(S3Error::internal(e)),
     }
+
+    check_object_access(&state, &principal, &bucket, &key, "s3:DeleteObject").await?;
 
     // Permanent version deletion
     if let Some(version_id) = params.get("versionId") {
@@ -1096,13 +1146,16 @@ const DELETE_BODY_MAX: usize = 1024 * 1024;
 pub async fn delete_objects(
     State(state): State<AppState>,
     Path(bucket): Path<String>,
-    body: Body,
+    req: axum::extract::Request,
 ) -> Result<Response<Body>, S3Error> {
+    let principal = get_principal(req.extensions());
+    let body = req.into_body();
     match state.storage.head_bucket(&bucket).await {
         Ok(true) => {}
         Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
         Err(e) => return Err(S3Error::internal(e)),
     }
+    check_bucket_access(&state, &principal, &bucket, "s3:DeleteObject").await?;
 
     let bytes = axum::body::to_bytes(body, DELETE_BODY_MAX)
         .await
@@ -1202,6 +1255,9 @@ mod tests {
             tags: None,
             part_sizes: None,
             encryption: None,
+            owner_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: crate::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: None,
         }
     }
 

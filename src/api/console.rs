@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -82,16 +82,16 @@ fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
     addr.ip().to_string()
 }
 
-fn generate_token(access_key: &str, secret_key: &str, issued_at: i64) -> String {
+fn generate_token(username: &str, secret_key: &str, issued_at: i64) -> String {
     let issued_hex = format!("{:x}", issued_at);
     let mut mac =
         HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(format!("{}:{}", access_key, issued_hex).as_bytes());
+    mac.update(format!("{}:{}", username, issued_hex).as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
     format!("{}.{}", issued_hex, sig)
 }
 
-fn verify_token(token: &str, access_key: &str, secret_key: &str) -> bool {
+fn verify_token(token: &str, username: &str, secret_key: &str) -> bool {
     let Some((issued_hex, signature)) = token.split_once('.') else {
         return false;
     };
@@ -107,10 +107,62 @@ fn verify_token(token: &str, access_key: &str, secret_key: &str) -> bool {
 
     let mut mac =
         HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(format!("{}:{}", access_key, issued_hex).as_bytes());
+    mac.update(format!("{}:{}", username, issued_hex).as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
 
     constant_time_eq(signature.as_bytes(), expected.as_bytes())
+}
+
+fn resolve_session_username(token: &str, state: &AppState) -> Option<String> {
+    if verify_token(token, crate::iam::ROOT_USERNAME, &state.config.secret_key) {
+        return Some(crate::iam::ROOT_USERNAME.to_string());
+    }
+    for user in state.user_store.list_users() {
+        if verify_token(token, &user.username, &state.config.secret_key) {
+            return Some(user.username);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleSession {
+    pub username: String,
+    pub is_root: bool,
+    pub user_id: String,
+}
+
+impl ConsoleSession {
+    fn root() -> Self {
+        Self {
+            username: crate::iam::ROOT_USERNAME.to_string(),
+            is_root: true,
+            user_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
+        }
+    }
+
+    fn from_user(user: &crate::iam::types::IamUser) -> Self {
+        Self {
+            username: user.username.clone(),
+            is_root: false,
+            user_id: user.user_id.clone(),
+        }
+    }
+
+    pub fn principal(&self) -> crate::iam::Principal {
+        if self.is_root {
+            crate::iam::Principal::root()
+        } else {
+            crate::iam::Principal {
+                username: self.username.clone(),
+                user_id: self.user_id.clone(),
+                display_name: self.username.clone(),
+                canonical_id: self.user_id.clone(),
+                is_root: false,
+                is_anonymous: false,
+            }
+        }
+    }
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -148,21 +200,132 @@ fn make_cookie(value: &str, max_age: i64, secure: bool) -> String {
 
 async fn console_auth_middleware(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
-    let authenticated = extract_cookie(request.headers())
-        .map(|token| verify_token(&token, &state.config.access_key, &state.config.secret_key))
-        .unwrap_or(false);
+    let session = extract_cookie(request.headers())
+        .and_then(|token| resolve_session_username(&token, &state))
+        .map(|username| {
+            if username == crate::iam::ROOT_USERNAME {
+                ConsoleSession::root()
+            } else {
+                state
+                    .user_store
+                    .get_user(&username)
+                    .map(|u| ConsoleSession::from_user(&u))
+                    .unwrap_or_else(|| ConsoleSession::root())
+            }
+        });
 
-    if !authenticated {
+    let Some(session) = session else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Not authenticated"})),
         )
             .into_response();
-    }
+    };
+
+    request.extensions_mut().insert(session);
     next.run(request).await
+}
+
+type ConsoleDeny = (StatusCode, Json<serde_json::Value>);
+
+fn console_forbidden() -> ConsoleDeny {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({"error": "Access Denied"})),
+    )
+}
+
+fn console_check(
+    state: &AppState,
+    session: &ConsoleSession,
+    action: &str,
+    resource: &str,
+    bucket_policy: Option<&str>,
+    bucket_acl: Option<&crate::iam::Acl>,
+) -> Result<(), ConsoleDeny> {
+    crate::iam::authz::authorize(
+        state,
+        &session.principal(),
+        action,
+        resource,
+        bucket_policy,
+        bucket_acl,
+        None,
+    )
+    .map_err(|_| console_forbidden())
+}
+
+fn console_can(
+    state: &AppState,
+    session: &ConsoleSession,
+    action: &str,
+    resource: &str,
+) -> bool {
+    console_check(state, session, action, resource, None, None).is_ok()
+}
+
+async fn console_bucket_check(
+    state: &AppState,
+    session: &ConsoleSession,
+    bucket: &str,
+    action: &str,
+) -> Result<(), Response> {
+    match state.storage.get_bucket_auth_info(bucket).await {
+        Ok((policy, acl)) => console_check(
+            state,
+            session,
+            action,
+            &crate::iam::authz::bucket_arn(bucket),
+            policy.as_deref(),
+            acl.as_ref(),
+        )
+        .map_err(|deny| deny.into_response()),
+        Err(_) if session.is_root => Ok(()),
+        Err(_) => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Bucket not found"})),
+        )
+            .into_response()),
+    }
+}
+
+async fn console_object_check(
+    state: &AppState,
+    session: &ConsoleSession,
+    bucket: &str,
+    key: &str,
+    action: &str,
+) -> Result<(), Response> {
+    match state.storage.get_bucket_auth_info(bucket).await {
+        Ok((policy, acl)) => console_check(
+            state,
+            session,
+            action,
+            &crate::iam::authz::object_arn(bucket, key),
+            policy.as_deref(),
+            acl.as_ref(),
+        )
+        .map_err(|deny| deny.into_response()),
+        Err(_) if session.is_root => Ok(()),
+        Err(_) => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Bucket not found"})),
+        )
+            .into_response()),
+    }
+}
+
+fn session_capabilities(state: &AppState, session: &ConsoleSession) -> serde_json::Value {
+    serde_json::json!({
+        "canCreateBucket": session.is_root
+            || console_can(state, session, "s3:CreateBucket", "arn:aws:s3:::*"),
+        "canListAllBuckets": session.is_root
+            || console_can(state, session, "s3:ListAllMyBuckets", "arn:aws:s3:::*"),
+        "canManageUsers": session.is_root,
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -177,7 +340,7 @@ pub async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
-) -> Response {
+) -> impl IntoResponse {
     let ip = extract_client_ip(&headers, &addr);
 
     if let Some(retry_after) = state.login_rate_limiter.check_and_increment(&ip) {
@@ -198,16 +361,23 @@ pub async fn login(
         body.secret_key.as_bytes(),
         state.config.secret_key.as_bytes(),
     );
-    if !key_match || !secret_match {
+    let session_username = if key_match && secret_match {
+        crate::iam::ROOT_USERNAME.to_string()
+    } else if let Some(user) = state
+        .user_store
+        .lookup_by_credentials(&body.access_key, &body.secret_key)
+    {
+        user.username
+    } else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Invalid credentials"})),
         )
             .into_response();
-    }
+    };
 
     let now = chrono::Utc::now().timestamp();
-    let token = generate_token(&state.config.access_key, &state.config.secret_key, now);
+    let token = generate_token(&session_username, &state.config.secret_key, now);
     let cookie = make_cookie(
         &token,
         TOKEN_MAX_AGE_SECS,
@@ -217,21 +387,52 @@ pub async fn login(
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert("Set-Cookie", cookie.parse().unwrap());
 
+    let session = if session_username == crate::iam::ROOT_USERNAME {
+        ConsoleSession::root()
+    } else {
+        state
+            .user_store
+            .get_user(&session_username)
+            .map(|u| ConsoleSession::from_user(&u))
+            .unwrap_or_else(ConsoleSession::root)
+    };
+
     (
         StatusCode::OK,
         resp_headers,
-        Json(serde_json::json!({"ok": true})),
+        Json(serde_json::json!({
+            "ok": true,
+            "username": session_username,
+            "isRoot": session.is_root,
+            "capabilities": session_capabilities(&state, &session),
+        })),
     )
         .into_response()
 }
 
 pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let authenticated = extract_cookie(&headers)
-        .map(|token| verify_token(&token, &state.config.access_key, &state.config.secret_key))
-        .unwrap_or(false);
+        .and_then(|token| resolve_session_username(&token, &state));
 
-    if authenticated {
-        (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+    if let Some(username) = authenticated {
+        let session = if username == crate::iam::ROOT_USERNAME {
+            ConsoleSession::root()
+        } else {
+            state
+                .user_store
+                .get_user(&username)
+                .map(|u| ConsoleSession::from_user(&u))
+                .unwrap_or_else(ConsoleSession::root)
+        };
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "username": username,
+                "isRoot": session.is_root,
+                "capabilities": session_capabilities(&state, &session),
+            })),
+        )
     } else {
         (
             StatusCode::UNAUTHORIZED,
@@ -334,9 +535,14 @@ fn apply_security_headers(headers: &mut HeaderMap) {
     headers.insert("x-frame-options", "DENY".parse().unwrap());
 }
 
-pub async fn list_buckets(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn list_buckets(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+) -> impl IntoResponse {
     match state.storage.list_buckets().await {
         Ok(buckets) => {
+            let buckets =
+                crate::iam::authz::filter_buckets_by_access(&state, &session.principal(), buckets);
             let list: Vec<serde_json::Value> = buckets
                 .into_iter()
                 .map(|b| {
@@ -365,8 +571,20 @@ pub struct CreateBucketRequest {
 
 pub async fn create_bucket(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Json(body): Json<CreateBucketRequest>,
 ) -> impl IntoResponse {
+    if let Err(deny) = console_check(
+        &state,
+        &session,
+        "s3:CreateBucket",
+        &crate::iam::authz::bucket_arn(&body.name),
+        None,
+        None,
+    ) {
+        return deny.into_response();
+    }
+
     if crate::storage::validate_bucket_name(&body.name).is_err() {
         return (
             StatusCode::BAD_REQUEST,
@@ -377,6 +595,14 @@ pub async fn create_bucket(
     let now = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
+    let (owner_id, owner_display_name) = if session.is_root {
+        (
+            crate::iam::ROOT_CANONICAL_ID.to_string(),
+            crate::iam::ROOT_DISPLAY_NAME.to_string(),
+        )
+    } else {
+        (session.user_id.clone(), session.username.clone())
+    };
     let meta = crate::storage::BucketMeta {
         name: body.name.clone(),
         created_at: now,
@@ -384,6 +610,13 @@ pub async fn create_bucket(
         versioning: false,
         cors_rules: None,
         encryption_config: None,
+        owner_id: owner_id.clone(),
+        owner_display_name: owner_display_name.clone(),
+        acl: Some(crate::iam::Acl::private(
+            &owner_id,
+            &owner_display_name,
+        )),
+        policy: None,
         public_read: false,
         public_list: false,
     };
@@ -405,8 +638,15 @@ pub async fn create_bucket(
 
 pub async fn delete_bucket_api(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:DeleteBucket").await
+    {
+        return resp;
+    }
+
     match state.storage.delete_bucket(&bucket).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Ok(false) => (
@@ -435,9 +675,14 @@ pub struct ListObjectsParams {
 
 pub async fn list_objects(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Query(params): Query<ListObjectsParams>,
 ) -> impl IntoResponse {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
+        return resp;
+    }
+
     match state.storage.head_bucket(&bucket).await {
         Ok(true) => {}
         Ok(false) => {
@@ -514,10 +759,17 @@ pub async fn list_objects(
 
 pub async fn upload_object(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path((bucket, key)): Path<(String, String)>,
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await
+    {
+        return resp;
+    }
+
     match state.storage.head_bucket(&bucket).await {
         Ok(true) => {}
         Ok(false) => {
@@ -591,8 +843,15 @@ pub async fn upload_object(
 
 pub async fn delete_object_api(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path((bucket, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:DeleteObject").await
+    {
+        return resp;
+    }
+
     match state.storage.head_bucket(&bucket).await {
         Ok(true) => {}
         Ok(false) => {
@@ -679,8 +938,15 @@ async fn preserve_empty_parent_folder_after_object_delete(
 
 pub async fn download_object(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path((bucket, key)): Path<(String, String)>,
-) -> Response {
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await
+    {
+        return resp;
+    }
+
     let (reader, meta) = match state.storage.get_object(&bucket, &key, None).await {
         Ok(r) => r,
         Err(_) => {
@@ -725,10 +991,17 @@ pub struct PresignParams {
 
 pub async fn presign_object(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<PresignParams>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await
+    {
+        return resp;
+    }
+
     // Verify object exists
     match state.storage.head_object(&bucket, &key).await {
         Ok(_) => {}
@@ -844,6 +1117,7 @@ pub struct CreateFolderRequest {
 
 pub async fn create_folder(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Json(body): Json<CreateFolderRequest>,
 ) -> impl IntoResponse {
@@ -857,6 +1131,12 @@ pub async fn create_folder(
     }
 
     let key = format!("{}/", name);
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await
+    {
+        return resp;
+    }
+
     let encryption = match state.storage.get_bucket_encryption(&bucket).await {
         Ok(Some(cfg)) => Some(crate::api::object::encryption_from_bucket_default(&cfg)),
         Ok(None) => None,
@@ -893,8 +1173,15 @@ pub async fn create_folder(
 
 pub async fn get_versioning(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:GetBucketVersioning").await
+    {
+        return resp;
+    }
+
     match state.storage.is_versioned(&bucket).await {
         Ok(enabled) => (
             StatusCode::OK,
@@ -916,9 +1203,16 @@ pub struct SetVersioningRequest {
 
 pub async fn set_versioning(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Json(body): Json<SetVersioningRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:PutBucketVersioning").await
+    {
+        return resp;
+    }
+
     match state.storage.set_versioning(&bucket, body.enabled).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => (
@@ -931,8 +1225,15 @@ pub async fn set_versioning(
 
 pub async fn get_encryption(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:GetEncryptionConfiguration").await
+    {
+        return resp;
+    }
+
     match state.storage.get_bucket_encryption(&bucket).await {
         Ok(Some(cfg)) => (
             StatusCode::OK,
@@ -965,9 +1266,21 @@ pub struct SetEncryptionRequest {
 
 pub async fn set_encryption(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Json(body): Json<SetEncryptionRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = console_bucket_check(
+        &state,
+        &session,
+        &bucket,
+        "s3:PutEncryptionConfiguration",
+    )
+    .await
+    {
+        return resp;
+    }
+
     let result = if body.enabled {
         let cfg = crate::storage::BucketEncryptionConfig {
             sse_algorithm: "AES256".to_string(),
@@ -988,14 +1301,25 @@ pub async fn set_encryption(
 
 pub async fn get_public(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
-    match state.storage.get_bucket_public(&bucket).await {
-        Ok((read, list)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"read": read, "list": list})),
-        )
-            .into_response(),
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:GetBucketPolicy").await
+    {
+        return resp;
+    }
+
+    match state.storage.get_bucket_policy(&bucket).await {
+        Ok(policy) => {
+            let read = crate::iam::policy::policy_has_public_read(policy.as_deref());
+            let list = crate::iam::policy::policy_has_public_list(policy.as_deref());
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"read": read, "list": list})),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -1012,14 +1336,42 @@ pub struct SetPublicRequest {
 
 pub async fn set_public(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Json(body): Json<SetPublicRequest>,
 ) -> impl IntoResponse {
-    match state
-        .storage
-        .set_bucket_public(&bucket, body.read, body.list)
-        .await
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:PutBucketPolicy").await
     {
+        return resp;
+    }
+
+    let existing = match state.storage.get_bucket_policy(&bucket).await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let policy = match crate::iam::policy::merge_public_access_policy(
+        &bucket,
+        existing.as_deref(),
+        body.read,
+        body.list,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
+    match state.storage.put_bucket_policy(&bucket, &policy).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1036,9 +1388,16 @@ pub struct ListVersionsParams {
 
 pub async fn list_versions(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Query(params): Query<ListVersionsParams>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &params.key, "s3:GetObjectVersion").await
+    {
+        return resp;
+    }
+
     let all = match state
         .storage
         .list_object_versions(&bucket, &params.key)
@@ -1078,8 +1437,15 @@ pub async fn list_versions(
 
 pub async fn delete_version(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path((bucket, version_id, key)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:DeleteObjectVersion").await
+    {
+        return resp;
+    }
+
     match state
         .storage
         .delete_object_version(&bucket, &key, &version_id)
@@ -1096,8 +1462,15 @@ pub async fn delete_version(
 
 pub async fn download_version(
     State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
     Path((bucket, version_id, key)): Path<(String, String, String)>,
-) -> Response {
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &key, "s3:GetObjectVersion").await
+    {
+        return resp;
+    }
+
     let (reader, meta) = match state
         .storage
         .get_object_version(&bucket, &key, &version_id, None)
@@ -1131,6 +1504,365 @@ pub async fn download_version(
         .into_response()
 }
 
+async fn require_root_middleware(
+    request: Request,
+    next: Next,
+) -> Response {
+    let authorized = request
+        .extensions()
+        .get::<ConsoleSession>()
+        .map(|s| s.is_root)
+        .unwrap_or(false);
+    if !authorized {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+pub async fn list_users_api(State(state): State<AppState>) -> impl IntoResponse {
+    let users: Vec<_> = state
+        .user_store
+        .list_users()
+        .into_iter()
+        .map(|u| {
+            serde_json::json!({
+                "username": u.username,
+                "userId": u.user_id,
+                "createdAt": u.created_at,
+                "accessKeys": u.access_keys.iter().map(|k| serde_json::json!({
+                    "accessKeyId": k.access_key_id,
+                    "status": format!("{:?}", k.status),
+                    "createdAt": k.created_at,
+                })).collect::<Vec<_>>(),
+                "attachedPolicies": u.attached_policies,
+                "inlinePolicies": u.inline_policies.iter().map(|p| p.policy_name.clone()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(serde_json::json!({ "users": users }))).into_response()
+}
+
+pub async fn create_user_key_api(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    match state.user_store.create_access_key(&username).await {
+        Ok(key) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "accessKeyId": key.access_key_id,
+                "secretAccessKey": key.secret_access_key,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn delete_user_key_api(
+    State(state): State<AppState>,
+    Path((username, access_key_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state
+        .user_store
+        .delete_access_key(&username, &access_key_id)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct PutUserPolicyRequest {
+    document: String,
+}
+
+pub async fn put_user_policy_api(
+    State(state): State<AppState>,
+    Path((username, policy_name)): Path<(String, String)>,
+    Json(body): Json<PutUserPolicyRequest>,
+) -> impl IntoResponse {
+    let doc: crate::iam::types::PolicyDocumentRaw = match serde_json::from_str(&body.document) {
+        Ok(d) => d,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid policy document JSON"})),
+            )
+                .into_response();
+        }
+    };
+    match state
+        .user_store
+        .put_user_policy(&username, &policy_name, doc)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn get_user_policy_api(
+    State(state): State<AppState>,
+    Path((username, policy_name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let user = match state.user_store.get_user(&username) {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "User not found"})),
+            )
+                .into_response();
+        }
+    };
+    let policy = user
+        .inline_policies
+        .iter()
+        .find(|p| p.policy_name == policy_name);
+    match policy {
+        Some(p) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "policyName": p.policy_name,
+                "document": serde_json::to_string(&p.document).unwrap_or_default(),
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Policy not found"})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn delete_user_policy_api(
+    State(state): State<AppState>,
+    Path((username, policy_name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state
+        .user_store
+        .delete_user_policy(&username, &policy_name)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachPolicyRequest {
+    policy_arn: String,
+}
+
+pub async fn attach_user_policy_api(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Json(body): Json<AttachPolicyRequest>,
+) -> impl IntoResponse {
+    match state
+        .user_store
+        .attach_user_policy(&username, &body.policy_arn)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn detach_user_policy_api(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Json(body): Json<AttachPolicyRequest>,
+) -> impl IntoResponse {
+    match state
+        .user_store
+        .detach_user_policy(&username, &body.policy_arn)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn list_policies_api(State(state): State<AppState>) -> impl IntoResponse {
+    let policies: Vec<_> = state
+        .user_store
+        .list_managed_policies()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.policy_name,
+                "policyId": p.policy_id,
+                "arn": p.arn,
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(serde_json::json!({ "policies": policies }))).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct CreatePolicyApiRequest {
+    name: String,
+    document: String,
+}
+
+pub async fn create_policy_api(
+    State(state): State<AppState>,
+    Json(body): Json<CreatePolicyApiRequest>,
+) -> impl IntoResponse {
+    let doc: crate::iam::types::PolicyDocumentRaw = match serde_json::from_str(&body.document) {
+        Ok(d) => d,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid policy document JSON"})),
+            )
+                .into_response();
+        }
+    };
+    match state
+        .user_store
+        .create_managed_policy(&body.name, doc)
+        .await
+    {
+        Ok(policy) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "name": policy.policy_name,
+                "arn": policy.arn,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn get_policy_api(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.user_store.get_managed_policy(&name) {
+        Some(p) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "name": p.policy_name,
+                "arn": p.arn,
+                "document": serde_json::to_string(&p.document).unwrap_or_default(),
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Policy not found"})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn delete_policy_api(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.user_store.delete_managed_policy(&name).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct CreateUserApiRequest {
+    username: String,
+}
+
+pub async fn create_user_api(
+    State(state): State<AppState>,
+    Json(body): Json<CreateUserApiRequest>,
+) -> impl IntoResponse {
+    match state.user_store.create_user(&body.username).await {
+        Ok(user) => {
+            let key = state
+                .user_store
+                .create_access_key(&user.username)
+                .await
+                .ok();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "username": user.username,
+                    "userId": user.user_id,
+                    "accessKey": key.map(|k| serde_json::json!({
+                        "accessKeyId": k.access_key_id,
+                        "secretAccessKey": k.secret_access_key,
+                    })),
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn delete_user_api(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    match state.user_store.delete_user(&username).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
 pub fn console_router(state: AppState) -> Router<AppState> {
     let json_body_limit = DefaultBodyLimit::max(state.config.max_console_body_bytes);
 
@@ -1138,6 +1870,30 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/check", get(check))
         .layer(json_body_limit);
+
+    let admin_routes: Router<AppState> = Router::new()
+        .route("/users", get(list_users_api))
+        .route("/users", post(create_user_api))
+        .route("/users/{username}", delete(delete_user_api))
+        .route("/users/{username}/keys", post(create_user_key_api))
+        .route(
+            "/users/{username}/keys/{access_key_id}",
+            delete(delete_user_key_api),
+        )
+        .route(
+            "/users/{username}/policies/{policy_name}",
+            get(get_user_policy_api)
+                .put(put_user_policy_api)
+                .delete(delete_user_policy_api),
+        )
+        .route("/users/{username}/attach-policy", post(attach_user_policy_api))
+        .route("/users/{username}/detach-policy", post(detach_user_policy_api))
+        .route("/policies", get(list_policies_api).post(create_policy_api))
+        .route(
+            "/policies/{name}",
+            get(get_policy_api).delete(delete_policy_api),
+        )
+        .layer(axum::middleware::from_fn(require_root_middleware));
 
     let protected_limited = Router::new()
         .route("/auth/logout", post(logout))
@@ -1167,6 +1923,7 @@ pub fn console_router(state: AppState) -> Router<AppState> {
             "/buckets/{bucket}/versions/{version_id}/download/{*key}",
             get(download_version),
         )
+        .merge(admin_routes)
         .layer(json_body_limit);
 
     let protected_streaming =
@@ -1209,6 +1966,13 @@ mod tests {
                 versioning: false,
                 cors_rules: None,
                 encryption_config: None,
+                owner_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
+                owner_display_name: crate::iam::ROOT_DISPLAY_NAME.to_string(),
+                acl: Some(crate::iam::Acl::private(
+                    crate::iam::ROOT_CANONICAL_ID,
+                    crate::iam::ROOT_DISPLAY_NAME,
+                )),
+                policy: None,
                 public_read: false,
                 public_list: false,
             })

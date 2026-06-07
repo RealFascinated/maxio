@@ -1,6 +1,17 @@
 import { apiFetch } from './http'
 
-export interface AuthCheckResponse { ok: boolean }
+export interface AuthCapabilities {
+  canCreateBucket: boolean
+  canListAllBuckets: boolean
+  canManageUsers: boolean
+}
+
+export interface AuthCheckResponse {
+  ok: boolean
+  username?: string
+  isRoot?: boolean
+  capabilities?: AuthCapabilities
+}
 export interface LoginInput { accessKey: string; secretKey: string }
 
 export async function checkAuth(): Promise<AuthCheckResponse> {

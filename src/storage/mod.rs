@@ -89,10 +89,36 @@ pub struct BucketMeta {
     pub cors_rules: Option<Vec<CorsRule>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_config: Option<BucketEncryptionConfig>,
+    #[serde(default = "default_owner_id", skip_serializing_if = "is_root_owner")]
+    pub owner_id: String,
+    #[serde(default = "default_owner_display_name", skip_serializing_if = "is_root_owner_display")]
+    pub owner_display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acl: Option<crate::iam::Acl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<String>,
+    /// Legacy field — migrated to bucket policy on load.
     #[serde(default, skip_serializing_if = "is_false")]
     pub public_read: bool,
+    /// Legacy field — migrated to bucket policy on load.
     #[serde(default, skip_serializing_if = "is_false")]
     pub public_list: bool,
+}
+
+fn default_owner_id() -> String {
+    crate::iam::ROOT_CANONICAL_ID.to_string()
+}
+
+fn default_owner_display_name() -> String {
+    crate::iam::ROOT_DISPLAY_NAME.to_string()
+}
+
+fn is_root_owner(id: &str) -> bool {
+    id == crate::iam::ROOT_CANONICAL_ID
+}
+
+fn is_root_owner_display(name: &str) -> bool {
+    name == crate::iam::ROOT_DISPLAY_NAME
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +128,12 @@ pub struct ObjectMeta {
     pub etag: String,
     pub content_type: String,
     pub last_modified: String,
+    #[serde(default = "default_owner_id", skip_serializing_if = "is_root_owner")]
+    pub owner_id: String,
+    #[serde(default = "default_owner_display_name", skip_serializing_if = "is_root_owner_display")]
+    pub owner_display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acl: Option<crate::iam::Acl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -320,6 +352,71 @@ pub fn is_valid_bucket_name(name: &str) -> bool {
     true
 }
 
+/// Migrate legacy `public_read` / `public_list` flags into bucket policies.
+pub fn normalize_bucket_meta(meta: &mut BucketMeta) -> bool {
+    let mut changed = false;
+    if meta.owner_id.is_empty() {
+        meta.owner_id = default_owner_id();
+        changed = true;
+    }
+    if meta.owner_display_name.is_empty() {
+        meta.owner_display_name = default_owner_display_name();
+        changed = true;
+    }
+    if meta.acl.is_none() {
+        meta.acl = Some(crate::iam::Acl::private(
+            &meta.owner_id,
+            &meta.owner_display_name,
+        ));
+        changed = true;
+    }
+
+    if meta.public_read || meta.public_list {
+        let mut statements = if let Some(ref policy) = meta.policy {
+            serde_json::from_str::<crate::iam::types::PolicyDocumentRaw>(policy)
+                .map(|d| d.statement)
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        if meta.public_read {
+            statements.extend(crate::iam::policy::public_read_policy(&meta.name).statement);
+            meta.public_read = false;
+            changed = true;
+        }
+        if meta.public_list {
+            statements.extend(crate::iam::policy::public_list_policy(&meta.name).statement);
+            meta.public_list = false;
+            changed = true;
+        }
+
+        let doc = crate::iam::types::PolicyDocumentRaw {
+            version: "2012-10-17".to_string(),
+            statement: statements,
+        };
+        meta.policy = Some(serde_json::to_string(&doc).unwrap_or_default());
+    }
+
+    changed
+}
+
+/// Normalize object metadata defaults for owner/acl fields.
+pub fn normalize_object_meta(meta: &mut ObjectMeta, bucket_owner_id: &str, bucket_owner_name: &str) {
+    if meta.owner_id.is_empty() {
+        meta.owner_id = bucket_owner_id.to_string();
+    }
+    if meta.owner_display_name.is_empty() {
+        meta.owner_display_name = bucket_owner_name.to_string();
+    }
+    if meta.acl.is_none() {
+        meta.acl = Some(crate::iam::Acl::private(
+            &meta.owner_id,
+            &meta.owner_display_name,
+        ));
+    }
+}
+
 /// Create each bucket in `default_buckets` (comma-separated) if it does not
 /// already exist. Invalid S3 names are logged and skipped; errors are non-fatal.
 pub async fn provision_default_buckets(
@@ -348,6 +445,13 @@ pub async fn provision_default_buckets(
             versioning: false,
             cors_rules: None,
             encryption_config: None,
+            owner_id: default_owner_id(),
+            owner_display_name: default_owner_display_name(),
+            acl: Some(crate::iam::Acl::private(
+                &default_owner_id(),
+                &default_owner_display_name(),
+            )),
+            policy: None,
             public_read: false,
             public_list: false,
         };

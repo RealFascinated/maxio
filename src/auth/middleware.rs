@@ -6,30 +6,33 @@ use axum::{
 use chrono::{NaiveDateTime, Utc};
 
 use crate::error::S3Error;
+use crate::iam::authz::{
+    anonymous_allowed, bucket_arn, bucket_policy_allows_anonymous_list,
+    bucket_policy_allows_anonymous_read, object_arn,
+};
+use crate::iam::principal::Principal;
+use crate::iam::types::KeyStatus;
 use crate::server::AppState;
 
 use super::signature_v4;
 
 pub async fn auth_middleware(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, S3Error> {
     let method = request.method().as_str().to_string();
     let uri = request.uri().to_string();
+    let query = request.uri().query().unwrap_or("").to_string();
 
     tracing::debug!("{} {}", method, uri);
 
-    let query = request.uri().query().unwrap_or("").to_string();
-
-    // Detect presigned URL by presence of X-Amz-Signature in query string
     if query.contains("X-Amz-Signature=") {
         return handle_presigned(&state, &method, &query, request, next).await;
     }
 
     let has_auth_header = request.headers().get("authorization").is_some();
 
-    // Anonymous public-bucket access: no auth header, safe method, bucket flagged public.
     if !has_auth_header
         && is_public_bypass_allowed(&state, &method, request.uri().path(), &query).await
     {
@@ -38,6 +41,7 @@ pub async fn auth_middleware(
             method,
             request.uri().path()
         );
+        request.extensions_mut().insert(Principal::anonymous());
         return Ok(next.run(request).await);
     }
 
@@ -51,32 +55,13 @@ pub async fn auth_middleware(
         }
     };
 
-    tracing::debug!("Authorization: <redacted>");
-
     let parsed = signature_v4::parse_authorization_header(auth_header)
         .map_err(|e| S3Error::access_denied(e))?;
 
-    tracing::debug!(
-        "Parsed: date={}, region={}, signed_headers={:?}",
-        parsed.date,
-        parsed.region,
-        parsed.signed_headers
-    );
-
-    if !signature_v4::constant_time_eq(
-        parsed.access_key.as_bytes(),
-        state.config.access_key.as_bytes(),
-    ) {
-        tracing::debug!("Access key mismatch");
-        return Err(S3Error::invalid_access_key());
-    }
-
     if !signature_v4::constant_time_eq(parsed.region.as_bytes(), state.config.region.as_bytes()) {
-        tracing::debug!("Region mismatch");
         return Err(S3Error::access_denied("Invalid region in credential scope"));
     }
 
-    // Validate request timestamp is within ±15 minutes (AWS SigV4 spec)
     let amz_date = request
         .headers()
         .get("x-amz-date")
@@ -86,7 +71,6 @@ pub async fn auth_middleware(
         let now = Utc::now().naive_utc();
         let skew = (now - request_time).num_seconds().unsigned_abs();
         if skew > 15 * 60 {
-            tracing::debug!("Request timestamp skew too large: {}s (max 900s)", skew);
             return Err(S3Error::access_denied(
                 "RequestTimeTooSkewed: The difference between the request time and the current time is too large.",
             ));
@@ -98,12 +82,7 @@ pub async fn auth_middleware(
     }
 
     let path = request.uri().path().to_string();
-
-    tracing::debug!("Verifying signature for {} {} ?{}", method, path, query);
-
-    for h in &parsed.signed_headers {
-        tracing::debug!("  signed header '{}': {}", h, redact_header_value(h));
-    }
+    let (secret_key, principal) = resolve_credentials(&state, &parsed.access_key)?;
 
     let valid = signature_v4::verify_signature(
         &method,
@@ -111,49 +90,46 @@ pub async fn auth_middleware(
         &query,
         request.headers(),
         &parsed,
-        &state.config.secret_key,
+        &secret_key,
     );
 
     if !valid {
-        tracing::debug!("Signature verification FAILED");
         return Err(S3Error::signature_mismatch());
     }
 
-    tracing::debug!("Signature verification OK");
+    request.extensions_mut().insert(principal);
     let response = next.run(request).await;
-    tracing::debug!("{} {} -> {}", method, uri, response.status());
     Ok(response)
 }
 
-fn redact_header_value(name: &str) -> &'static str {
-    match name.to_ascii_lowercase().as_str() {
-        "authorization"
-        | "cookie"
-        | "x-amz-security-token"
-        | "x-amz-signature"
-        | "x-amz-server-side-encryption-customer-key"
-        | "x-amz-server-side-encryption-customer-key-md5"
-        | "x-amz-copy-source-server-side-encryption-customer-key"
-        | "x-amz-copy-source-server-side-encryption-customer-key-md5" => "<redacted>",
-        _ => "<present>",
+fn resolve_credentials(state: &AppState, access_key: &str) -> Result<(String, Principal), S3Error> {
+    if signature_v4::constant_time_eq(
+        access_key.as_bytes(),
+        state.config.access_key.as_bytes(),
+    ) {
+        return Ok((state.config.secret_key.clone(), Principal::root()));
     }
+
+    if let Some((user, key)) = state.user_store.lookup_by_access_key(access_key) {
+        if key.status == KeyStatus::Active {
+            return Ok((key.secret_access_key.clone(), Principal::from_user(&user)));
+        }
+    }
+
+    Err(S3Error::invalid_access_key())
 }
 
-/// Returns true when the request targets a public-bucket resource and is a safe read.
-/// Bypass rules:
-///   - Method must be GET, HEAD, or OPTIONS.
-///   - Path must be `/{bucket}` (list) or `/{bucket}/{key}` (object).
-///   - For bucket-level path: `public_list` must be true.
-///   - For object path: `public_read` must be true.
-///   - Query must not contain mutating sub-resources (`delete`, `uploads`, `tagging`,
-///     `versioning`, `cors`, `encryption`, `policy`, `acl`).
-async fn is_public_bypass_allowed(state: &AppState, method: &str, path: &str, query: &str) -> bool {
+async fn is_public_bypass_allowed(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    query: &str,
+) -> bool {
     match method {
         "GET" | "HEAD" | "OPTIONS" => {}
         _ => return false,
     }
 
-    // Reject mutating sub-resource queries that could trigger a POST-like action on GET.
     for forbidden in [
         "delete",
         "uploads",
@@ -171,7 +147,7 @@ async fn is_public_bypass_allowed(state: &AppState, method: &str, path: &str, qu
 
     let trimmed = path.trim_start_matches('/');
     if trimmed.is_empty() {
-        return false; // root listing always requires auth
+        return false;
     }
 
     let (bucket, rest) = match trimmed.split_once('/') {
@@ -183,17 +159,25 @@ async fn is_public_bypass_allowed(state: &AppState, method: &str, path: &str, qu
         return false;
     }
 
-    let (public_read, public_list) = match state.storage.get_bucket_public(bucket).await {
+    let (policy, acl) = match state.storage.get_bucket_auth_info(bucket).await {
         Ok(v) => v,
         Err(_) => return false,
     };
 
     if rest.is_empty() {
-        // Bucket-level request: list/head bucket, location, etc.
-        public_list
+        anonymous_allowed(
+            "s3:ListBucket",
+            &bucket_arn(bucket),
+            policy.as_deref(),
+            acl.as_ref(),
+        ) || bucket_policy_allows_anonymous_list(policy.as_deref(), bucket)
     } else {
-        // Object-level request.
-        public_read
+        anonymous_allowed(
+            "s3:GetObject",
+            &object_arn(bucket, rest),
+            policy.as_deref(),
+            acl.as_ref(),
+        ) || bucket_policy_allows_anonymous_read(policy.as_deref(), bucket, rest)
     }
 }
 
@@ -211,38 +195,22 @@ async fn handle_presigned(
     state: &AppState,
     method: &str,
     query: &str,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, S3Error> {
-    tracing::debug!("Presigned URL detected");
-
     let (parsed, timestamp, expires_secs) =
         signature_v4::parse_presigned_query(query).map_err(|e| S3Error::access_denied(e))?;
-
-    if !signature_v4::constant_time_eq(
-        parsed.access_key.as_bytes(),
-        state.config.access_key.as_bytes(),
-    ) {
-        return Err(S3Error::invalid_access_key());
-    }
 
     if !signature_v4::constant_time_eq(parsed.region.as_bytes(), state.config.region.as_bytes()) {
         return Err(S3Error::access_denied("Invalid region in credential scope"));
     }
 
-    // Check expiration
     let issued_at = NaiveDateTime::parse_from_str(&timestamp, "%Y%m%dT%H%M%SZ")
         .map_err(|_| S3Error::access_denied("Invalid X-Amz-Date format"))?;
     let expires_at = issued_at + chrono::Duration::seconds(expires_secs as i64);
     let now = Utc::now().naive_utc();
 
     if now > expires_at {
-        tracing::debug!(
-            "Presigned URL expired: issued={}, expires={}, now={}",
-            issued_at,
-            expires_at,
-            now
-        );
         return Err(S3Error::expired_presigned_url());
     }
     if issued_at > now + chrono::Duration::minutes(15) {
@@ -252,13 +220,7 @@ async fn handle_presigned(
     }
 
     let path = request.uri().path().to_string();
-
-    tracing::debug!(
-        "Verifying presigned signature for {} {} ?{}",
-        method,
-        path,
-        query
-    );
+    let (secret_key, principal) = resolve_credentials(state, &parsed.access_key)?;
 
     let valid = signature_v4::verify_presigned_signature(
         method,
@@ -267,15 +229,13 @@ async fn handle_presigned(
         request.headers(),
         &parsed,
         &timestamp,
-        &state.config.secret_key,
+        &secret_key,
     );
 
     if !valid {
-        tracing::debug!("Presigned signature verification FAILED");
         return Err(S3Error::signature_mismatch());
     }
 
-    tracing::debug!("Presigned signature verification OK");
-    let response = next.run(request).await;
-    Ok(response)
+    request.extensions_mut().insert(principal);
+    Ok(next.run(request).await)
 }

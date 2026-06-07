@@ -1,3 +1,4 @@
+use axum::routing::post;
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
@@ -6,10 +7,12 @@ use std::sync::Arc;
 
 use crate::api::console::{LoginRateLimiter, console_router};
 use crate::api::cors::cors_middleware;
+use crate::api::iam::iam_handler;
 use crate::api::router::s3_router;
 use crate::auth::middleware::auth_middleware;
 use crate::config::Config;
 use crate::embedded::ui_handler;
+use crate::iam::UserStore;
 use crate::storage::filesystem::FilesystemStorage;
 
 #[derive(Clone)]
@@ -17,6 +20,7 @@ pub struct AppState {
     pub storage: Arc<FilesystemStorage>,
     pub config: Arc<Config>,
     pub login_rate_limiter: Arc<LoginRateLimiter>,
+    pub user_store: Arc<UserStore>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -30,8 +34,16 @@ pub fn build_router(state: AppState) -> Router {
             cors_middleware,
         ));
 
+    let iam_routes: Router<AppState> = Router::new()
+        .route("/iam", post(iam_handler))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
+
     Router::new()
         .nest("/api", console_router(state.clone()))
+        .merge(iam_routes)
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/ui", get(ui_handler))

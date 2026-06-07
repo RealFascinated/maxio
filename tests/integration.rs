@@ -6,6 +6,7 @@
 )]
 
 use maxio::config::Config;
+use maxio::iam::UserStore;
 use maxio::server::{self, AppState};
 use maxio::storage::filesystem::FilesystemStorage;
 use maxio::storage::keys::Keyring;
@@ -21,6 +22,19 @@ type HmacSha256 = Hmac<Sha256>;
 const ACCESS_KEY: &str = "maxioadmin";
 const SECRET_KEY: &str = "maxioadmin";
 const REGION: &str = "us-east-1";
+
+async fn test_app_state(
+    storage: Arc<FilesystemStorage>,
+    config: Arc<Config>,
+) -> AppState {
+    let user_store = Arc::new(UserStore::load(&config.data_dir).await.unwrap());
+    AppState {
+        storage,
+        config,
+        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
+        user_store,
+    }
+}
 
 /// Spin up a test server on a random port, return the base URL.
 async fn start_server() -> (String, TempDir) {
@@ -49,11 +63,7 @@ async fn start_server() -> (String, TempDir) {
         max_console_body_bytes: 1024 * 1024,
     };
 
-    let state = AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config),
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-    };
+    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -193,11 +203,7 @@ async fn start_server_with_default_buckets(default_buckets: &str) -> (String, Te
         max_console_body_bytes: 1024 * 1024,
     };
 
-    let state = AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config),
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-    };
+    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -268,11 +274,7 @@ async fn test_default_buckets_skip_existing() {
         default_buckets: String::new(),
         max_console_body_bytes: 1024 * 1024,
     };
-    let state = AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config),
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-    };
+    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -911,6 +913,13 @@ async fn test_delete_bucket_sweeps_nested_versions() {
             versioning: false,
             cors_rules: None,
             encryption_config: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
             public_read: false,
             public_list: false,
         })
@@ -2980,11 +2989,7 @@ async fn start_server_ec() -> (String, TempDir) {
         max_console_body_bytes: 1024 * 1024,
     };
 
-    let state = AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config),
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-    };
+    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3437,11 +3442,7 @@ async fn start_server_parity(parity_shards: u32) -> (String, TempDir) {
         max_console_body_bytes: 1024 * 1024,
     };
 
-    let state = AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config),
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-    };
+    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -6111,11 +6112,7 @@ async fn start_server_ec_parity(chunk_size: u64, parity_shards: u32) -> (String,
         max_console_body_bytes: 1024 * 1024,
     };
 
-    let state = AppState {
-        storage: Arc::new(storage),
-        config: Arc::new(config),
-        login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
-    };
+    let state = test_app_state(Arc::new(storage), Arc::new(config)).await;
 
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

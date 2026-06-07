@@ -5,7 +5,7 @@ use super::{
     BucketEncryptionConfig, BucketMeta, ByteStream, ChecksumAlgorithm, ChunkInfo, ChunkKind,
     ChunkManifest, DeleteResult, EncryptionMeta, EncryptionMode, EncryptionRequest,
     MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError, UploadEncryptionSpec,
-    validate_bucket_name,
+    normalize_bucket_meta, normalize_object_meta, validate_bucket_name,
 };
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
@@ -423,16 +423,123 @@ impl FilesystemStorage {
         let mut entries = fs::read_dir(&self.buckets_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             if entry.file_type().await?.is_dir() {
-                let meta_path = entry.path().join(".bucket.json");
-                if let Ok(data) = fs::read_to_string(&meta_path).await {
-                    if let Ok(meta) = serde_json::from_str::<BucketMeta>(&data) {
-                        buckets.push(meta);
-                    }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if let Ok(meta) = self.load_bucket_meta(&name).await {
+                    buckets.push(meta);
                 }
             }
         }
         buckets.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(buckets)
+    }
+
+    async fn bucket_meta_path(&self, bucket: &str) -> PathBuf {
+        self.buckets_dir.join(bucket).join(".bucket.json")
+    }
+
+    pub async fn load_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
+        validate_bucket_name(bucket)?;
+        let meta_path = self.bucket_meta_path(bucket).await;
+        let data = fs::read_to_string(&meta_path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound(bucket.to_string())
+            } else {
+                StorageError::Io(e)
+            }
+        })?;
+        let mut meta: BucketMeta = serde_json::from_str(&data)?;
+        if normalize_bucket_meta(&mut meta) {
+            fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
+        }
+        Ok(meta)
+    }
+
+    async fn save_bucket_meta(&self, meta: &BucketMeta) -> Result<(), StorageError> {
+        validate_bucket_name(&meta.name)?;
+        let meta_path = self.bucket_meta_path(&meta.name).await;
+        fs::write(&meta_path, serde_json::to_string_pretty(meta)?).await?;
+        Ok(())
+    }
+
+    pub async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
+        self.load_bucket_meta(bucket).await
+    }
+
+    pub async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError> {
+        let mut meta = self.load_bucket_meta(bucket).await?;
+        meta.policy = Some(policy.to_string());
+        self.save_bucket_meta(&meta).await
+    }
+
+    pub async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError> {
+        let meta = self.load_bucket_meta(bucket).await?;
+        Ok(meta.policy)
+    }
+
+    pub async fn delete_bucket_policy(&self, bucket: &str) -> Result<(), StorageError> {
+        let mut meta = self.load_bucket_meta(bucket).await?;
+        meta.policy = None;
+        self.save_bucket_meta(&meta).await
+    }
+
+    pub async fn put_bucket_acl(
+        &self,
+        bucket: &str,
+        acl: crate::iam::Acl,
+    ) -> Result<(), StorageError> {
+        let mut meta = self.load_bucket_meta(bucket).await?;
+        meta.acl = Some(acl);
+        self.save_bucket_meta(&meta).await
+    }
+
+    pub async fn get_bucket_acl(&self, bucket: &str) -> Result<crate::iam::Acl, StorageError> {
+        let meta = self.load_bucket_meta(bucket).await?;
+        Ok(meta.acl.unwrap_or_else(|| {
+            crate::iam::Acl::private(&meta.owner_id, &meta.owner_display_name)
+        }))
+    }
+
+    pub async fn put_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+        acl: crate::iam::Acl,
+    ) -> Result<(), StorageError> {
+        let meta_path = self.meta_path(bucket, key);
+        let data = fs::read_to_string(&meta_path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound(key.to_string())
+            } else {
+                StorageError::Io(e)
+            }
+        })?;
+        let mut meta: ObjectMeta = serde_json::from_str(&data)?;
+        meta.acl = Some(acl);
+        fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
+        Ok(())
+    }
+
+    pub async fn get_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<crate::iam::Acl, StorageError> {
+        let meta_path = self.meta_path(bucket, key);
+        let data = fs::read_to_string(&meta_path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound(key.to_string())
+            } else {
+                StorageError::Io(e)
+            }
+        })?;
+        let meta: ObjectMeta = serde_json::from_str(&data)?;
+        if let Some(acl) = meta.acl {
+            return Ok(acl);
+        }
+        Ok(crate::iam::Acl::private(
+            &meta.owner_id,
+            &meta.owner_display_name,
+        ))
     }
 
     // --- Object operations ---
@@ -672,6 +779,9 @@ impl FilesystemStorage {
             etag: etag_quoted.clone(),
             content_type: content_type.to_string(),
             last_modified: now,
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
             storage_format: None,
@@ -686,6 +796,9 @@ impl FilesystemStorage {
             let mac = compute_sidecar_mac(dek, &meta)?;
             meta.encryption.as_mut().unwrap().sidecar_mac = mac;
         }
+
+        let bucket_meta = self.load_bucket_meta(bucket).await?;
+        normalize_object_meta(&mut meta, &bucket_meta.owner_id, &bucket_meta.owner_display_name);
 
         let meta_path = self.meta_path(bucket, key);
         if let Some(parent) = meta_path.parent() {
@@ -829,6 +942,9 @@ impl FilesystemStorage {
             etag: etag_quoted.clone(),
             content_type: content_type.to_string(),
             last_modified: now,
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
             storage_format: Some(storage_format.to_string()),
@@ -1052,6 +1168,9 @@ impl FilesystemStorage {
             etag: etag_quoted.clone(),
             content_type: content_type.to_string(),
             last_modified: now,
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
             storage_format: Some(storage_format.to_string()),
@@ -1435,6 +1554,9 @@ impl FilesystemStorage {
             last_modified: chrono::Utc::now()
                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                 .to_string(),
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
             storage_format: Some(storage_format.to_string()),
@@ -1693,6 +1815,9 @@ impl FilesystemStorage {
             last_modified: chrono::Utc::now()
                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                 .to_string(),
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
             storage_format: Some(storage_format.to_string()),
@@ -1753,6 +1878,9 @@ impl FilesystemStorage {
             etag: etag.clone(),
             content_type: "application/x-directory".to_string(),
             last_modified: now,
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: None,
             is_delete_marker: false,
             storage_format: None,
@@ -2555,6 +2683,9 @@ impl FilesystemStorage {
             last_modified: chrono::Utc::now()
                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                 .to_string(),
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
             storage_format: None,
@@ -2958,40 +3089,13 @@ impl FilesystemStorage {
         Ok(())
     }
 
-    pub async fn get_bucket_public(&self, bucket: &str) -> Result<(bool, bool), StorageError> {
-        validate_bucket_name(bucket)?;
-        let meta_path = self.buckets_dir.join(bucket).join(".bucket.json");
-        let data = fs::read_to_string(&meta_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::NotFound(bucket.to_string())
-            } else {
-                StorageError::Io(e)
-            }
-        })?;
-        let meta: BucketMeta = serde_json::from_str(&data)?;
-        Ok((meta.public_read, meta.public_list))
-    }
-
-    pub async fn set_bucket_public(
+    /// Returns bucket policy JSON and ACL for anonymous access checks.
+    pub async fn get_bucket_auth_info(
         &self,
         bucket: &str,
-        read: bool,
-        list: bool,
-    ) -> Result<(), StorageError> {
-        validate_bucket_name(bucket)?;
-        let meta_path = self.buckets_dir.join(bucket).join(".bucket.json");
-        let data = fs::read_to_string(&meta_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::NotFound(bucket.to_string())
-            } else {
-                StorageError::Io(e)
-            }
-        })?;
-        let mut meta: BucketMeta = serde_json::from_str(&data)?;
-        meta.public_read = read;
-        meta.public_list = list;
-        fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
-        Ok(())
+    ) -> Result<(Option<String>, Option<crate::iam::Acl>), StorageError> {
+        let meta = self.load_bucket_meta(bucket).await?;
+        Ok((meta.policy.clone(), meta.acl.clone()))
     }
 
     pub async fn put_bucket_cors(
@@ -3365,6 +3469,9 @@ impl FilesystemStorage {
             etag: String::new(),
             content_type: String::new(),
             last_modified: now,
+            owner_id: String::new(),
+            owner_display_name: String::new(),
+            acl: None,
             version_id: Some(version_id.clone()),
             is_delete_marker: true,
             storage_format: None,

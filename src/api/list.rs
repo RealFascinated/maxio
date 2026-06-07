@@ -2,12 +2,14 @@ use std::collections::{BTreeSet, HashMap};
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     response::Response,
 };
 use http::StatusCode;
 
 use super::multipart;
+use crate::api::authz::check_bucket_access;
+use crate::iam::principal::Principal;
 use crate::error::S3Error;
 use crate::server::AppState;
 use crate::storage::ObjectMeta;
@@ -17,6 +19,7 @@ pub async fn handle_bucket_get(
     State(state): State<AppState>,
     Path(bucket): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
     tracing::debug!("GET /{} params={:?}", bucket, params);
 
@@ -26,28 +29,43 @@ pub async fn handle_bucket_get(
         Err(e) => return Err(S3Error::internal(e)),
     }
 
+    if params.contains_key("policy") {
+        return super::bucket::get_bucket_policy(state, bucket, principal).await;
+    }
+    if params.contains_key("policy-status") {
+        return super::bucket::get_bucket_policy_status(state, bucket, principal).await;
+    }
+    if params.contains_key("acl") {
+        return super::acl::handle_bucket_get_acl(state, bucket, params, principal).await;
+    }
+
     if params.contains_key("uploads") {
         return multipart::list_multipart_uploads(State(state), Path(bucket)).await;
     }
 
     if params.contains_key("versioning") {
+        check_bucket_access(&state, &principal, &bucket, "s3:GetBucketVersioning").await?;
         return super::bucket::get_bucket_versioning(state, bucket).await;
     }
 
     if params.contains_key("cors") {
+        check_bucket_access(&state, &principal, &bucket, "s3:GetBucketCors").await?;
         return super::bucket::get_bucket_cors(state, bucket).await;
     }
 
     if params.contains_key("encryption") {
+        check_bucket_access(&state, &principal, &bucket, "s3:GetEncryptionConfiguration").await?;
         return super::bucket::get_bucket_encryption(state, bucket).await;
     }
 
     if params.contains_key("versions") {
+        check_bucket_access(&state, &principal, &bucket, "s3:ListBucketVersions").await?;
         return list_object_versions(state, bucket, params).await;
     }
 
     // Handle ?location query (GetBucketLocation)
     if params.contains_key("location") {
+        check_bucket_access(&state, &principal, &bucket, "s3:GetBucketLocation").await?;
         tracing::debug!("GetBucketLocation for {}", bucket);
         let xml = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -62,9 +80,9 @@ pub async fn handle_bucket_get(
     }
 
     if params.get("list-type").map(|v| v.as_str()) == Some("2") {
-        list_objects_v2(state, bucket, params).await
+        list_objects_v2(state, bucket, params, principal).await
     } else {
-        list_objects_v1(state, bucket, params).await
+        list_objects_v1(state, bucket, params, principal).await
     }
 }
 
@@ -89,7 +107,9 @@ async fn list_objects_v2(
     state: AppState,
     bucket: String,
     params: HashMap<String, String>,
+    principal: Principal,
 ) -> Result<Response<Body>, S3Error> {
+    check_bucket_access(&state, &principal, &bucket, "s3:ListBucket").await?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
     let delimiter = params.get("delimiter").cloned();
     let max_keys = parse_max_keys(&params)?;
@@ -165,7 +185,9 @@ async fn list_objects_v1(
     state: AppState,
     bucket: String,
     params: HashMap<String, String>,
+    principal: Principal,
 ) -> Result<Response<Body>, S3Error> {
+    check_bucket_access(&state, &principal, &bucket, "s3:ListBucket").await?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
     let delimiter = params.get("delimiter").cloned();
     let max_keys = parse_max_keys(&params)?;

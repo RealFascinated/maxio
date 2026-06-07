@@ -25,3 +25,11 @@ export const settingsKeys = {
   encryption: (bucket: string) => [...settingsKeys.all, 'encryption', bucket] as const,
   publicAccess: (bucket: string) => [...settingsKeys.all, 'public', bucket] as const,
 }
+
+export const userKeys = {
+  all: ['users'] as const,
+  list: () => [...userKeys.all, 'list'] as const,
+  policies: () => [...userKeys.all, 'policies'] as const,
+  userPolicy: (username: string, policyName: string) =>
+    [...userKeys.all, 'policy', username, policyName] as const,
+}

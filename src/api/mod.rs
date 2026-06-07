@@ -1,3 +1,6 @@
+pub mod acl;
+pub mod authz;
+pub mod iam;
 pub mod bucket;
 pub mod console;
 pub mod cors;

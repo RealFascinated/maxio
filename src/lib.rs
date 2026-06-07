@@ -18,6 +18,7 @@
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod iam;
 pub mod embedded;
 pub mod error;
 pub mod server;

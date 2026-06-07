@@ -20,6 +20,8 @@
 				ghost:
 					"border-transparent text-black hover:bg-neutral-100 dark:text-white dark:hover:bg-coolgray-200",
 				link: "border-transparent text-coollabs dark:text-warning underline-offset-4 hover:underline",
+				brand:
+					"bg-coollabs text-white border-coollabs hover:bg-coollabs-100 dark:bg-coollabs/90 dark:border-coollabs-100 dark:hover:bg-coollabs-100",
 			},
 			size: {
 				default: "h-8 has-[>svg]:px-2",
