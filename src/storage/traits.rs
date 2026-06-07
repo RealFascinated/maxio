@@ -20,7 +20,6 @@ pub trait Storage: Send + Sync {
     async fn head_bucket(&self, name: &str) -> Result<bool, StorageError>;
     async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError>;
     async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError>;
-    async fn load_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError>;
     async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError>;
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<(), StorageError>;
     async fn get_bucket_policy(&self, bucket: &str) -> Result<Option<String>, StorageError>;
@@ -44,6 +43,10 @@ pub trait Storage: Send + Sync {
         &self,
         bucket: &str,
     ) -> Result<(Option<String>, crate::iam::Acl), StorageError>;
+    async fn fetch_bucket_auth_context(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::db::repos::BucketAuthSnapshot, StorageError>;
 
     // Objects
     async fn put_object(

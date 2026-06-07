@@ -26,10 +26,6 @@ impl IamRepo {
         Self { pool }
     }
 
-    pub fn pool(&self) -> &DbPool {
-        &self.pool
-    }
-
     pub async fn lookup_by_access_key(
         &self,
         access_key_id: &str,

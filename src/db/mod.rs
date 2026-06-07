@@ -1,5 +1,10 @@
+pub mod bucket_cache;
+pub mod context;
 pub mod repos;
 pub mod schema;
+
+pub use bucket_cache::{BucketCache, CachedBucketEntry};
+pub use context::DbContext;
 
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;

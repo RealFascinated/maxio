@@ -108,14 +108,6 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UsersData {
-    #[serde(default)]
-    pub users: std::collections::HashMap<String, IamUser>,
-    #[serde(default)]
-    pub managed_policies: std::collections::HashMap<String, ManagedPolicy>,
-}
-
 pub fn managed_policy_arn(name: &str) -> String {
     format!("arn:aws:iam::{}:policy/{}", super::principal::ACCOUNT_ID, name)
 }

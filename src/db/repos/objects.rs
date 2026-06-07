@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::db::schema::{
     object_acl_grants, object_checksums, object_tags, objects,
 };
-use crate::db::DbPool;
+use crate::db::DbContext;
 use crate::iam::Acl;
 use crate::storage::{ObjectMeta, StorageError};
 use chrono::Utc;
@@ -14,15 +14,21 @@ use uuid::Uuid;
 use super::{
     checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts, get_conn, grants_to_acl,
     parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db, resolve_bucket_id,
+    PutBucketContext,
 };
 
 pub async fn upsert_object(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     meta: &ObjectMeta,
+    put_ctx: Option<&PutBucketContext>,
 ) -> Result<Uuid, StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = if let Some(put) = put_ctx {
+        put.bucket_id
+    } else {
+        resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
+    };
     let last_modified = parse_ts(&meta.last_modified)?;
 
     let object_id: Uuid = diesel::insert_into(objects::table)
@@ -62,26 +68,55 @@ pub async fn upsert_object(
         .await
         .map_err(db_err)?;
 
-    replace_object_tags(&mut conn, object_id, meta.tags.as_ref()).await?;
-    replace_object_acl(&mut conn, object_id, meta.acl.as_ref()).await?;
-    replace_object_checksum(
-        &mut conn,
-        object_id,
-        meta.checksum_algorithm,
-        meta.checksum_value.as_deref(),
-    )
-    .await?;
+    if meta.tags.as_ref().is_some_and(|t| !t.is_empty()) {
+        replace_object_tags(&mut conn, object_id, meta.tags.as_ref()).await?;
+    }
+    if meta.acl.is_some() {
+        replace_object_acl(&mut conn, object_id, meta.acl.as_ref()).await?;
+    }
+    if meta.checksum_algorithm.is_some() && meta.checksum_value.is_some() {
+        replace_object_checksum(
+            &mut conn,
+            object_id,
+            meta.checksum_algorithm,
+            meta.checksum_value.as_deref(),
+        )
+        .await?;
+    }
 
     Ok(object_id)
 }
 
-pub async fn get_object_meta(
-    pool: &DbPool,
+/// Load object metadata for GET/HEAD without tags, ACL, or checksum side tables.
+pub async fn get_object_for_read(
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+
+    let row: ObjectRow = objects::table
+        .filter(objects::bucket_id.eq(bucket_id))
+        .filter(objects::key.eq(key))
+        .select(ObjectRow::as_select())
+        .first(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => StorageError::NotFound(key.to_string()),
+            other => db_err(other),
+        })?;
+
+    Ok(row_into_read_meta(row))
+}
+
+pub async fn get_object_meta(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+) -> Result<ObjectMeta, StorageError> {
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let row: ObjectRow = objects::table
         .filter(objects::bucket_id.eq(bucket_id))
@@ -97,9 +132,9 @@ pub async fn get_object_meta(
     row_into_meta(&mut conn, row).await
 }
 
-pub async fn delete_object(pool: &DbPool, bucket_name: &str, key: &str) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+pub async fn delete_object(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<(), StorageError> {
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     diesel::delete(
         objects::table
@@ -112,9 +147,9 @@ pub async fn delete_object(pool: &DbPool, bucket_name: &str, key: &str) -> Resul
     Ok(())
 }
 
-pub async fn object_exists(pool: &DbPool, bucket_name: &str, key: &str) -> Result<bool, StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+pub async fn object_exists(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<bool, StorageError> {
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
     diesel::select(diesel::dsl::exists(
         objects::table
             .filter(objects::bucket_id.eq(bucket_id))
@@ -126,13 +161,13 @@ pub async fn object_exists(pool: &DbPool, bucket_name: &str, key: &str) -> Resul
 }
 
 pub async fn put_object_acl(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
     acl: Acl,
 ) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
     let object_id: Uuid = objects::table
         .filter(objects::bucket_id.eq(bucket_id))
         .filter(objects::key.eq(key))
@@ -146,21 +181,21 @@ pub async fn put_object_acl(
     replace_object_acl(&mut conn, object_id, Some(&acl)).await
 }
 
-pub async fn get_object_acl(pool: &DbPool, bucket_name: &str, key: &str) -> Result<Acl, StorageError> {
-    let meta = get_object_meta(pool, bucket_name, key).await?;
+pub async fn get_object_acl(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<Acl, StorageError> {
+    let meta = get_object_meta(ctx, bucket_name, key).await?;
     Ok(meta.acl.unwrap_or_else(|| {
         Acl::private(&meta.owner_id, &meta.owner_display_name)
     }))
 }
 
 pub async fn put_object_tags(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
     tags: HashMap<String, String>,
 ) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
     let object_id: Uuid = objects::table
         .filter(objects::bucket_id.eq(bucket_id))
         .filter(objects::key.eq(key))
@@ -176,16 +211,36 @@ pub async fn put_object_tags(
 }
 
 pub async fn get_object_tags(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
 ) -> Result<HashMap<String, String>, StorageError> {
-    let meta = get_object_meta(pool, bucket_name, key).await?;
+    let meta = get_object_meta(ctx, bucket_name, key).await?;
     Ok(meta.tags.unwrap_or_default())
 }
 
-pub async fn delete_object_tags(pool: &DbPool, bucket_name: &str, key: &str) -> Result<(), StorageError> {
-    put_object_tags(pool, bucket_name, key, HashMap::new()).await
+pub async fn delete_object_tags(ctx: &DbContext, bucket_name: &str, key: &str) -> Result<(), StorageError> {
+    put_object_tags(ctx, bucket_name, key, HashMap::new()).await
+}
+
+fn row_into_read_meta(row: ObjectRow) -> ObjectMeta {
+    ObjectMeta {
+        key: row.key,
+        size: row.size as u64,
+        etag: row.etag,
+        content_type: row.content_type,
+        last_modified: format_ts(row.last_modified),
+        owner_id: row.owner_id,
+        owner_display_name: row.owner_display_name,
+        acl: None,
+        version_id: row.version_id,
+        is_delete_marker: row.is_delete_marker,
+        storage_format: row.storage_format,
+        checksum_algorithm: None,
+        checksum_value: None,
+        tags: None,
+        part_sizes: part_sizes_from_db(row.part_sizes),
+    }
 }
 
 pub(crate) async fn row_into_meta(

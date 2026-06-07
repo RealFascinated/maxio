@@ -1,6 +1,6 @@
 use crate::db::schema::{multipart_parts, multipart_uploads};
-use crate::db::DbPool;
-use crate::storage::{ChecksumAlgorithm, MultipartUploadMeta, PartMeta, StorageError};
+use crate::db::DbContext;
+use crate::storage::{MultipartUploadMeta, PartMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -8,11 +8,11 @@ use diesel_async::RunQueryDsl;
 use super::{checksum_from_db, checksum_to_db, db_err, format_ts, get_conn, parse_ts, resolve_bucket_id};
 
 pub async fn insert_multipart_upload(
-    pool: &DbPool,
+    ctx: &DbContext,
     meta: &MultipartUploadMeta,
 ) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, &meta.bucket).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, &meta.bucket).await?;
     let initiated = parse_ts(&meta.initiated)?;
 
     diesel::insert_into(multipart_uploads::table)
@@ -31,46 +31,11 @@ pub async fn insert_multipart_upload(
     Ok(())
 }
 
-pub async fn create_multipart_upload(
-    pool: &DbPool,
-    bucket_name: &str,
-    key: &str,
-    content_type: &str,
-    checksum_algorithm: Option<ChecksumAlgorithm>,
-) -> Result<MultipartUploadMeta, StorageError> {
-    let upload_id = uuid::Uuid::new_v4().to_string();
-    let initiated = Utc::now();
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
-
-    diesel::insert_into(multipart_uploads::table)
-        .values((
-            multipart_uploads::upload_id.eq(&upload_id),
-            multipart_uploads::bucket_id.eq(bucket_id),
-            multipart_uploads::key.eq(key),
-            multipart_uploads::content_type.eq(content_type),
-            multipart_uploads::initiated.eq(initiated),
-            multipart_uploads::checksum_algorithm.eq(checksum_algorithm.map(checksum_to_db)),
-        ))
-        .execute(&mut conn)
-        .await
-        .map_err(db_err)?;
-
-    Ok(MultipartUploadMeta {
-        upload_id,
-        bucket: bucket_name.to_string(),
-        key: key.to_string(),
-        content_type: content_type.to_string(),
-        initiated: format_ts(initiated),
-        checksum_algorithm,
-    })
-}
-
 pub async fn get_multipart_upload(
-    pool: &DbPool,
+    ctx: &DbContext,
     upload_id: &str,
 ) -> Result<MultipartUploadMeta, StorageError> {
-    let mut conn = get_conn(pool).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
     let row: (String, String, String, chrono::DateTime<Utc>, Option<String>) =
         multipart_uploads::table
             .inner_join(crate::db::schema::buckets::table)
@@ -101,8 +66,8 @@ pub async fn get_multipart_upload(
     })
 }
 
-pub async fn abort_multipart_upload(pool: &DbPool, upload_id: &str) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
+pub async fn abort_multipart_upload(ctx: &DbContext, upload_id: &str) -> Result<(), StorageError> {
+    let mut conn = get_conn(ctx.pool()).await?;
     let deleted = diesel::delete(
         multipart_uploads::table.filter(multipart_uploads::upload_id.eq(upload_id)),
     )
@@ -117,11 +82,11 @@ pub async fn abort_multipart_upload(pool: &DbPool, upload_id: &str) -> Result<()
 }
 
 pub async fn upsert_part(
-    pool: &DbPool,
+    ctx: &DbContext,
     upload_id: &str,
     part: &PartMeta,
 ) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
 
     let exists = diesel::select(diesel::dsl::exists(
         multipart_uploads::table.filter(multipart_uploads::upload_id.eq(upload_id)),
@@ -161,29 +126,12 @@ pub async fn upsert_part(
     Ok(())
 }
 
-pub async fn delete_part(
-    pool: &DbPool,
-    upload_id: &str,
-    part_number: u32,
-) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    diesel::delete(
-        multipart_parts::table
-            .filter(multipart_parts::upload_id.eq(upload_id))
-            .filter(multipart_parts::part_number.eq(part_number as i32)),
-    )
-    .execute(&mut conn)
-    .await
-    .map_err(db_err)?;
-    Ok(())
-}
-
 pub async fn list_parts(
-    pool: &DbPool,
+    ctx: &DbContext,
     upload_id: &str,
 ) -> Result<(MultipartUploadMeta, Vec<PartMeta>), StorageError> {
-    let meta = get_multipart_upload(pool, upload_id).await?;
-    let mut conn = get_conn(pool).await?;
+    let meta = get_multipart_upload(ctx, upload_id).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
 
     let rows: Vec<(i32, String, i64, chrono::DateTime<Utc>, Option<String>, Option<String>)> =
         multipart_parts::table
@@ -217,11 +165,11 @@ pub async fn list_parts(
 }
 
 pub async fn list_multipart_uploads(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
 ) -> Result<Vec<MultipartUploadMeta>, StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let rows: Vec<(String, String, String, chrono::DateTime<Utc>, Option<String>)> =
         multipart_uploads::table
@@ -253,11 +201,11 @@ pub async fn list_multipart_uploads(
 
 /// Remove multipart uploads older than `stale_after`. Returns count removed.
 pub async fn cleanup_stale_uploads(
-    pool: &DbPool,
+    ctx: &DbContext,
     stale_after: chrono::Duration,
 ) -> Result<u64, StorageError> {
     let cutoff = Utc::now() - stale_after;
-    let mut conn = get_conn(pool).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
 
     let stale_ids: Vec<String> = multipart_uploads::table
         .filter(multipart_uploads::initiated.lt(cutoff))

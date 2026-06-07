@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 
+pub use crate::db::repos::PutBucketContext;
+
 use super::{
     BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta,
     StorageError,
@@ -33,8 +35,26 @@ pub trait MetadataStore: Send + Sync {
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError>;
     async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError>;
 
-    async fn upsert_object(&self, bucket: &str, meta: &ObjectMeta) -> Result<(), StorageError>;
+    async fn fetch_put_bucket_context(
+        &self,
+        bucket: &str,
+    ) -> Result<PutBucketContext, StorageError>;
+    async fn fetch_bucket_auth_context(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::db::repos::BucketAuthSnapshot, StorageError>;
+    async fn upsert_object(
+        &self,
+        bucket: &str,
+        meta: &ObjectMeta,
+        put_ctx: Option<&PutBucketContext>,
+    ) -> Result<(), StorageError>;
     async fn get_object_meta(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<ObjectMeta, StorageError>;
+    async fn get_object_for_read(
         &self,
         bucket: &str,
         key: &str,
@@ -90,12 +110,6 @@ pub trait MetadataStore: Send + Sync {
         bucket: &str,
         prefix: &str,
     ) -> Result<Vec<ObjectMeta>, StorageError>;
-    async fn set_current_version(
-        &self,
-        bucket: &str,
-        key: &str,
-        version_id: &str,
-    ) -> Result<(), StorageError>;
     async fn update_current_after_delete(
         &self,
         bucket: &str,
@@ -112,11 +126,6 @@ pub trait MetadataStore: Send + Sync {
     ) -> Result<MultipartUploadMeta, StorageError>;
     async fn abort_multipart_upload(&self, upload_id: &str) -> Result<(), StorageError>;
     async fn upsert_part(&self, upload_id: &str, part: &PartMeta) -> Result<(), StorageError>;
-    async fn delete_part(
-        &self,
-        upload_id: &str,
-        part_number: u32,
-    ) -> Result<(), StorageError>;
     async fn list_parts(
         &self,
         upload_id: &str,

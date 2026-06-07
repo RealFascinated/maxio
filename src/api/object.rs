@@ -100,12 +100,6 @@ pub async fn put_object(
         .await;
     }
 
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
-
     check_object_access(&state, &principal, &bucket, &key, "s3:PutObject").await?;
 
     let content_type = headers
@@ -146,6 +140,7 @@ pub async fn put_object(
         .put_object(&bucket, &key, content_type, reader, checksum)
         .await
         .map_err(|e| match e {
+            StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),
             StorageError::InvalidKey(msg) => S3Error::invalid_argument(&msg),
             StorageError::ChecksumMismatch(_) => S3Error::bad_checksum("x-amz-checksum"),
             _ => S3Error::internal(e),
@@ -318,13 +313,6 @@ async fn copy_object(
     let (src_bucket, src_key) = parse_copy_source(&headers)?;
     let (src_bucket, src_key) = (src_bucket.as_str(), src_key.as_str());
 
-    // Validate destination bucket
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
-
     let (reader, src_meta) = state
         .storage
         .get_object(src_bucket, src_key)
@@ -365,6 +353,7 @@ async fn copy_object(
         .put_object(&bucket, &key, &content_type, reader, checksum)
         .await
         .map_err(|e| match e {
+            StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),
             StorageError::InvalidKey(msg) => S3Error::invalid_argument(&msg),
             _ => S3Error::internal(e),
         })?;
@@ -836,12 +825,6 @@ pub async fn delete_object(
             .await;
     }
 
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
-
     check_object_access(&state, &principal, &bucket, &key, "s3:DeleteObject").await?;
 
     // Permanent version deletion
@@ -915,11 +898,6 @@ pub async fn delete_objects(
 ) -> Result<Response<Body>, S3Error> {
     let principal = get_principal(req.extensions());
     let body = req.into_body();
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
     check_bucket_access(&state, &principal, &bucket, "s3:DeleteObject").await?;
 
     let bytes = axum::body::to_bytes(body, DELETE_BODY_MAX)

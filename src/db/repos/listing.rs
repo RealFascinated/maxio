@@ -1,5 +1,5 @@
 use crate::db::schema::objects;
-use crate::db::DbPool;
+use crate::db::DbContext;
 use crate::storage::{ObjectMeta, StorageError};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -8,14 +8,14 @@ use super::{db_err, get_conn, resolve_bucket_id};
 use super::objects::{row_into_meta, ObjectRow};
 
 pub async fn list_objects_page(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     prefix: &str,
     start_after: Option<&str>,
     max_keys: usize,
 ) -> Result<(Vec<ObjectMeta>, bool, Option<String>), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let limit = max_keys.saturating_add(1) as i64;
     let mut query = objects::table

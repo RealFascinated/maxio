@@ -4,7 +4,7 @@ use crate::db::schema::{
     object_version_acl_grants, object_version_checksums, object_version_tags, object_versions,
     objects,
 };
-use crate::db::DbPool;
+use crate::db::DbContext;
 use crate::storage::{ObjectMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
@@ -17,7 +17,7 @@ use super::{
 };
 
 pub async fn insert_version(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     meta: &ObjectMeta,
     is_current: bool,
@@ -27,8 +27,8 @@ pub async fn insert_version(
         .as_ref()
         .ok_or_else(|| db_err("version insert requires version_id"))?;
 
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
     let last_modified = parse_ts(&meta.last_modified)?;
 
     if is_current {
@@ -95,17 +95,17 @@ pub async fn insert_version(
 }
 
 pub async fn get_object_version_meta(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
     version_id: &str,
 ) -> Result<ObjectMeta, StorageError> {
     if version_id == "null" {
-        return super::get_object_meta(pool, bucket_name, key).await;
+        return super::get_object_meta(ctx, bucket_name, key).await;
     }
 
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let row: VersionRow = object_versions::table
         .filter(object_versions::bucket_id.eq(bucket_id))
@@ -125,20 +125,20 @@ pub async fn get_object_version_meta(
 }
 
 pub async fn delete_object_version(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
     version_id: &str,
 ) -> Result<ObjectMeta, StorageError> {
     if version_id == "null" {
-        let meta = super::get_object_meta(pool, bucket_name, key).await?;
-        super::delete_object(pool, bucket_name, key).await?;
-        update_current_after_delete(pool, bucket_name, key).await?;
+        let meta = super::get_object_meta(ctx, bucket_name, key).await?;
+        super::delete_object(ctx, bucket_name, key).await?;
+        update_current_after_delete(ctx, bucket_name, key).await?;
         return Ok(meta);
     }
 
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let row: VersionRow = object_versions::table
         .filter(object_versions::bucket_id.eq(bucket_id))
@@ -167,19 +167,19 @@ pub async fn delete_object_version(
     .map_err(db_err)?;
 
     if row.is_current {
-        update_current_after_delete(pool, bucket_name, key).await?;
+        update_current_after_delete(ctx, bucket_name, key).await?;
     }
 
     Ok(meta)
 }
 
 pub async fn list_object_versions(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     prefix: &str,
 ) -> Result<Vec<ObjectMeta>, StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let mut query = object_versions::table
         .filter(object_versions::bucket_id.eq(bucket_id))
@@ -233,49 +233,13 @@ pub async fn list_object_versions(
     Ok(results)
 }
 
-pub async fn set_current_version(
-    pool: &DbPool,
-    bucket_name: &str,
-    key: &str,
-    version_id: &str,
-) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
-
-    diesel::update(
-        object_versions::table
-            .filter(object_versions::bucket_id.eq(bucket_id))
-            .filter(object_versions::key.eq(key)),
-    )
-    .set(object_versions::is_current.eq(false))
-    .execute(&mut conn)
-    .await
-    .map_err(db_err)?;
-
-    let updated = diesel::update(
-        object_versions::table
-            .filter(object_versions::bucket_id.eq(bucket_id))
-            .filter(object_versions::key.eq(key))
-            .filter(object_versions::version_id.eq(version_id)),
-    )
-    .set(object_versions::is_current.eq(true))
-    .execute(&mut conn)
-    .await
-    .map_err(db_err)?;
-
-    if updated == 0 {
-        return Err(StorageError::VersionNotFound(version_id.to_string()));
-    }
-    Ok(())
-}
-
 pub async fn update_current_after_delete(
-    pool: &DbPool,
+    ctx: &DbContext,
     bucket_name: &str,
     key: &str,
 ) -> Result<(), StorageError> {
-    let mut conn = get_conn(pool).await?;
-    let bucket_id = resolve_bucket_id(&mut conn, bucket_name).await?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
     let latest: Option<VersionRow> = object_versions::table
         .filter(object_versions::bucket_id.eq(bucket_id))
@@ -309,7 +273,7 @@ pub async fn update_current_after_delete(
 
     if let Some(row) = latest {
         let meta = version_row_into_meta(&mut conn, row.clone()).await?;
-        super::upsert_object(pool, bucket_name, &meta).await?;
+        super::upsert_object(ctx, bucket_name, &meta, None).await?;
         diesel::update(
             object_versions::table
                 .filter(object_versions::id.eq(row.id)),

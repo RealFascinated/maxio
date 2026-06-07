@@ -12,7 +12,7 @@ pub use multipart::*;
 pub use objects::*;
 pub use versions::*;
 
-use crate::db::DbPool;
+use crate::db::{BucketCache, CachedBucketEntry, DbPool};
 use crate::iam::acl::{AclGrant, AclPermission, Grantee};
 use crate::iam::Acl;
 use crate::storage::ChecksumAlgorithm;
@@ -157,20 +157,55 @@ pub(crate) fn escape_like(prefix: &str) -> String {
 }
 
 pub(crate) async fn resolve_bucket_id(
+    cache: &BucketCache,
     conn: &mut AsyncPgConnection,
     bucket_name: &str,
 ) -> Result<Uuid, StorageError> {
-    use crate::db::schema::buckets::dsl;
-    use diesel::prelude::*;
-    use diesel_async::RunQueryDsl;
+    if let Some(entry) = cache.get(bucket_name) {
+        return Ok(entry.id);
+    }
 
-    dsl::buckets
-        .filter(dsl::name.eq(bucket_name))
-        .select(dsl::id)
-        .first::<Uuid>(conn)
-        .await
-        .map_err(|e| match e {
-            diesel::result::Error::NotFound => StorageError::NotFound(bucket_name.to_string()),
-            other => db_err(other),
-        })
+    let entry = buckets::load_bucket_cache_entry(conn, bucket_name).await?;
+    cache.insert(bucket_name, entry.clone());
+    Ok(entry.id)
+}
+
+/// Bucket fields needed before writing object bytes (single round-trip).
+#[derive(Debug, Clone)]
+pub struct PutBucketContext {
+    pub bucket_id: Uuid,
+    pub versioning: bool,
+    pub owner_id: String,
+    pub owner_display_name: String,
+}
+
+impl From<CachedBucketEntry> for PutBucketContext {
+    fn from(entry: CachedBucketEntry) -> Self {
+        Self {
+            bucket_id: entry.id,
+            versioning: entry.versioning,
+            owner_id: entry.owner_id,
+            owner_display_name: entry.owner_display_name,
+        }
+    }
+}
+
+/// Policy + ACL fields for authorization (no CORS).
+#[derive(Debug, Clone)]
+pub struct BucketAuthSnapshot {
+    pub policy: Option<String>,
+    pub acl: Option<Acl>,
+    pub owner_id: String,
+    pub owner_display_name: String,
+}
+
+impl From<CachedBucketEntry> for BucketAuthSnapshot {
+    fn from(entry: CachedBucketEntry) -> Self {
+        Self {
+            policy: entry.policy,
+            acl: entry.acl,
+            owner_id: entry.owner_id,
+            owner_display_name: entry.owner_display_name,
+        }
+    }
 }

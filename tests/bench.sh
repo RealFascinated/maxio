@@ -8,7 +8,12 @@ set -euo pipefail
 #   --maxio-host=HOST    Use external MaxIO (skip starting server)
 #   --minio-host=HOST    Use external MinIO (skip starting server)
 #   --maxio-bin=PATH     Path to maxio binary (default: ./maxio or ./target/release/maxio)
+#   --database-url=URL   Postgres URL for MaxIO metadata (or set MAXIO_DATABASE_URL)
 #   --help               Show this help
+#
+# MaxIO requires Postgres. Export MAXIO_DATABASE_URL before running, e.g.:
+#   export MAXIO_DATABASE_URL=postgres://maxio:maxio@127.0.0.1:5432/maxio
+#   docker compose up postgres -d   # local default URL below
 
 DURATION="30s"
 SCENARIOS="all"
@@ -17,6 +22,8 @@ MINIO_HOST=""
 MAXIO_BIN=""
 MAXIO_PORT=9800
 MINIO_PORT=9801
+# Use IPv4 loopback — `localhost` often resolves to ::1 while MaxIO binds 0.0.0.0 (IPv4 only)
+BENCH_HOST="127.0.0.1"
 ACCESS_KEY="maxioadmin"
 SECRET_KEY="maxioadmin"
 OUTDIR=$(mktemp -d /tmp/maxio-bench-XXXXXX)
@@ -26,6 +33,9 @@ MINIO_DATA="$OUTDIR/minio-data"
 BIN_DIR="$HOME/.cache/maxio-bench/bin"
 MAXIO_PID=""
 MINIO_PID=""
+MAXIO_LOG=""
+# Local docker-compose default; override with MAXIO_DATABASE_URL or --database-url=
+MAXIO_DATABASE_URL="${MAXIO_DATABASE_URL:-${DATABASE_URL:-postgres://maxio:maxio@127.0.0.1:5432/maxio}}"
 
 # --- Colors ---
 red()    { printf "\033[31m%s\033[0m\n" "$1"; }
@@ -42,8 +52,9 @@ for arg in "$@"; do
         --maxio-host=*) MAXIO_HOST="${arg#*=}" ;;
         --minio-host=*) MINIO_HOST="${arg#*=}" ;;
         --maxio-bin=*)  MAXIO_BIN="${arg#*=}" ;;
+        --database-url=*) MAXIO_DATABASE_URL="${arg#*=}" ;;
         --help)
-            head -12 "$0" | tail -10
+            head -16 "$0" | tail -14
             exit 0
             ;;
         *) red "Unknown argument: $arg"; exit 1 ;;
@@ -216,17 +227,29 @@ check_port() {
 
 # --- Wait for server health ---
 wait_for_health() {
-    local url="$1" name="$2" max_wait=20
+    local url="$1" name="$2" log_file="${3:-}" pid="${4:-}" max_wait=20
     printf "  Waiting for %s..." "$name"
     for i in $(seq 1 $max_wait); do
         if curl -sf "$url" &>/dev/null; then
             green " ready (${i}s)"
             return 0
         fi
+        if [ -n "$pid" ] && [ -n "$log_file" ] && [ -f "$log_file" ] && ! kill -0 "$pid" 2>/dev/null; then
+            red " process exited"
+            echo
+            red "Last lines from $log_file:"
+            tail -30 "$log_file" >&2 || true
+            return 1
+        fi
         sleep 1
     done
     red " timeout after ${max_wait}s"
-    exit 1
+    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+        echo
+        red "Last lines from $log_file:"
+        tail -30 "$log_file" >&2 || true
+    fi
+    return 1
 }
 
 # --- Start servers ---
@@ -235,12 +258,24 @@ start_maxio() {
         yellow "Using external MaxIO: $MAXIO_HOST"
         return
     fi
+    if [ -z "$MAXIO_DATABASE_URL" ]; then
+        red "MAXIO_DATABASE_URL is required (MaxIO stores metadata in Postgres)."
+        red "  export MAXIO_DATABASE_URL=postgres://maxio:maxio@127.0.0.1:5432/maxio"
+        red "  docker compose up postgres -d"
+        exit 1
+    fi
     check_port "$MAXIO_PORT"
     mkdir -p "$MAXIO_DATA"
+    MAXIO_LOG="$OUTDIR/maxio.log"
     bold "Starting MaxIO on port $MAXIO_PORT..."
-    "$MAXIO_BIN" --data-dir "$MAXIO_DATA" --port "$MAXIO_PORT" &>/dev/null &
+    "$MAXIO_BIN" \
+        --data-dir "$MAXIO_DATA" \
+        --port "$MAXIO_PORT" \
+        --database-url "$MAXIO_DATABASE_URL" \
+        --allow-insecure-dev \
+        >"$MAXIO_LOG" 2>&1 &
     MAXIO_PID=$!
-    wait_for_health "http://localhost:$MAXIO_PORT/healthz" "MaxIO"
+    wait_for_health "http://$BENCH_HOST:$MAXIO_PORT/readyz" "MaxIO" "$MAXIO_LOG" "$MAXIO_PID" || exit 1
 }
 
 start_minio() {
@@ -255,16 +290,16 @@ start_minio() {
     MINIO_ROOT_PASSWORD="$SECRET_KEY" \
     minio server "$MINIO_DATA" --address ":$MINIO_PORT" &>/dev/null &
     MINIO_PID=$!
-    wait_for_health "http://localhost:$MINIO_PORT/minio/health/live" "MinIO"
+    wait_for_health "http://$BENCH_HOST:$MINIO_PORT/minio/health/live" "MinIO" || exit 1
 }
 
 # --- Resolve hosts ---
 maxio_host() {
-    echo "${MAXIO_HOST:-localhost:$MAXIO_PORT}"
+    echo "${MAXIO_HOST:-$BENCH_HOST:$MAXIO_PORT}"
 }
 
 minio_host() {
-    echo "${MINIO_HOST:-localhost:$MINIO_PORT}"
+    echo "${MINIO_HOST:-$BENCH_HOST:$MINIO_PORT}"
 }
 
 # --- Benchmark runner ---

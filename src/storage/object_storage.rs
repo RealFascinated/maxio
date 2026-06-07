@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::blob::{validate_key, validate_upload_id, BlobStorage};
-use super::metadata::MetadataStore;
+use super::metadata::{MetadataStore, PutBucketContext};
 use super::traits::{ListPage, Storage};
 use super::{
     normalize_object_meta, validate_bucket_name, BucketMeta, ByteStream, ChecksumAlgorithm,
@@ -39,8 +39,11 @@ impl ObjectStorage {
         mut object_meta: ObjectMeta,
         written: super::blob::WrittenPayload,
         versioned: bool,
+        put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
-        self.meta.upsert_object(bucket, &object_meta).await?;
+        self.meta
+            .upsert_object(bucket, &object_meta, put_ctx)
+            .await?;
         if let Err(e) = BlobStorage::publish_temp_payload(
             &written.tmp_path,
             &written.final_path,
@@ -126,10 +129,6 @@ impl Storage for ObjectStorage {
         self.meta.list_buckets().await
     }
 
-    async fn load_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
-        self.meta.get_bucket_meta(bucket).await
-    }
-
     async fn get_bucket_meta(&self, bucket: &str) -> Result<BucketMeta, StorageError> {
         self.meta.get_bucket_meta(bucket).await
     }
@@ -186,11 +185,18 @@ impl Storage for ObjectStorage {
         &self,
         bucket: &str,
     ) -> Result<(Option<String>, crate::iam::Acl), StorageError> {
-        let meta = self.meta.get_bucket_meta(bucket).await?;
-        let acl = meta
-            .acl
-            .unwrap_or_else(|| crate::iam::Acl::private(&meta.owner_id, &meta.owner_display_name));
-        Ok((meta.policy, acl))
+        let snap = self.meta.fetch_bucket_auth_context(bucket).await?;
+        let acl = snap.acl.unwrap_or_else(|| {
+            crate::iam::Acl::private(&snap.owner_id, &snap.owner_display_name)
+        });
+        Ok((snap.policy, acl))
+    }
+
+    async fn fetch_bucket_auth_context(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::db::repos::BucketAuthSnapshot, StorageError> {
+        self.meta.fetch_bucket_auth_context(bucket).await
     }
 
     async fn put_object(
@@ -205,17 +211,17 @@ impl Storage for ObjectStorage {
         validate_key(key)?;
 
         if key.ends_with('/') {
+            let prep = self.meta.fetch_put_bucket_context(bucket).await?;
             self.blobs.write_folder_marker(bucket, key).await?;
             let etag = "\"d41d8cd98f00b204e9800998ecf8427e\"".to_string();
-            let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
             let mut meta = ObjectMeta {
                 key: key.to_string(),
                 size: 0,
                 etag: etag.clone(),
                 content_type: "application/x-directory".to_string(),
                 last_modified: Self::now_ts(),
-                owner_id,
-                owner_display_name: owner_name,
+                owner_id: prep.owner_id.clone(),
+                owner_display_name: prep.owner_display_name.clone(),
                 acl: None,
                 version_id: None,
                 is_delete_marker: false,
@@ -225,10 +231,8 @@ impl Storage for ObjectStorage {
                 tags: None,
                 part_sizes: None,
             };
-            let owner_id = meta.owner_id.clone();
-            let owner_name = meta.owner_display_name.clone();
-            normalize_object_meta(&mut meta, &owner_id, &owner_name);
-            self.meta.upsert_object(bucket, &meta).await?;
+            normalize_object_meta(&mut meta, &prep.owner_id, &prep.owner_display_name);
+            self.meta.upsert_object(bucket, &meta, Some(&prep)).await?;
             return Ok(PutResult {
                 size: 0,
                 etag,
@@ -238,8 +242,8 @@ impl Storage for ObjectStorage {
             });
         }
 
-        let versioned = self.meta.is_versioned(bucket).await.unwrap_or(false);
-        let version_id = if versioned {
+        let prep = self.meta.fetch_put_bucket_context(bucket).await?;
+        let version_id = if prep.versioning {
             Some(BlobStorage::generate_version_id())
         } else {
             None
@@ -260,15 +264,14 @@ impl Storage for ObjectStorage {
                 .await?
         };
 
-        let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
         let mut object_meta = ObjectMeta {
             key: key.to_string(),
             size: written.size,
             etag: written.etag.clone(),
             content_type: content_type.to_string(),
             last_modified: Self::now_ts(),
-            owner_id,
-            owner_display_name: owner_name,
+            owner_id: prep.owner_id.clone(),
+            owner_display_name: prep.owner_display_name.clone(),
             acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
@@ -282,8 +285,15 @@ impl Storage for ObjectStorage {
         let owner_name = object_meta.owner_display_name.clone();
         normalize_object_meta(&mut object_meta, &owner_id, &owner_name);
 
-        self.finalize_written_object(bucket, key, object_meta, written, versioned)
-            .await
+        self.finalize_written_object(
+            bucket,
+            key,
+            object_meta,
+            written,
+            prep.versioning,
+            Some(&prep),
+        )
+        .await
     }
 
     async fn get_object(
@@ -293,7 +303,7 @@ impl Storage for ObjectStorage {
     ) -> Result<(ByteStream, ObjectMeta), StorageError> {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
-        let meta = self.meta.get_object_meta(bucket, key).await?;
+        let meta = self.meta.get_object_for_read(bucket, key).await?;
         if meta.is_delete_marker {
             return Err(StorageError::NotFound(key.to_string()));
         }
@@ -310,7 +320,7 @@ impl Storage for ObjectStorage {
     ) -> Result<(ByteStream, ObjectMeta), StorageError> {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
-        let meta = self.meta.get_object_meta(bucket, key).await?;
+        let meta = self.meta.get_object_for_read(bucket, key).await?;
         if meta.is_delete_marker {
             return Err(StorageError::NotFound(key.to_string()));
         }
@@ -324,7 +334,7 @@ impl Storage for ObjectStorage {
     async fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError> {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
-        let meta = self.meta.get_object_meta(bucket, key).await?;
+        let meta = self.meta.get_object_for_read(bucket, key).await?;
         if meta.is_delete_marker {
             return Err(StorageError::NotFound(key.to_string()));
         }
@@ -558,8 +568,8 @@ impl Storage for ObjectStorage {
             selected.push(meta);
         }
 
-        let versioned = self.meta.is_versioned(bucket).await.unwrap_or(false);
-        let version_id = if versioned {
+        let prep = self.meta.fetch_put_bucket_context(bucket).await?;
+        let version_id = if prep.versioning {
             Some(BlobStorage::generate_version_id())
         } else {
             None
@@ -593,15 +603,14 @@ impl Storage for ObjectStorage {
         written.checksum_value = checksum_value.clone();
 
         let part_sizes: Vec<u64> = selected.iter().map(|p| p.size).collect();
-        let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
         let object_meta = ObjectMeta {
             key: upload_meta.key.clone(),
             size: written.size,
             etag: written.etag.clone(),
             content_type: upload_meta.content_type,
             last_modified: Self::now_ts(),
-            owner_id,
-            owner_display_name: owner_name,
+            owner_id: prep.owner_id.clone(),
+            owner_display_name: prep.owner_display_name.clone(),
             acl: None,
             version_id: version_id.clone(),
             is_delete_marker: false,
@@ -618,7 +627,8 @@ impl Storage for ObjectStorage {
                 &upload_meta.key,
                 object_meta,
                 written,
-                versioned,
+                prep.versioning,
+                Some(&prep),
             )
             .await?;
 

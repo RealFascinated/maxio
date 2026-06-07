@@ -8,7 +8,7 @@ pub mod traits;
 pub use metadata::MetadataStore;
 pub use object_storage::ObjectStorage;
 pub use pg_metadata::PgMetadataStore;
-pub use traits::{ListPage, Storage};
+pub use traits::Storage;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -248,55 +248,6 @@ pub fn is_valid_bucket_name(name: &str) -> bool {
     }
 
     true
-}
-
-/// Migrate legacy `public_read` / `public_list` flags into bucket policies.
-pub fn normalize_bucket_meta(meta: &mut BucketMeta) -> bool {
-    let mut changed = false;
-    if meta.owner_id.is_empty() {
-        meta.owner_id = default_owner_id();
-        changed = true;
-    }
-    if meta.owner_display_name.is_empty() {
-        meta.owner_display_name = default_owner_display_name();
-        changed = true;
-    }
-    if meta.acl.is_none() {
-        meta.acl = Some(crate::iam::Acl::private(
-            &meta.owner_id,
-            &meta.owner_display_name,
-        ));
-        changed = true;
-    }
-
-    if meta.public_read || meta.public_list {
-        let mut statements = if let Some(ref policy) = meta.policy {
-            serde_json::from_str::<crate::iam::types::PolicyDocumentRaw>(policy)
-                .map(|d| d.statement)
-                .unwrap_or_default()
-        } else {
-            vec![]
-        };
-
-        if meta.public_read {
-            statements.extend(crate::iam::policy::public_read_policy(&meta.name).statement);
-            meta.public_read = false;
-            changed = true;
-        }
-        if meta.public_list {
-            statements.extend(crate::iam::policy::public_list_policy(&meta.name).statement);
-            meta.public_list = false;
-            changed = true;
-        }
-
-        let doc = crate::iam::types::PolicyDocumentRaw {
-            version: "2012-10-17".to_string(),
-            statement: statements,
-        };
-        meta.policy = Some(serde_json::to_string(&doc).unwrap_or_default());
-    }
-
-    changed
 }
 
 /// Normalize object metadata defaults for owner/acl fields.
