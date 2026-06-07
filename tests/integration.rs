@@ -656,6 +656,19 @@ async fn test_healthz_is_public_and_returns_ok() {
 }
 
 #[tokio::test]
+async fn test_auth_config_is_public() {
+    let base_url = start_server().await;
+    let resp = client()
+        .get(format!("{}/api/auth/config", base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["cookiesRequireHttps"], false);
+}
+
+#[tokio::test]
 async fn test_readyz_is_public_and_returns_ok() {
     let base_url = start_server().await;
     let resp = client()

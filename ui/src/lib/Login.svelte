@@ -3,16 +3,32 @@
   import { Input } from "$lib/components/ui/input";
   import { Callout } from "$lib/components/ui/callout";
   import { Highlighted } from "$lib/components/ui/highlighted";
-  import { createMutation } from "@tanstack/svelte-query";
+  import { createMutation, createQuery } from "@tanstack/svelte-query";
   import Eye from "lucide-svelte/icons/eye";
   import EyeOff from "lucide-svelte/icons/eye-off";
-  import { login, type AuthCheckResponse } from "$lib/api/auth";
+  import {
+    browserCanStoreSecureCookies,
+    fetchAuthConfig,
+    login,
+    type AuthCheckResponse,
+  } from "$lib/api/auth";
+  import { authKeys } from "$lib/api/keys";
   import { ApiError } from "$lib/api/http";
 
   let accessKey = $state('')
   let secretKey = $state('')
   let error = $state('')
   let showSecret = $state(false)
+
+  const authConfigQuery = createQuery(() => ({
+    queryKey: authKeys.config(),
+    queryFn: fetchAuthConfig,
+    staleTime: Infinity,
+  }))
+
+  const loginBlocked = $derived(
+    authConfigQuery.data?.cookiesRequireHttps === true && !browserCanStoreSecureCookies(),
+  )
 
   const loginMutation = createMutation(() => ({
     mutationFn: login,
@@ -26,6 +42,7 @@
 
   async function handleSubmit(e: Event) {
     e.preventDefault()
+    if (loginBlocked) return
     error = ''
     try {
       await loginMutation.mutateAsync({ accessKey, secretKey })
@@ -52,6 +69,7 @@
           type="text"
           bind:value={accessKey}
           autocomplete="username"
+          disabled={loginBlocked}
           required
         />
       </div>
@@ -68,6 +86,7 @@
             bind:value={secretKey}
             autocomplete="current-password"
             class="pr-10"
+            disabled={loginBlocked}
             required
           />
           <button
@@ -84,12 +103,25 @@
         </div>
       </div>
 
+      {#if loginBlocked}
+        <Callout type="warning" title="HTTPS required">
+          Console login is disabled on plain HTTP because session cookies are marked Secure.
+          Use HTTPS, or set <code class="font-mono text-xs">MAXIO_ALLOW_INSECURE_DEV=true</code> or
+          <code class="font-mono text-xs">MAXIO_SECURE_COOKIES=false</code> for HTTP-only deployments.
+        </Callout>
+      {/if}
+
       {#if error}
         <Callout type="danger">{error}</Callout>
       {/if}
 
       <!-- Login button — large highlighted style -->
-      <Button type="submit" variant="highlighted" class="mt-2 h-12 w-full justify-center px-4" disabled={loginMutation.isPending}>
+      <Button
+        type="submit"
+        variant="highlighted"
+        class="mt-2 h-12 w-full justify-center px-4"
+        disabled={loginBlocked || loginMutation.isPending}
+      >
         {loginMutation.isPending ? 'Signing in...' : 'Login'}
       </Button>
     </form>

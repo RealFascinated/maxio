@@ -387,7 +387,7 @@ pub async fn login(
     let cookie = make_cookie(
         &token,
         TOKEN_MAX_AGE_SECS,
-        state.config.secure_cookies && !state.config.allow_insecure_dev,
+        cookies_require_https(&state),
     );
 
     let mut resp_headers = HeaderMap::new();
@@ -415,6 +415,16 @@ pub async fn login(
         })),
     )
         .into_response()
+}
+
+fn cookies_require_https(state: &AppState) -> bool {
+    state.config.secure_cookies && !state.config.allow_insecure_dev
+}
+
+pub async fn auth_config(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "cookiesRequireHttps": cookies_require_https(&state),
+    }))
 }
 
 pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -452,11 +462,7 @@ pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl In
 }
 
 pub async fn logout(State(state): State<AppState>) -> impl IntoResponse {
-    let cookie = make_cookie(
-        "",
-        0,
-        state.config.secure_cookies && !state.config.allow_insecure_dev,
-    );
+    let cookie = make_cookie("", 0, cookies_require_https(&state));
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert("Set-Cookie", cookie.parse().unwrap());
     (
@@ -1766,6 +1772,7 @@ pub fn console_router(state: AppState) -> Router<AppState> {
     let public = Router::new()
         .route("/auth/login", post(login))
         .route("/auth/check", get(check))
+        .route("/auth/config", get(auth_config))
         .layer(json_body_limit);
 
     let admin_routes: Router<AppState> = Router::new()

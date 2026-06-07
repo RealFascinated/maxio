@@ -1,6 +1,7 @@
 export const authKeys = {
   all: ['auth'] as const,
   check: () => [...authKeys.all, 'check'] as const,
+  config: () => [...authKeys.all, 'config'] as const,
 }
 
 export const bucketKeys = {
