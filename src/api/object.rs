@@ -101,30 +101,12 @@ pub async fn put_object(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
 
-    let mut reader = body_to_reader(&headers, body).await?;
+    let reader = body_to_reader(&headers, body).await?;
 
-    // If Content-MD5 is provided, buffer the body and verify before writing
     let content_md5 = headers
         .get("content-md5")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-
-    if let Some(ref expected_md5) = content_md5 {
-        use md5::Digest;
-        use tokio::io::AsyncReadExt;
-        let mut buf = Vec::new();
-        reader
-            .read_to_end(&mut buf)
-            .await
-            .map_err(S3Error::internal)?;
-        let computed_hash = md5::Md5::digest(&buf);
-        use base64::Engine;
-        let computed_md5 = base64::engine::general_purpose::STANDARD.encode(computed_hash);
-        if computed_md5 != *expected_md5 {
-            return Err(S3Error::bad_digest());
-        }
-        reader = Box::pin(std::io::Cursor::new(buf));
-    }
 
     let checksum = extract_checksum(&headers);
 
@@ -138,6 +120,17 @@ pub async fn put_object(
             StorageError::ChecksumMismatch(_) => S3Error::bad_checksum("x-amz-checksum"),
             _ => S3Error::internal(e),
         })?;
+
+    if let Some(ref expected_md5) = content_md5 {
+        use base64::Engine;
+        let etag_hex = result.etag.trim_matches('"');
+        let md5_bytes = hex::decode(etag_hex).map_err(S3Error::internal)?;
+        let computed_md5 = base64::engine::general_purpose::STANDARD.encode(md5_bytes);
+        if computed_md5 != *expected_md5 {
+            let _ = state.storage.delete_object(&bucket, &key).await;
+            return Err(S3Error::bad_digest());
+        }
+    }
 
     let (owner_id, owner_display_name) = if principal.is_root {
         (
@@ -1141,6 +1134,30 @@ mod tests {
     }
 }
 
+async fn read_aws_chunk<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: tokio::io::BufReader<R>,
+) -> std::io::Result<(Option<Vec<u8>>, tokio::io::BufReader<R>)> {
+    let mut line = String::new();
+    let n = reader.read_line(&mut line).await?;
+    if n == 0 {
+        return Ok((None, reader));
+    }
+    let line = line.trim_end_matches(|c| c == '\r' || c == '\n');
+    let size_str = line.split(';').next().unwrap_or("0");
+    let chunk_size = usize::from_str_radix(size_str.trim(), 16)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunk size"))?;
+    if chunk_size == 0 {
+        let mut crlf = [0u8; 2];
+        reader.read_exact(&mut crlf).await?;
+        return Ok((None, reader));
+    }
+    let mut chunk = vec![0u8; chunk_size];
+    reader.read_exact(&mut chunk).await?;
+    let mut crlf = [0u8; 2];
+    reader.read_exact(&mut crlf).await?;
+    Ok((Some(chunk), reader))
+}
+
 pub(crate) async fn body_to_reader(
     headers: &HeaderMap,
     body: Body,
@@ -1156,34 +1173,16 @@ pub(crate) async fn body_to_reader(
     );
 
     if is_aws_chunked {
-        let mut buf_reader = tokio::io::BufReader::new(raw_reader);
-        let mut decoded = Vec::new();
-        loop {
-            let mut line = String::new();
-            let n = buf_reader
-                .read_line(&mut line)
-                .await
-                .map_err(S3Error::internal)?;
-            if n == 0 {
-                break;
-            }
-            let line = line.trim_end_matches(|c| c == '\r' || c == '\n');
-            let size_str = line.split(';').next().unwrap_or("0");
-            let chunk_size = usize::from_str_radix(size_str.trim(), 16)
-                .map_err(|_| S3Error::internal("invalid chunk size"))?;
-            if chunk_size == 0 {
-                break;
-            }
-            let mut chunk = vec![0u8; chunk_size];
-            buf_reader
-                .read_exact(&mut chunk)
-                .await
-                .map_err(S3Error::internal)?;
-            decoded.extend_from_slice(&chunk);
-            let mut crlf = [0u8; 2];
-            let _ = buf_reader.read_exact(&mut crlf).await;
-        }
-        Ok(Box::pin(std::io::Cursor::new(decoded)))
+        let chunked = futures::stream::try_unfold(
+            tokio::io::BufReader::new(raw_reader),
+            |reader| async move {
+                let (chunk, reader) = read_aws_chunk(reader).await?;
+                let item: std::io::Result<Option<(bytes::Bytes, _)>> =
+                    Ok(chunk.map(|c| (bytes::Bytes::from(c), reader)));
+                item
+            },
+        );
+        Ok(Box::pin(tokio_util::io::StreamReader::new(chunked)))
     } else {
         Ok(Box::pin(raw_reader))
     }
