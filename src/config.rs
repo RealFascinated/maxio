@@ -51,11 +51,6 @@ pub struct Config {
     #[arg(long, env = "MAXIO_REGION", default_value_t = default_region())]
     pub region: String,
 
-    /// Master key for SSE-S3 encryption (base64-encoded 32 bytes).
-    /// When set, takes precedence over the keyring file for new writes.
-    #[arg(long, env = "MAXIO_MASTER_KEY")]
-    pub master_key: Option<String>,
-
     /// Allow insecure development defaults (default credentials, HTTP cookies).
     #[arg(long, env = "MAXIO_ALLOW_INSECURE_DEV", default_value = "false")]
     pub allow_insecure_dev: bool,

@@ -550,7 +550,6 @@ pub async fn list_buckets(
                         "name": b.name,
                         "createdAt": b.created_at,
                         "versioning": b.versioning,
-                        "encryption": b.encryption_config.is_some(),
                     })
                 })
                 .collect();
@@ -609,7 +608,6 @@ pub async fn create_bucket(
         region: state.config.region.clone(),
         versioning: false,
         cors_rules: None,
-        encryption_config: None,
         owner_id: owner_id.clone(),
         owner_display_name: owner_display_name.clone(),
         acl: Some(crate::iam::Acl::private(
@@ -798,20 +796,6 @@ pub async fn upload_object(
         stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
     );
 
-    let encryption = match state.storage.get_bucket_encryption(&bucket).await {
-        Ok(Some(cfg)) => Some(crate::api::object::encryption_from_bucket_default(&cfg)),
-        Ok(None) => None,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("failed to read bucket encryption: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
-
     match state
         .storage
         .put_object(
@@ -820,7 +804,6 @@ pub async fn upload_object(
             content_type,
             Box::pin(reader),
             None,
-            encryption,
         )
         .await
     {
@@ -929,7 +912,6 @@ async fn preserve_empty_parent_folder_after_object_delete(
             "application/x-directory",
             Box::pin(tokio::io::empty()),
             None,
-            None,
         )
         .await
         .map(|_| ())
@@ -947,7 +929,7 @@ pub async fn download_object(
         return resp;
     }
 
-    let (reader, meta) = match state.storage.get_object(&bucket, &key, None).await {
+    let (reader, meta) = match state.storage.get_object(&bucket, &key).await {
         Ok(r) => r,
         Err(_) => {
             return (
@@ -1137,19 +1119,6 @@ pub async fn create_folder(
         return resp;
     }
 
-    let encryption = match state.storage.get_bucket_encryption(&bucket).await {
-        Ok(Some(cfg)) => Some(crate::api::object::encryption_from_bucket_default(&cfg)),
-        Ok(None) => None,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("failed to read bucket encryption: {}", e)
-                })),
-            )
-                .into_response();
-        }
-    };
     match state
         .storage
         .put_object(
@@ -1158,7 +1127,6 @@ pub async fn create_folder(
             "application/x-directory",
             Box::pin(tokio::io::empty()),
             None,
-            encryption,
         )
         .await
     {
@@ -1223,81 +1191,6 @@ pub async fn set_versioning(
     }
 }
 
-pub async fn get_encryption(
-    State(state): State<AppState>,
-    Extension(session): Extension<ConsoleSession>,
-    Path(bucket): Path<String>,
-) -> impl IntoResponse {
-    if let Err(resp) =
-        console_bucket_check(&state, &session, &bucket, "s3:GetEncryptionConfiguration").await
-    {
-        return resp;
-    }
-
-    match state.storage.get_bucket_encryption(&bucket).await {
-        Ok(Some(cfg)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "enabled": true,
-                "algorithm": cfg.sse_algorithm,
-            })),
-        )
-            .into_response(),
-        Ok(None) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "enabled": false,
-                "algorithm": null,
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
-}
-
-#[derive(serde::Deserialize)]
-pub struct SetEncryptionRequest {
-    enabled: bool,
-}
-
-pub async fn set_encryption(
-    State(state): State<AppState>,
-    Extension(session): Extension<ConsoleSession>,
-    Path(bucket): Path<String>,
-    Json(body): Json<SetEncryptionRequest>,
-) -> impl IntoResponse {
-    if let Err(resp) = console_bucket_check(
-        &state,
-        &session,
-        &bucket,
-        "s3:PutEncryptionConfiguration",
-    )
-    .await
-    {
-        return resp;
-    }
-
-    let result = if body.enabled {
-        let cfg = crate::storage::BucketEncryptionConfig {
-            sse_algorithm: "AES256".to_string(),
-        };
-        state.storage.put_bucket_encryption(&bucket, cfg).await
-    } else {
-        state.storage.delete_bucket_encryption(&bucket).await
-    };
-    match result {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
-    }
-}
 
 pub async fn get_public(
     State(state): State<AppState>,
@@ -1473,7 +1366,7 @@ pub async fn download_version(
 
     let (reader, meta) = match state
         .storage
-        .get_object_version(&bucket, &key, &version_id, None)
+        .get_object_version(&bucket, &key, &version_id)
         .await
     {
         Ok(r) => r,
@@ -1910,8 +1803,6 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .route("/buckets/{bucket}/presign/{*key}", get(presign_object))
         .route("/buckets/{bucket}/versioning", get(get_versioning))
         .route("/buckets/{bucket}/versioning", put(set_versioning))
-        .route("/buckets/{bucket}/encryption", get(get_encryption))
-        .route("/buckets/{bucket}/encryption", put(set_encryption))
         .route("/buckets/{bucket}/public", get(get_public))
         .route("/buckets/{bucket}/public", put(set_public))
         .route("/buckets/{bucket}/versions", get(list_versions))
@@ -1945,16 +1836,12 @@ pub fn console_router(state: AppState) -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::storage::keys::Keyring;
     use crate::storage::{BucketMeta, ByteStream};
 
     use super::*;
 
     async fn test_storage(data_dir: &str) -> Result<FilesystemStorage, Box<dyn std::error::Error>> {
-        let keyring = Arc::new(Keyring::load(data_dir, None).await?);
-        Ok(FilesystemStorage::new(data_dir, false, 10 * 1024 * 1024, 0, keyring).await?)
+        Ok(FilesystemStorage::new(data_dir, false, 10 * 1024 * 1024, 0).await?)
     }
 
     async fn create_test_bucket(storage: &FilesystemStorage, bucket: &str) {
@@ -1965,7 +1852,6 @@ mod tests {
                 region: "us-east-1".to_string(),
                 versioning: false,
                 cors_rules: None,
-                encryption_config: None,
                 owner_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
                 owner_display_name: crate::iam::ROOT_DISPLAY_NAME.to_string(),
                 acl: Some(crate::iam::Acl::private(
@@ -2011,7 +1897,6 @@ mod tests {
                 "text/plain",
                 bytes(b"hello"),
                 None,
-                None,
             )
             .await
             .unwrap();
@@ -2042,7 +1927,6 @@ mod tests {
                 "folder/",
                 "application/x-directory",
                 Box::pin(tokio::io::empty()),
-                None,
                 None,
             )
             .await

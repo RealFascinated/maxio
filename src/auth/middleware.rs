@@ -136,7 +136,6 @@ async fn is_public_bypass_allowed(
         "tagging",
         "versioning",
         "cors",
-        "encryption",
         "policy",
         "acl",
     ] {

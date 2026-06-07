@@ -14,17 +14,6 @@ export async function setVersioning(bucket: string, enabled: boolean): Promise<E
   })
 }
 
-export async function getEncryption(bucket: string): Promise<EnabledResponse> {
-  return apiFetch<EnabledResponse>(`/api/buckets/${encodeURIComponent(bucket)}/encryption`)
-}
-
-export async function setEncryption(bucket: string, enabled: boolean): Promise<EnabledResponse> {
-  return apiFetch<EnabledResponse>(`/api/buckets/${encodeURIComponent(bucket)}/encryption`, {
-    method: 'PUT',
-    body: JSON.stringify({ enabled }),
-  })
-}
-
 export async function getPublicAccess(bucket: string): Promise<PublicAccessResponse> {
   return apiFetch<PublicAccessResponse>(`/api/buckets/${encodeURIComponent(bucket)}/public`)
 }

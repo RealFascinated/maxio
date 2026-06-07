@@ -5,7 +5,7 @@
   import { Switch } from '$lib/components/ui/switch'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { bucketKeys, settingsKeys } from '$lib/api/keys'
-  import { getEncryption, getPublicAccess, getVersioning, setEncryption, setPublicAccess, setVersioning } from '$lib/api/settings'
+  import { getPublicAccess, getVersioning, setPublicAccess, setVersioning } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
 
@@ -26,17 +26,12 @@
     queryKey: settingsKeys.versioning(bucket),
     queryFn: () => getVersioning(bucket),
   }))
-  const encryptionQuery = createQuery(() => ({
-    queryKey: settingsKeys.encryption(bucket),
-    queryFn: () => getEncryption(bucket),
-  }))
   const publicQuery = createQuery(() => ({
     queryKey: settingsKeys.publicAccess(bucket),
     queryFn: () => getPublicAccess(bucket),
   }))
 
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
-  const encryptionEnabled = $derived(!!encryptionQuery.data?.enabled)
   const publicRead = $derived(!!publicQuery.data?.read)
   const publicList = $derived(!!publicQuery.data?.list)
 
@@ -45,15 +40,6 @@
     onSuccess: (_data, enabled) => {
       toast.success(enabled ? 'Versioning enabled' : 'Versioning disabled')
       queryClient.invalidateQueries({ queryKey: settingsKeys.versioning(bucket) })
-      queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
-    },
-  }))
-
-  const encryptionMutation = createMutation(() => ({
-    mutationFn: (enabled: boolean) => setEncryption(bucket, enabled),
-    onSuccess: (_data, enabled) => {
-      toast.success(enabled ? 'Default encryption enabled' : 'Default encryption disabled')
-      queryClient.invalidateQueries({ queryKey: settingsKeys.encryption(bucket) })
       queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
     },
   }))
@@ -88,31 +74,6 @@
     } catch (err) {
       console.error('toggleVersioning failed:', err)
       toast.error(err instanceof ApiError ? err.message : 'Failed to update versioning')
-    }
-  }
-
-  async function toggleEncryption() {
-    const newState = !encryptionEnabled
-    if (encryptionEnabled && !newState) {
-      pendingConfirmation = {
-        title: 'Disable default encryption?',
-        description: 'New uploads will be stored unencrypted. Existing encrypted objects stay encrypted.',
-        confirmLabel: 'Disable encryption',
-        destructive: true,
-        action: () => applyEncryption(newState),
-      }
-      return
-    }
-    await applyEncryption(newState)
-  }
-
-  async function applyEncryption(newState: boolean) {
-    try {
-      await encryptionMutation.mutateAsync(newState)
-      pendingConfirmation = null
-    } catch (err) {
-      console.error('toggleEncryption failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to update encryption')
     }
   }
 
@@ -156,7 +117,7 @@
 </script>
 
 <div class="flex flex-col gap-6 max-w-2xl">
-  {#if versioningQuery.isError || encryptionQuery.isError || publicQuery.isError}
+  {#if versioningQuery.isError || publicQuery.isError}
     <Callout type="danger">Failed to load bucket settings</Callout>
   {/if}
 
@@ -188,29 +149,6 @@
           onclick={toggleVersioning}
           disabled={versioningMutation.isPending}
           aria-label="Toggle versioning"
-        />
-      {/if}
-    </div>
-
-    <div class="flex items-center justify-between">
-      <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium">Default encryption (SSE-S3)</span>
-        <span class="text-sm text-muted-foreground">
-          {#if encryptionQuery.isPending}
-            Loading...
-          {:else if encryptionEnabled}
-            New uploads are encrypted at rest with SSE-S3 (AES-256).
-          {:else}
-            New uploads are stored unencrypted unless the client sends SSE headers.
-          {/if}
-        </span>
-      </div>
-      {#if !encryptionQuery.isPending}
-        <Switch
-          checked={encryptionEnabled}
-          onclick={toggleEncryption}
-          disabled={encryptionMutation.isPending}
-          aria-label="Toggle default encryption"
         />
       {/if}
     </div>
@@ -270,7 +208,7 @@
     description={pendingConfirmation.description}
     confirmLabel={pendingConfirmation.confirmLabel}
     confirmVariant={pendingConfirmation.destructive ? 'destructive' : 'highlighted'}
-    loading={versioningMutation.isPending || encryptionMutation.isPending || publicMutation.isPending}
+    loading={versioningMutation.isPending || publicMutation.isPending}
     onClose={() => (pendingConfirmation = null)}
     onConfirm={pendingConfirmation.action}
   />

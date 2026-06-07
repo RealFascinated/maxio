@@ -4,7 +4,6 @@ export interface Bucket {
   name: string
   createdAt: string
   versioning: boolean
-  encryption: boolean
 }
 
 export interface BucketsResponse { buckets: Bucket[] }

@@ -22,7 +22,6 @@ export const versionKeys = {
 export const settingsKeys = {
   all: ['settings'] as const,
   versioning: (bucket: string) => [...settingsKeys.all, 'versioning', bucket] as const,
-  encryption: (bucket: string) => [...settingsKeys.all, 'encryption', bucket] as const,
   publicAccess: (bucket: string) => [...settingsKeys.all, 'public', bucket] as const,
 }
 

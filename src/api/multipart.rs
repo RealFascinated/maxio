@@ -12,10 +12,7 @@ use crate::server::AppState;
 use crate::storage::{ChecksumAlgorithm, StorageError};
 use crate::xml::{response::to_xml, types::*};
 
-use super::object::{
-    body_to_reader, encryption_from_bucket_default, extract_checksum, extract_customer_key,
-    extract_sse_request, spec_from_request,
-};
+use super::object::{body_to_reader, extract_checksum};
 
 const COMPLETE_BODY_MAX: usize = 1024 * 1024;
 
@@ -35,15 +32,6 @@ pub async fn create_multipart_upload(
         .and_then(|v| v.to_str().ok())
         .and_then(ChecksumAlgorithm::from_header_str);
 
-    // Resolve encryption spec at upload-create time (explicit > bucket default).
-    let mut encryption = extract_sse_request(&headers)?;
-    if encryption.is_none() {
-        if let Ok(Some(cfg)) = state.storage.get_bucket_encryption(&bucket).await {
-            encryption = Some(encryption_from_bucket_default(&cfg));
-        }
-    }
-    let encryption_spec = encryption.as_ref().map(spec_from_request);
-    let applied_mode = encryption.as_ref().map(|e| e.mode.clone());
 
     let upload = state
         .storage
@@ -52,7 +40,6 @@ pub async fn create_multipart_upload(
             &key,
             content_type,
             checksum_algorithm,
-            encryption_spec,
         )
         .await
         .map_err(map_storage_err)?;
@@ -64,19 +51,11 @@ pub async fn create_multipart_upload(
     })
     .map_err(S3Error::internal)?;
 
-    let mut builder = Response::builder()
+    Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", "application/xml");
-    match applied_mode {
-        Some(crate::storage::EncryptionMode::SseS3) => {
-            builder = builder.header("x-amz-server-side-encryption", "AES256");
-        }
-        Some(crate::storage::EncryptionMode::SseC) => {
-            builder = builder.header("x-amz-server-side-encryption-customer-algorithm", "AES256");
-        }
-        None => {}
-    }
-    Ok(builder.body(Body::from(xml)).unwrap())
+        .header("content-type", "application/xml")
+        .body(Body::from(xml))
+        .unwrap())
 }
 
 pub async fn upload_part(
@@ -98,7 +77,6 @@ pub async fn upload_part(
         .map_err(|_| S3Error::invalid_part("invalid part number"))?;
 
     let checksum = extract_checksum(&headers);
-    let customer_key = extract_customer_key(&headers)?;
     let reader = body_to_reader(&headers, body).await?;
     let part = state
         .storage
@@ -108,7 +86,6 @@ pub async fn upload_part(
             part_number,
             reader,
             checksum,
-            customer_key,
         )
         .await
         .map_err(map_storage_err)?;
@@ -126,7 +103,7 @@ pub async fn complete_multipart_upload(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     body: Body,
 ) -> Result<Response<Body>, S3Error> {
     ensure_bucket_exists(&state, &bucket).await?;
@@ -140,12 +117,9 @@ pub async fn complete_multipart_upload(
     let body_str = String::from_utf8_lossy(&bytes);
     let parts = parse_complete_parts(&body_str)?;
 
-    // SSE-C customer key, if the upload was SSE-C, arrives here again.
-    let customer_key = extract_customer_key(&headers)?;
-
     let result = state
         .storage
-        .complete_multipart_upload(&bucket, upload_id, &parts, customer_key)
+        .complete_multipart_upload(&bucket, upload_id, &parts)
         .await
         .map_err(map_storage_err)?;
 
@@ -285,9 +259,6 @@ pub(super) fn map_storage_err(err: StorageError) -> S3Error {
             S3Error::invalid_part(&msg)
         }
         StorageError::InvalidKey(msg) => S3Error::invalid_argument(&msg),
-        StorageError::EncryptionError(msg) => S3Error::invalid_argument(&msg),
-        StorageError::DecryptionError(msg) => S3Error::invalid_argument(&msg),
-        StorageError::IntegrityError(msg) => S3Error::invalid_argument(&msg),
         _ => S3Error::internal(err),
     }
 }

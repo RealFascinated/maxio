@@ -53,10 +53,6 @@ pub async fn handle_bucket_get(
         return super::bucket::get_bucket_cors(state, bucket).await;
     }
 
-    if params.contains_key("encryption") {
-        check_bucket_access(&state, &principal, &bucket, "s3:GetEncryptionConfiguration").await?;
-        return super::bucket::get_bucket_encryption(state, bucket).await;
-    }
 
     if params.contains_key("versions") {
         check_bucket_access(&state, &principal, &bucket, "s3:ListBucketVersions").await?;
