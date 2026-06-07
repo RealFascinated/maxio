@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g. v0.1.0)'
-        required: true
+        description: 'Version to release (e.g. v0.1.0). Defaults to Cargo.toml when omitted.'
+        required: false
         type: string
 
 permissions:
@@ -29,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.resolve.outputs.image_tag }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
       is_release: ${{ steps.resolve.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
@@ -42,15 +43,22 @@ jobs:
             exit 0
           fi
 
-          TAG="${{ github.event.inputs.version || github.ref_name }}"
           VERSION="$(python3 - <<'PYV'
           import tomllib
           with open("Cargo.toml", "rb") as f:
               print(tomllib.load(f)["package"]["version"])
           PYV
           )"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -z "${{ github.event.inputs.version }}" ]]; then
+            TAG="v${VERSION}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
           test "${TAG#v}" = "$VERSION" || { echo "Cargo version $VERSION does not match tag $TAG"; exit 1; }
           echo "image_tag=${VERSION}" >> $GITHUB_OUTPUT
+          echo "release_tag=${TAG}" >> $GITHUB_OUTPUT
           echo "is_release=true" >> $GITHUB_OUTPUT
 
   build:
@@ -242,5 +250,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
           files: '*.tar.gz'
