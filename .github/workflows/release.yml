@@ -20,8 +20,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   GITHUB_REGISTRY: ghcr.io
-  DOCKER_REGISTRY: docker.io
-  IMAGE_NAME: "coollabsio/maxio"
 
 jobs:
   resolve:
@@ -156,13 +154,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to ${{ env.DOCKER_REGISTRY }}
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Build and Push Image (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
@@ -170,9 +161,7 @@ jobs:
           file: Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
-            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
+          tags: ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
 
   docker-manifest:
     name: Docker Manifest
@@ -190,37 +179,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to ${{ env.DOCKER_REGISTRY }}
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Create & publish manifest on ${{ env.GITHUB_REGISTRY }}
+      - name: Create & publish manifest
         run: |
           TAG="${{ needs.resolve.outputs.image_tag }}"
           EXTRA_TAG=""
           if [[ "${{ needs.resolve.outputs.is_release }}" == "true" ]]; then
-            EXTRA_TAG="--tag ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            EXTRA_TAG="--tag ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:latest"
           fi
           docker buildx imagetools create \
-            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-amd64 \
-            ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-aarch64 \
-            --tag ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} \
-            ${EXTRA_TAG}
-
-      - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
-        run: |
-          TAG="${{ needs.resolve.outputs.image_tag }}"
-          EXTRA_TAG=""
-          if [[ "${{ needs.resolve.outputs.is_release }}" == "true" ]]; then
-            EXTRA_TAG="--tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          fi
-          docker buildx imagetools create \
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-amd64 \
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}-aarch64 \
-            --tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} \
+            ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${TAG}-amd64 \
+            ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${TAG}-aarch64 \
+            --tag ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${TAG} \
             ${EXTRA_TAG}
 
   release:
