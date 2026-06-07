@@ -50,11 +50,19 @@ macro_rules! meta_op {
 #[async_trait]
 impl MetadataStore for PgMetadataStore {
     async fn create_bucket(&self, meta: &BucketMeta) -> Result<bool, StorageError> {
-        meta_op!(self, "create_bucket", repos::create_bucket(&self.ctx, meta).await)
+        meta_op!(
+            self,
+            "create_bucket",
+            repos::create_bucket(&self.ctx, meta).await
+        )
     }
 
     async fn head_bucket(&self, name: &str) -> Result<bool, StorageError> {
-        meta_op!(self, "head_bucket", repos::head_bucket(&self.ctx, name).await)
+        meta_op!(
+            self,
+            "head_bucket",
+            repos::head_bucket(&self.ctx, name).await
+        )
     }
 
     async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError> {
@@ -138,7 +146,11 @@ impl MetadataStore for PgMetadataStore {
     }
 
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
-        meta_op!(self, "is_versioned", repos::is_versioned(&self.ctx, bucket).await)
+        meta_op!(
+            self,
+            "is_versioned",
+            repos::is_versioned(&self.ctx, bucket).await
+        )
     }
 
     async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
