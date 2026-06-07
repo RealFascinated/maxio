@@ -83,6 +83,10 @@ pub struct Config {
     /// Writeback flush interval in seconds (MAXIO_CACHE_FLUSH_INTERVAL).
     #[arg(long, env = "MAXIO_CACHE_FLUSH_INTERVAL", default_value = "30")]
     pub cache_flush_interval: u64,
+
+    /// Public S3 base URL for presigned links (MAXIO_PUBLIC_URL), e.g. https://s3.example.com
+    #[arg(long, env = "MAXIO_PUBLIC_URL")]
+    pub public_url: Option<String>,
 }
 
 #[cfg(test)]

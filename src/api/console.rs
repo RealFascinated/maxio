@@ -15,6 +15,7 @@ use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::auth::signature_v4;
+use crate::config::Config;
 use crate::server::AppState;
 use crate::storage::Storage;
 
@@ -973,6 +974,60 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
+/// Scheme + host for presigned URL signing (must match what clients send on GET).
+fn presign_endpoint(headers: &HeaderMap, config: &Config) -> (String, String) {
+    if let Some(base) = config.public_url.as_deref().filter(|s| !s.is_empty()) {
+        if let Ok(uri) = base.parse::<http::Uri>() {
+            let scheme = uri.scheme_str().unwrap_or("https").to_string();
+            if let Some(authority) = uri.authority() {
+                return (
+                    scheme.clone(),
+                    normalize_presign_host(authority.as_str(), &scheme),
+                );
+            }
+        }
+    }
+
+    let scheme = presign_scheme(headers).to_string();
+    let raw_host = headers
+        .get("x-forwarded-host")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| headers.get("host").and_then(|v| v.to_str().ok()))
+        .unwrap_or("localhost:9000");
+
+    let host =
+        if config.allow_insecure_dev && matches!(raw_host, "localhost:5173" | "127.0.0.1:5173") {
+            format!("127.0.0.1:{}", config.port)
+        } else {
+            raw_host.to_string()
+        };
+
+    (scheme.clone(), normalize_presign_host(&host, &scheme))
+}
+
+fn presign_scheme(headers: &HeaderMap) -> &'static str {
+    if headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+    {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+fn normalize_presign_host(host: &str, scheme: &str) -> String {
+    let host = host.split(',').next().unwrap_or(host).trim();
+    if scheme == "https" {
+        host.trim_end_matches(":443").to_string()
+    } else if scheme == "http" {
+        host.trim_end_matches(":80").to_string()
+    } else {
+        host.to_string()
+    }
+}
+
 #[derive(serde::Deserialize)]
 pub struct PresignParams {
     expires: Option<u64>,
@@ -1003,11 +1058,7 @@ pub async fn presign_object(
 
     let expires_secs = params.expires.unwrap_or(3600).min(604800);
 
-    // Determine the host from the request
-    let host = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost:9000");
+    let (scheme, host) = presign_endpoint(&headers, &state.config);
 
     let now = chrono::Utc::now();
     let date_stamp = now.format("%Y%m%d").to_string();
@@ -1069,18 +1120,6 @@ pub async fn presign_object(
     let mut mac = HmacSha256::new_from_slice(&signing_key).unwrap();
     mac.update(string_to_sign.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
-
-    // Determine scheme
-    let scheme = if headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v == "https")
-        .unwrap_or(false)
-    {
-        "https"
-    } else {
-        "http"
-    };
 
     let presigned_url = format!(
         "{}://{}{}?{}&X-Amz-Signature={}",
@@ -1904,6 +1943,22 @@ mod tests {
 
     fn bytes(data: &'static [u8]) -> ByteStream {
         Box::pin(data)
+    }
+
+    #[test]
+    fn normalize_presign_host_strips_default_ports() {
+        assert_eq!(
+            super::normalize_presign_host("s3.example.com:443", "https"),
+            "s3.example.com"
+        );
+        assert_eq!(
+            super::normalize_presign_host("s3.example.com:80", "http"),
+            "s3.example.com"
+        );
+        assert_eq!(
+            super::normalize_presign_host("s3.example.com:9000", "https"),
+            "s3.example.com:9000"
+        );
     }
 
     #[test]

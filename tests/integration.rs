@@ -85,6 +85,7 @@ fn test_config(data_dir: String, database_url: String, default_buckets: &str) ->
         cache_max_size: 10 * 1024 * 1024 * 1024,
         cache_writeback: false,
         cache_flush_interval: 30,
+        public_url: None,
     }
 }
 
@@ -2650,6 +2651,60 @@ async fn test_console_presign_nested_key() {
         resp.status(),
         200,
         "presigned URL for nested key should return 200, got {}",
+        resp.status()
+    );
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), body);
+}
+
+#[tokio::test]
+async fn test_console_presign_uses_forwarded_host() {
+    let base_url = start_server().await;
+
+    s3_request("PUT", &format!("{}/cpresign-proxy", base_url), vec![]).await;
+    let body = b"proxy presign test";
+    s3_request(
+        "PUT",
+        &format!("{}/cpresign-proxy/test.txt", base_url),
+        body.to_vec(),
+    )
+    .await;
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .get(&format!(
+            "{}/api/buckets/cpresign-proxy/presign/test.txt?expires=300",
+            base_url
+        ))
+        .header("Cookie", format!("maxio_session={}", session))
+        .header("X-Forwarded-Host", "cdn.example.com")
+        .header("X-Forwarded-Proto", "https")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let presigned_url = json["url"]
+        .as_str()
+        .expect("response should have url field");
+    assert!(
+        presigned_url.starts_with("https://cdn.example.com/cpresign-proxy/test.txt?"),
+        "unexpected presigned URL: {presigned_url}"
+    );
+
+    let parsed = reqwest::Url::parse(presigned_url).unwrap();
+    let path = parsed.path();
+    let query = parsed.query().expect("presigned URL should have query");
+    let resp = client()
+        .get(format!("{base_url}{path}?{query}"))
+        .header("Host", "cdn.example.com")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "presigned URL behind proxy host should return 200, got {}",
         resp.status()
     );
     assert_eq!(resp.bytes().await.unwrap().as_ref(), body);
