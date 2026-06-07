@@ -26,6 +26,7 @@ jobs:
     name: Resolve image tag
     runs-on: ubuntu-latest
     outputs:
+      image_name: ${{ steps.resolve.outputs.image_name }}
       image_tag: ${{ steps.resolve.outputs.image_tag }}
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       is_release: ${{ steps.resolve.outputs.is_release }}
@@ -35,6 +36,7 @@ jobs:
       - name: Resolve tag
         id: resolve
         run: |
+          echo "image_name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "image_tag=main" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
@@ -161,7 +163,7 @@ jobs:
           file: Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
+          tags: ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch }}
 
   docker-manifest:
     name: Docker Manifest
@@ -184,12 +186,12 @@ jobs:
           TAG="${{ needs.resolve.outputs.image_tag }}"
           EXTRA_TAG=""
           if [[ "${{ needs.resolve.outputs.is_release }}" == "true" ]]; then
-            EXTRA_TAG="--tag ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:latest"
+            EXTRA_TAG="--tag ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:latest"
           fi
           docker buildx imagetools create \
-            ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${TAG}-amd64 \
-            ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${TAG}-aarch64 \
-            --tag ${{ env.GITHUB_REGISTRY }}/${{ github.repository }}:${TAG} \
+            ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:${TAG}-amd64 \
+            ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:${TAG}-aarch64 \
+            --tag ${{ env.GITHUB_REGISTRY }}/${{ needs.resolve.outputs.image_name }}:${TAG} \
             ${EXTRA_TAG}
 
   release:
