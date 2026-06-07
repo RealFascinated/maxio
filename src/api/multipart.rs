@@ -168,7 +168,7 @@ pub async fn list_parts(
     let upload = uploads
         .into_iter()
         .find(|u| u.upload_id == *upload_id)
-        .ok_or_else(|| S3Error::invalid_argument("upload not found"))?;
+        .ok_or_else(|| S3Error::no_such_upload(upload_id))?;
 
     let (parts, _) = state
         .storage

@@ -816,6 +816,7 @@ pub async fn delete_object(
             .await;
     }
 
+    multipart::ensure_bucket_exists(&state, &bucket).await?;
     check_object_access(&state, &principal, &bucket, &key, "s3:DeleteObject").await?;
 
     // Permanent version deletion
@@ -889,6 +890,7 @@ pub async fn delete_objects(
 ) -> Result<Response<Body>, S3Error> {
     let principal = get_principal(req.extensions());
     let body = req.into_body();
+    multipart::ensure_bucket_exists(&state, &bucket).await?;
     check_bucket_access(&state, &principal, &bucket, "s3:DeleteObject").await?;
 
     let bytes = axum::body::to_bytes(body, DELETE_BODY_MAX)

@@ -641,6 +641,9 @@ async fn backup_existing(path: &Path) -> Result<Option<PathBuf>, StorageError> {
     if !fs::try_exists(path).await? {
         return Ok(None);
     }
+    if !fs::metadata(path).await?.is_file() {
+        return Ok(None);
+    }
     let backup = temp_sibling_path(path);
     fs::rename(path, &backup).await?;
     Ok(Some(backup))
