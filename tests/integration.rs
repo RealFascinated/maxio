@@ -1051,6 +1051,50 @@ async fn test_list_objects() {
     assert!(body.contains("<KeyCount>2</KeyCount>"));
 }
 
+#[tokio::test]
+async fn test_list_objects_v2_empty_delimiter() {
+    // mcli rm -r sends delimiter= (empty) for flat recursive listing.
+    let base_url = start_server().await;
+
+    s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/mybucket/nested/a.txt", base_url),
+        b"aaa".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/mybucket/b.txt", base_url),
+        b"bbb".to_vec(),
+    )
+    .await;
+
+    let resp = s3_request(
+        "GET",
+        &format!(
+            "{}/mybucket?list-type=2&delimiter=&encoding-type=url&fetch-owner=true&prefix=",
+            base_url
+        ),
+        vec![],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("<Key>nested/a.txt</Key>"),
+        "body: {}",
+        body
+    );
+    assert!(body.contains("<Key>b.txt</Key>"), "body: {}", body);
+    assert!(body.contains("<KeyCount>2</KeyCount>"), "body: {}", body);
+    assert!(
+        !body.contains("<CommonPrefixes>"),
+        "empty delimiter must not produce common prefixes: {}",
+        body
+    );
+}
+
 // ---- New tests for findings ----
 
 #[tokio::test]

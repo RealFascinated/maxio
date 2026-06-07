@@ -100,7 +100,10 @@ async fn list_objects_v2(
 ) -> Result<Response<Body>, S3Error> {
     check_bucket_access(&state, &principal, &bucket, "s3:ListBucket").await?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
-    let delimiter = params.get("delimiter").cloned();
+    let delimiter = params
+        .get("delimiter")
+        .cloned()
+        .filter(|d| !d.is_empty());
     let max_keys = parse_max_keys(&params)?;
     let start_after = params.get("start-after").cloned();
     let continuation_token = params.get("continuation-token").cloned();
@@ -163,7 +166,10 @@ async fn list_objects_v1(
 ) -> Result<Response<Body>, S3Error> {
     check_bucket_access(&state, &principal, &bucket, "s3:ListBucket").await?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
-    let delimiter = params.get("delimiter").cloned();
+    let delimiter = params
+        .get("delimiter")
+        .cloned()
+        .filter(|d| !d.is_empty());
     let max_keys = parse_max_keys(&params)?;
     let marker = params.get("marker").cloned();
 
