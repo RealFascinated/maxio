@@ -8,9 +8,27 @@ use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    BucketAuthSnapshot, PutBucketContext, db_err, encode_grantee, format_ts, get_conn,
+    AclGrantRow, BucketAuthSnapshot, PutBucketContext, db_err, encode_grantee, format_ts, get_conn,
     grants_to_acl, permission_to_db, resolve_bucket_id,
 };
+
+type BucketListRow = (
+    Uuid,
+    String,
+    chrono::DateTime<Utc>,
+    String,
+    bool,
+    String,
+    String,
+);
+
+type CorsRuleRow = (
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Option<i32>,
+);
 
 pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, StorageError> {
     validate_bucket_name(&meta.name)?;
@@ -124,15 +142,7 @@ pub async fn delete_bucket(ctx: &DbContext, name: &str) -> Result<bool, StorageE
 
 pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-    let rows: Vec<(
-        Uuid,
-        String,
-        chrono::DateTime<Utc>,
-        String,
-        bool,
-        String,
-        String,
-    )> = buckets::table
+    let rows: Vec<BucketListRow> = buckets::table
         .select((
             buckets::id,
             buckets::name,
@@ -401,13 +411,7 @@ async fn load_bucket_auth_parts(
         .optional()
         .map_err(db_err)?;
 
-    let acl_rows: Vec<(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-    )> = bucket_acl_grants::table
+    let acl_rows: Vec<AclGrantRow> = bucket_acl_grants::table
         .filter(bucket_acl_grants::bucket_id.eq(bucket_id))
         .select((
             bucket_acl_grants::grantee_type,
@@ -442,13 +446,7 @@ async fn load_bucket_meta_parts(
     let (policy, acl) =
         load_bucket_auth_parts(conn, bucket_id, &owner_id, &owner_display_name).await?;
 
-    let cors_rows: Vec<(
-        Vec<String>,
-        Vec<String>,
-        Vec<String>,
-        Vec<String>,
-        Option<i32>,
-    )> = bucket_cors_rules::table
+    let cors_rows: Vec<CorsRuleRow> = bucket_cors_rules::table
         .filter(bucket_cors_rules::bucket_id.eq(bucket_id))
         .select((
             bucket_cors_rules::allowed_origins,

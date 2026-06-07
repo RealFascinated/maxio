@@ -17,6 +17,15 @@ use uuid::Uuid;
 use super::{db_err, format_ts, get_conn, parse_ts};
 use crate::storage::StorageError;
 
+type ManagedPolicyStatementRow = (
+    Option<String>,
+    String,
+    Vec<String>,
+    Vec<String>,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+);
+
 pub struct IamRepo {
     pool: DbPool,
 }
@@ -675,14 +684,7 @@ async fn load_managed_policy_document(
     conn: &mut diesel_async::AsyncPgConnection,
     policy_name: &str,
 ) -> Result<PolicyDocumentRaw, StorageError> {
-    let rows: Vec<(
-        Option<String>,
-        String,
-        Vec<String>,
-        Vec<String>,
-        Option<serde_json::Value>,
-        Option<serde_json::Value>,
-    )> = iam_managed_policy_statements::table
+    let rows: Vec<ManagedPolicyStatementRow> = iam_managed_policy_statements::table
         .filter(iam_managed_policy_statements::policy_name.eq(policy_name))
         .select((
             iam_managed_policy_statements::sid,

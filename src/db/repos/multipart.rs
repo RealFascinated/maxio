@@ -9,6 +9,23 @@ use super::{
     checksum_from_db, checksum_to_db, db_err, format_ts, get_conn, parse_ts, resolve_bucket_id,
 };
 
+type PartRow = (
+    i32,
+    String,
+    i64,
+    chrono::DateTime<Utc>,
+    Option<String>,
+    Option<String>,
+);
+
+type MultipartUploadListRow = (
+    String,
+    String,
+    String,
+    chrono::DateTime<Utc>,
+    Option<String>,
+);
+
 pub async fn insert_multipart_upload(
     ctx: &DbContext,
     meta: &MultipartUploadMeta,
@@ -136,14 +153,7 @@ pub async fn list_parts(
     let meta = get_multipart_upload(ctx, upload_id).await?;
     let mut conn = get_conn(ctx.pool()).await?;
 
-    let rows: Vec<(
-        i32,
-        String,
-        i64,
-        chrono::DateTime<Utc>,
-        Option<String>,
-        Option<String>,
-    )> = multipart_parts::table
+    let rows: Vec<PartRow> = multipart_parts::table
         .filter(multipart_parts::upload_id.eq(upload_id))
         .order(multipart_parts::part_number.asc())
         .select((
@@ -182,13 +192,7 @@ pub async fn list_multipart_uploads(
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
-    let rows: Vec<(
-        String,
-        String,
-        String,
-        chrono::DateTime<Utc>,
-        Option<String>,
-    )> = multipart_uploads::table
+    let rows: Vec<MultipartUploadListRow> = multipart_uploads::table
         .filter(multipart_uploads::bucket_id.eq(bucket_id))
         .order(multipart_uploads::initiated.asc())
         .select((

@@ -10,9 +10,9 @@ use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    PutBucketContext, checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts,
-    get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
-    resolve_bucket_id,
+    AclGrantRow, PutBucketContext, checksum_from_db, checksum_to_db, db_err, encode_grantee,
+    format_ts, get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db,
+    permission_to_db, resolve_bucket_id,
 };
 
 fn object_has_side_tables(meta: &ObjectMeta) -> bool {
@@ -295,13 +295,7 @@ pub(crate) async fn row_into_meta(
         .await
         .map_err(db_err)?;
 
-    let acl_rows: Vec<(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-    )> = object_acl_grants::table
+    let acl_rows: Vec<AclGrantRow> = object_acl_grants::table
         .filter(object_acl_grants::object_id.eq(row.id))
         .select((
             object_acl_grants::grantee_type,

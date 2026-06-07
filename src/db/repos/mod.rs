@@ -21,6 +21,14 @@ use chrono::{DateTime, Utc};
 use diesel_async::AsyncPgConnection;
 use uuid::Uuid;
 
+pub(crate) type AclGrantRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
 pub(crate) async fn get_conn(
     pool: &DbPool,
 ) -> Result<impl std::ops::DerefMut<Target = AsyncPgConnection> + Send, StorageError> {
@@ -120,13 +128,7 @@ pub(crate) fn decode_grantee(
 pub(crate) fn grants_to_acl(
     owner_id: &str,
     owner_display_name: &str,
-    rows: &[(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-    )],
+    rows: &[AclGrantRow],
 ) -> Result<Acl, StorageError> {
     let grants = rows
         .iter()

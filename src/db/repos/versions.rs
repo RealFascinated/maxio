@@ -12,8 +12,9 @@ use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts, get_conn, grants_to_acl,
-    parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db, resolve_bucket_id,
+    AclGrantRow, checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts, get_conn,
+    grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
+    resolve_bucket_id,
 };
 
 pub async fn insert_version(
@@ -318,13 +319,7 @@ async fn version_row_into_meta(
         .await
         .map_err(db_err)?;
 
-    let acl_rows: Vec<(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-    )> = object_version_acl_grants::table
+    let acl_rows: Vec<AclGrantRow> = object_version_acl_grants::table
         .filter(object_version_acl_grants::object_version_id.eq(row.id))
         .select((
             object_version_acl_grants::grantee_type,
