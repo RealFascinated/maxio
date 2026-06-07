@@ -122,10 +122,8 @@ impl MetricsRegistry {
         let uptime = prometheus::Gauge::new("maxio_uptime_seconds", "Server uptime in seconds")?;
         registry.register(Box::new(uptime.clone()))?;
 
-        let cache_hits = prometheus::Counter::new(
-            "maxio_cache_hits_total",
-            "Object read cache hits",
-        )?;
+        let cache_hits =
+            prometheus::Counter::new("maxio_cache_hits_total", "Object read cache hits")?;
         registry.register(Box::new(cache_hits.clone()))?;
 
         let cache_misses = prometheus::Counter::new(
@@ -253,7 +251,8 @@ impl MetricsRegistry {
     }
 
     pub fn set_cache_writeback_halted(&self, halted: bool) {
-        self.cache_writeback_halted.set(if halted { 1.0 } else { 0.0 });
+        self.cache_writeback_halted
+            .set(if halted { 1.0 } else { 0.0 });
     }
 
     pub fn record_cache_flush(&self, success: bool, bytes: u64, elapsed: Duration) {
@@ -323,7 +322,8 @@ impl MetricsRegistry {
         let process = read_raw_process_metrics().map(|raw| ProcessSnapshot {
             resident_memory_bytes: raw.resident_memory_bytes,
             virtual_memory_bytes: raw.virtual_memory_bytes,
-            cpu_usage_percent: self.process_cpu_usage_percent(raw.cpu_seconds_total, uptime_seconds),
+            cpu_usage_percent: self
+                .process_cpu_usage_percent(raw.cpu_seconds_total, uptime_seconds),
             open_fds: raw.open_fds,
             max_fds: raw.max_fds,
         });

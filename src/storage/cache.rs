@@ -2,8 +2,8 @@ use super::StorageError;
 use crate::metrics::MetricsRegistry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::Mutex;
@@ -137,7 +137,11 @@ impl CacheLayer {
     fn path_to_object_key(&self, path: &Path) -> Option<(String, String)> {
         let rel = path.strip_prefix(&self.buckets_dir).ok()?;
         let mut components = rel.components();
-        let bucket = components.next()?.as_os_str().to_string_lossy().into_owned();
+        let bucket = components
+            .next()?
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned();
         let rest: PathBuf = components.collect();
         if rest.ends_with(".folder") {
             let key = format!("{}/", rest.parent()?.display());
@@ -283,10 +287,16 @@ impl CacheLayer {
             let cache_path = self.object_path(&bucket, &key);
             let data_path = super::blob::object_path_in(&self.data_buckets_dir, &bucket, &key);
             if !fs::try_exists(&cache_path).await.unwrap_or(false) {
-                self.dirty.lock().await.remove(&(bucket.clone(), key.clone()));
+                self.dirty
+                    .lock()
+                    .await
+                    .remove(&(bucket.clone(), key.clone()));
                 continue;
             }
-            let size = fs::metadata(&cache_path).await.map_err(StorageError::Io)?.len();
+            let size = fs::metadata(&cache_path)
+                .await
+                .map_err(StorageError::Io)?
+                .len();
             if let Some(parent) = data_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent).await {
                     tracing::error!(

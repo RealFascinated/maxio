@@ -188,7 +188,10 @@ impl BlobStorage {
         if let Some(cache) = &self.cache {
             let cache_path = cache.object_path(bucket, key);
             if fs::try_exists(&cache_path).await.unwrap_or(false) {
-                let size = fs::metadata(&cache_path).await.map_err(StorageError::Io)?.len();
+                let size = fs::metadata(&cache_path)
+                    .await
+                    .map_err(StorageError::Io)?
+                    .len();
                 cache.record_read_hit(bucket, key, size).await;
                 return Ok(cache_path);
             }
@@ -200,7 +203,10 @@ impl BlobStorage {
         }
 
         if let Some(cache) = &self.cache {
-            let size = fs::metadata(&data_path).await.map_err(StorageError::Io)?.len();
+            let size = fs::metadata(&data_path)
+                .await
+                .map_err(StorageError::Io)?
+                .len();
             return cache
                 .populate_from_data(bucket, key, &data_path, size)
                 .await;
@@ -377,9 +383,7 @@ impl BlobStorage {
             let data = fs::read(&obj_path).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
         }
-        let file = fs::File::open(&obj_path)
-            .await
-            .map_err(StorageError::Io)?;
+        let file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
         Ok(Box::pin(BufReader::with_capacity(IO_BUFFER_SIZE, file)))
     }
 
@@ -393,9 +397,7 @@ impl BlobStorage {
     ) -> Result<ByteStream, StorageError> {
         let obj_path = self.resolve_read_path(bucket, key).await?;
         if length <= SMALL_OBJECT_THRESHOLD {
-            let mut file = fs::File::open(&obj_path)
-                .await
-                .map_err(StorageError::Io)?;
+            let mut file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
             file.seek(std::io::SeekFrom::Start(offset))
                 .await
                 .map_err(StorageError::Io)?;
@@ -403,9 +405,7 @@ impl BlobStorage {
             file.read_exact(&mut data).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
         }
-        let mut file = fs::File::open(&obj_path)
-            .await
-            .map_err(StorageError::Io)?;
+        let mut file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
         file.seek(std::io::SeekFrom::Start(offset))
             .await
             .map_err(StorageError::Io)?;
@@ -656,10 +656,11 @@ impl BlobStorage {
         }
         fs::copy(&ver_data, &obj_path).await?;
         if let Some(cache) = &self.cache {
-            let size = fs::metadata(&obj_path).await.map_err(StorageError::Io)?.len();
-            let _ = cache
-                .populate_from_data(bucket, key, &obj_path, size)
-                .await;
+            let size = fs::metadata(&obj_path)
+                .await
+                .map_err(StorageError::Io)?
+                .len();
+            let _ = cache.populate_from_data(bucket, key, &obj_path, size).await;
         }
         Ok(())
     }
