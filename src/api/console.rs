@@ -1850,6 +1850,7 @@ mod tests {
 
     use crate::storage::blob::BlobStorage;
     use crate::storage::{BucketMeta, ByteStream, MetadataStore, ObjectStorage, PgMetadataStore};
+    use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
 
@@ -1861,7 +1862,7 @@ mod tests {
         (Arc<dyn Storage>, testcontainers::ContainerAsync<Postgres>),
         Box<dyn std::error::Error>,
     > {
-        let postgres = Postgres::default().start().await?;
+        let postgres = Postgres::default().with_tag("18-alpine").start().await?;
         let port = postgres.get_host_port_ipv4(5432).await?;
         let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
         crate::db::run_migrations(&database_url).await?;

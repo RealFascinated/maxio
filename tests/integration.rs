@@ -12,6 +12,7 @@ use maxio::storage::blob::BlobStorage;
 use maxio::storage::{MetadataStore, ObjectStorage, PgMetadataStore, Storage};
 use std::sync::Arc;
 use tempfile::TempDir;
+use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
@@ -57,7 +58,11 @@ impl std::fmt::Display for ServerHandle {
 }
 
 async fn start_postgres() -> (testcontainers::ContainerAsync<Postgres>, String) {
-    let postgres = Postgres::default().start().await.unwrap();
+    let postgres = Postgres::default()
+        .with_tag("18-alpine")
+        .start()
+        .await
+        .unwrap();
     let port = postgres.get_host_port_ipv4(5432).await.unwrap();
     let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     (postgres, database_url)
