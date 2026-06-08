@@ -11,6 +11,8 @@
   import Plus from 'lucide-svelte/icons/plus'
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import Settings from 'lucide-svelte/icons/settings'
+  import Search from 'lucide-svelte/icons/search'
+  import X from 'lucide-svelte/icons/x'
   import { toast } from '$lib/toast'
   import { bucketKeys } from '$lib/api/keys'
   import { createBucket as createBucketApi, deleteBucket as deleteBucketApi, listBuckets } from '$lib/api/buckets'
@@ -28,6 +30,7 @@
   let newBucketName = $state('')
   let bucketToDelete = $state<string | null>(null)
   let createBucketInput = $state<HTMLInputElement | null>(null)
+  let searchInput = $state('')
 
   $effect(() => {
     if (showCreate && createBucketInput) {
@@ -39,6 +42,13 @@
     queryKey: bucketKeys.list(),
     queryFn: listBuckets,
   }))
+
+  const allBuckets = $derived(bucketsQuery.data?.buckets ?? [])
+  const filteredBuckets = $derived.by(() => {
+    const q = searchInput.trim().toLowerCase()
+    if (!q) return allBuckets
+    return allBuckets.filter((bucket) => bucket.name.toLowerCase().includes(q))
+  })
 
   function formatSize(bytes: number): string {
     if (bytes === 0) return '0 B'
@@ -122,7 +132,7 @@
     <Callout type="danger">{bucketsQuery.error instanceof ApiError ? bucketsQuery.error.message : 'Failed to load buckets'}</Callout>
   {:else if bucketsQuery.isPending}
     <p class="text-sm text-muted-foreground">Loading...</p>
-  {:else if (bucketsQuery.data?.buckets ?? []).length === 0 && !bucketsQuery.isError}
+  {:else if allBuckets.length === 0}
     <Callout type="info">
       <div class="flex flex-col gap-3">
         <span class="inline-flex items-center gap-2">
@@ -138,6 +148,35 @@
       </div>
     </Callout>
   {:else}
+    <div class="relative max-w-sm">
+      <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        type="search"
+        placeholder="Filter buckets…"
+        class="h-8 pl-8 pr-8"
+        bind:value={searchInput}
+        aria-label="Filter buckets by name"
+      />
+      {#if searchInput}
+        <button
+          type="button"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+          onclick={() => (searchInput = '')}
+          aria-label="Clear filter"
+        >
+          <X class="size-4" />
+        </button>
+      {/if}
+    </div>
+
+    {#if filteredBuckets.length === 0}
+      <Callout type="info">
+        <span class="inline-flex items-center gap-2">
+          <Search class="size-4 opacity-70" />
+          No buckets matching &ldquo;{searchInput.trim()}&rdquo;.
+        </span>
+      </Callout>
+    {:else}
     <Table.Root>
       <Table.Header>
         <Table.Row>
@@ -150,7 +189,7 @@
         </Table.Row>
       </Table.Header>
       <Table.Body>
-        {#each bucketsQuery.data?.buckets ?? [] as bucket}
+        {#each filteredBuckets as bucket}
           <Table.Row class="cursor-pointer" onclick={() => onSelect(bucket.name)}>
             <Table.Cell class="font-medium">{bucket.name}</Table.Cell>
             <Table.Cell class="text-muted-foreground tabular-nums">
@@ -197,6 +236,7 @@
         {/each}
       </Table.Body>
     </Table.Root>
+    {/if}
   {/if}
 </div>
 
