@@ -676,7 +676,9 @@ fn write_string(buf: &mut Vec<u8>, value: &[u8], max_len: usize) -> io::Result<(
     Ok(())
 }
 
-fn decode_index(data: &[u8]) -> io::Result<(Vec<(String, String, u64)>, HashSet<ObjectKey>)> {
+type IndexEntries = (Vec<(String, String, u64)>, HashSet<ObjectKey>);
+
+fn decode_index(data: &[u8]) -> io::Result<IndexEntries> {
     let mut offset = 0;
     let magic = read_bytes(data, &mut offset, 4)?;
     if magic != INDEX_MAGIC {
