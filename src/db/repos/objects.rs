@@ -385,13 +385,19 @@ async fn replace_object_tags(
         .map_err(db_err)?;
 
     if let Some(tags) = tags {
-        for (tag_key, tag_value) in tags {
+        if !tags.is_empty() {
+            let rows: Vec<_> = tags
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        object_tags::object_id.eq(object_id),
+                        object_tags::tag_key.eq(k.as_str()),
+                        object_tags::tag_value.eq(v.as_str()),
+                    )
+                })
+                .collect();
             diesel::insert_into(object_tags::table)
-                .values((
-                    object_tags::object_id.eq(object_id),
-                    object_tags::tag_key.eq(tag_key),
-                    object_tags::tag_value.eq(tag_value),
-                ))
+                .values(rows)
                 .execute(conn)
                 .await
                 .map_err(db_err)?;
@@ -411,18 +417,25 @@ async fn replace_object_acl(
         .map_err(db_err)?;
 
     if let Some(acl) = acl {
-        for grant in &acl.grants {
-            let (gt, gid, guri, gdn) = encode_grantee(&grant.grantee);
+        if !acl.grants.is_empty() {
+            let rows: Vec<_> = acl
+                .grants
+                .iter()
+                .map(|grant| {
+                    let (gt, gid, guri, gdn) = encode_grantee(&grant.grantee);
+                    (
+                        object_acl_grants::id.eq(Uuid::new_v4()),
+                        object_acl_grants::object_id.eq(object_id),
+                        object_acl_grants::grantee_type.eq(gt),
+                        object_acl_grants::grantee_id.eq(gid),
+                        object_acl_grants::grantee_uri.eq(guri),
+                        object_acl_grants::grantee_display_name.eq(gdn),
+                        object_acl_grants::permission.eq(permission_to_db(grant.permission)),
+                    )
+                })
+                .collect();
             diesel::insert_into(object_acl_grants::table)
-                .values((
-                    object_acl_grants::id.eq(Uuid::new_v4()),
-                    object_acl_grants::object_id.eq(object_id),
-                    object_acl_grants::grantee_type.eq(gt),
-                    object_acl_grants::grantee_id.eq(gid),
-                    object_acl_grants::grantee_uri.eq(guri),
-                    object_acl_grants::grantee_display_name.eq(gdn),
-                    object_acl_grants::permission.eq(permission_to_db(grant.permission)),
-                ))
+                .values(rows)
                 .execute(conn)
                 .await
                 .map_err(db_err)?;

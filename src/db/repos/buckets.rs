@@ -489,17 +489,23 @@ async fn replace_cors_rules(
         .await
         .map_err(db_err)?;
 
-    for rule in rules {
+    if !rules.is_empty() {
+        let rows: Vec<_> = rules
+            .iter()
+            .map(|rule| {
+                (
+                    bucket_cors_rules::id.eq(Uuid::new_v4()),
+                    bucket_cors_rules::bucket_id.eq(bucket_id),
+                    bucket_cors_rules::allowed_origins.eq(&rule.allowed_origins),
+                    bucket_cors_rules::allowed_methods.eq(&rule.allowed_methods),
+                    bucket_cors_rules::allowed_headers.eq(&rule.allowed_headers),
+                    bucket_cors_rules::expose_headers.eq(&rule.expose_headers),
+                    bucket_cors_rules::max_age_seconds.eq(rule.max_age_seconds.map(|v| v as i32)),
+                )
+            })
+            .collect();
         diesel::insert_into(bucket_cors_rules::table)
-            .values((
-                bucket_cors_rules::id.eq(Uuid::new_v4()),
-                bucket_cors_rules::bucket_id.eq(bucket_id),
-                bucket_cors_rules::allowed_origins.eq(&rule.allowed_origins),
-                bucket_cors_rules::allowed_methods.eq(&rule.allowed_methods),
-                bucket_cors_rules::allowed_headers.eq(&rule.allowed_headers),
-                bucket_cors_rules::expose_headers.eq(&rule.expose_headers),
-                bucket_cors_rules::max_age_seconds.eq(rule.max_age_seconds.map(|v| v as i32)),
-            ))
+            .values(rows)
             .execute(conn)
             .await
             .map_err(db_err)?;
@@ -517,18 +523,25 @@ async fn replace_bucket_acl(
         .await
         .map_err(db_err)?;
 
-    for grant in &acl.grants {
-        let (gt, gid, guri, gdn) = encode_grantee(&grant.grantee);
+    if !acl.grants.is_empty() {
+        let rows: Vec<_> = acl
+            .grants
+            .iter()
+            .map(|grant| {
+                let (gt, gid, guri, gdn) = encode_grantee(&grant.grantee);
+                (
+                    bucket_acl_grants::id.eq(Uuid::new_v4()),
+                    bucket_acl_grants::bucket_id.eq(bucket_id),
+                    bucket_acl_grants::grantee_type.eq(gt),
+                    bucket_acl_grants::grantee_id.eq(gid),
+                    bucket_acl_grants::grantee_uri.eq(guri),
+                    bucket_acl_grants::grantee_display_name.eq(gdn),
+                    bucket_acl_grants::permission.eq(permission_to_db(grant.permission)),
+                )
+            })
+            .collect();
         diesel::insert_into(bucket_acl_grants::table)
-            .values((
-                bucket_acl_grants::id.eq(Uuid::new_v4()),
-                bucket_acl_grants::bucket_id.eq(bucket_id),
-                bucket_acl_grants::grantee_type.eq(gt),
-                bucket_acl_grants::grantee_id.eq(gid),
-                bucket_acl_grants::grantee_uri.eq(guri),
-                bucket_acl_grants::grantee_display_name.eq(gdn),
-                bucket_acl_grants::permission.eq(permission_to_db(grant.permission)),
-            ))
+            .values(rows)
             .execute(conn)
             .await
             .map_err(db_err)?;

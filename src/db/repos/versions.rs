@@ -529,13 +529,19 @@ async fn replace_version_tags(
     .map_err(db_err)?;
 
     if let Some(tags) = tags {
-        for (tag_key, tag_value) in tags {
+        if !tags.is_empty() {
+            let rows: Vec<_> = tags
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        object_version_tags::object_version_id.eq(version_id),
+                        object_version_tags::tag_key.eq(k.as_str()),
+                        object_version_tags::tag_value.eq(v.as_str()),
+                    )
+                })
+                .collect();
             diesel::insert_into(object_version_tags::table)
-                .values((
-                    object_version_tags::object_version_id.eq(version_id),
-                    object_version_tags::tag_key.eq(tag_key),
-                    object_version_tags::tag_value.eq(tag_value),
-                ))
+                .values(rows)
                 .execute(conn)
                 .await
                 .map_err(db_err)?;
@@ -558,18 +564,26 @@ async fn replace_version_acl(
     .map_err(db_err)?;
 
     if let Some(acl) = acl {
-        for grant in &acl.grants {
-            let (gt, gid, guri, gdn) = encode_grantee(&grant.grantee);
+        if !acl.grants.is_empty() {
+            let rows: Vec<_> = acl
+                .grants
+                .iter()
+                .map(|grant| {
+                    let (gt, gid, guri, gdn) = encode_grantee(&grant.grantee);
+                    (
+                        object_version_acl_grants::id.eq(Uuid::new_v4()),
+                        object_version_acl_grants::object_version_id.eq(version_id),
+                        object_version_acl_grants::grantee_type.eq(gt),
+                        object_version_acl_grants::grantee_id.eq(gid),
+                        object_version_acl_grants::grantee_uri.eq(guri),
+                        object_version_acl_grants::grantee_display_name.eq(gdn),
+                        object_version_acl_grants::permission
+                            .eq(permission_to_db(grant.permission)),
+                    )
+                })
+                .collect();
             diesel::insert_into(object_version_acl_grants::table)
-                .values((
-                    object_version_acl_grants::id.eq(Uuid::new_v4()),
-                    object_version_acl_grants::object_version_id.eq(version_id),
-                    object_version_acl_grants::grantee_type.eq(gt),
-                    object_version_acl_grants::grantee_id.eq(gid),
-                    object_version_acl_grants::grantee_uri.eq(guri),
-                    object_version_acl_grants::grantee_display_name.eq(gdn),
-                    object_version_acl_grants::permission.eq(permission_to_db(grant.permission)),
-                ))
+                .values(rows)
                 .execute(conn)
                 .await
                 .map_err(db_err)?;

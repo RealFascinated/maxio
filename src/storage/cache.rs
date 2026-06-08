@@ -320,17 +320,17 @@ impl CacheLayer {
         for (bucket, key) in dirty_keys {
             let cache_path = self.object_path(&bucket, &key);
             let data_path = super::blob::object_path_in(&self.data_buckets_dir, &bucket, &key);
-            if !fs::try_exists(&cache_path).await.unwrap_or(false) {
-                self.dirty
-                    .lock()
-                    .await
-                    .remove(&(bucket.clone(), key.clone()));
-                continue;
-            }
-            let size = fs::metadata(&cache_path)
-                .await
-                .map_err(StorageError::Io)?
-                .len();
+            let size = match fs::metadata(&cache_path).await {
+                Ok(m) => m.len(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    self.dirty
+                        .lock()
+                        .await
+                        .remove(&(bucket.clone(), key.clone()));
+                    continue;
+                }
+                Err(e) => return Err(StorageError::Io(e)),
+            };
             if fs::try_exists(&data_path).await.unwrap_or(false) {
                 let data_size = fs::metadata(&data_path)
                     .await

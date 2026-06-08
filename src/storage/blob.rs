@@ -190,37 +190,34 @@ impl BlobStorage {
     ) -> Result<PathBuf, StorageError> {
         if let Some(cache) = &self.cache {
             let cache_path = cache.object_path(bucket, key);
-            if fs::try_exists(&cache_path).await.unwrap_or(false) {
-                let cache_size = fs::metadata(&cache_path)
-                    .await
-                    .map_err(StorageError::Io)?
-                    .len();
-                if cache_size == expected_size {
-                    cache.record_read_hit(bucket, key, cache_size).await;
+            match fs::metadata(&cache_path).await {
+                Ok(m) if m.len() == expected_size => {
+                    cache.record_read_hit(bucket, key, expected_size).await;
                     return Ok(cache_path);
                 }
-                // Partial/stale cache file from an interrupted write — drop and fall back.
-                let _ = fs::remove_file(&cache_path).await;
-                cache.remove_entry(bucket, key).await;
+                Ok(_) => {
+                    // Partial/stale cache file from an interrupted write — drop and fall back.
+                    let _ = fs::remove_file(&cache_path).await;
+                    cache.remove_entry(bucket, key).await;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {}
             }
         }
 
         let data_path = self.object_path(bucket, key);
-        if !fs::try_exists(&data_path).await.unwrap_or(false) {
-            return Err(StorageError::NotFound(key.to_string()));
-        }
-
-        let data_size = fs::metadata(&data_path)
-            .await
-            .map_err(StorageError::Io)?
-            .len();
-        if data_size != expected_size {
-            return Err(StorageError::NotFound(key.to_string()));
+        match fs::metadata(&data_path).await {
+            Ok(m) if m.len() == expected_size => {}
+            Ok(_) => return Err(StorageError::NotFound(key.to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StorageError::NotFound(key.to_string()));
+            }
+            Err(e) => return Err(StorageError::Io(e)),
         }
 
         if let Some(cache) = &self.cache {
             return cache
-                .populate_from_data(bucket, key, &data_path, data_size)
+                .populate_from_data(bucket, key, &data_path, expected_size)
                 .await;
         }
 
