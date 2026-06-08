@@ -273,6 +273,7 @@ start_maxio() {
         --port "$MAXIO_PORT" \
         --database-url "$MAXIO_DATABASE_URL" \
         --allow-insecure-dev \
+        --async-meta-write \
         >"$MAXIO_LOG" 2>&1 &
     MAXIO_PID=$!
     wait_for_health "http://$BENCH_HOST:$MAXIO_PORT/readyz" "MaxIO" "$MAXIO_LOG" "$MAXIO_PID" || exit 1
