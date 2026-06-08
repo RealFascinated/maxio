@@ -679,6 +679,7 @@ pub async fn delete_bucket_api(
 }
 
 const CONSOLE_LIST_PAGE_SIZE: usize = 200;
+const CONSOLE_SEARCH_MAX_LEN: usize = 256;
 
 #[derive(serde::Deserialize)]
 pub struct ListObjectsParams {
@@ -686,6 +687,17 @@ pub struct ListObjectsParams {
     delimiter: Option<String>,
     start_after: Option<String>,
     max_keys: Option<usize>,
+    q: Option<String>,
+}
+
+fn console_list_file_json(obj: &crate::storage::ObjectMeta) -> serde_json::Value {
+    serde_json::json!({
+        "key": obj.key,
+        "size": obj.size,
+        "lastModified": obj.last_modified,
+        "etag": obj.etag,
+        "contentType": obj.content_type,
+    })
 }
 
 pub async fn list_objects(
@@ -719,10 +731,27 @@ pub async fn list_objects(
     let prefix = params.prefix.unwrap_or_default();
     let delimiter = params.delimiter.unwrap_or_else(|| "/".to_string());
     let max_keys = params.max_keys.unwrap_or(CONSOLE_LIST_PAGE_SIZE).max(1);
+    let search = params.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    if let Some(q) = search {
+        if q.len() > CONSOLE_SEARCH_MAX_LEN {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Search query too long"})),
+            )
+                .into_response();
+        }
+    }
 
     let page = match state
         .storage
-        .list_objects_page(&bucket, &prefix, params.start_after.as_deref(), max_keys)
+        .list_objects_page(
+            &bucket,
+            &prefix,
+            params.start_after.as_deref(),
+            max_keys,
+            search,
+        )
         .await
     {
         Ok(page) => page,
@@ -737,24 +766,20 @@ pub async fn list_objects(
 
     let mut files = Vec::new();
     let mut prefix_set = BTreeSet::new();
-
     for obj in &page.objects {
-        let suffix = &obj.key[prefix.len()..];
-        if let Some(pos) = suffix.find(delimiter.as_str()) {
-            let common = format!("{}{}", prefix, &suffix[..pos + delimiter.len()]);
-            prefix_set.insert(common);
-        } else if !obj.key.ends_with('/') {
-            files.push(serde_json::json!({
-                "key": obj.key,
-                "size": obj.size,
-                "lastModified": obj.last_modified,
-                "etag": obj.etag,
-                "contentType": obj.content_type,
-            }));
+        if obj.key.ends_with('/') {
+            prefix_set.insert(obj.key.clone());
+        } else {
+            let suffix = &obj.key[prefix.len()..];
+            if let Some(pos) = suffix.find(delimiter.as_str()) {
+                let common = format!("{}{}", prefix, &suffix[..pos + delimiter.len()]);
+                prefix_set.insert(common);
+            } else {
+                files.push(console_list_file_json(obj));
+            }
         }
     }
-
-    let prefixes: Vec<&String> = prefix_set.iter().collect();
+    let prefixes: Vec<String> = prefix_set.into_iter().collect();
     let next_continuation_token = if page.is_truncated {
         page.next_continuation
     } else {

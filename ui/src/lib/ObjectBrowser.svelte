@@ -17,6 +17,8 @@
   import FolderPlus from 'lucide-svelte/icons/folder-plus'
   import History from 'lucide-svelte/icons/history'
   import Eye from 'lucide-svelte/icons/eye'
+  import Search from 'lucide-svelte/icons/search'
+  import X from 'lucide-svelte/icons/x'
   import VersionHistory from './VersionHistory.svelte'
   import FilePreview from './FilePreview.svelte'
   import { isPreviewable } from '$lib/preview'
@@ -36,6 +38,8 @@
   let { bucket, onBack, onPrefixChange }: Props = $props()
 
   let prefix = $state('')
+  let searchInput = $state('')
+  let searchQuery = $state('')
   let fileInput: HTMLInputElement | undefined = $state()
   let copiedKey = $state<string | null>(null)
   let shareMenuKey = $state<string | null>(null)
@@ -54,9 +58,18 @@
     }
   })
 
+  $effect(() => {
+    const value = searchInput
+    const id = setTimeout(() => {
+      searchQuery = value.trim()
+    }, 300)
+    return () => clearTimeout(id)
+  })
+
   const objectsQuery = createInfiniteQuery(() => ({
-    queryKey: objectKeys.list(bucket, prefix),
-    queryFn: ({ pageParam }) => listObjects(bucket, prefix, pageParam),
+    queryKey: objectKeys.list(bucket, prefix, searchQuery || undefined),
+    queryFn: ({ pageParam }) =>
+      listObjects(bucket, prefix, pageParam, searchQuery || undefined),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextContinuationToken ?? undefined,
   }))
@@ -157,8 +170,14 @@
     onPrefixChange?.(prefix, breadcrumbs)
   }
 
+  function clearSearch() {
+    searchInput = ''
+    searchQuery = ''
+  }
+
   export function navigateTo(newPrefix: string) {
     prefix = newPrefix
+    clearSearch()
     notifyPrefix()
   }
 
@@ -170,7 +189,22 @@
     const trimmed = prefix.slice(0, -1)
     const lastSlash = trimmed.lastIndexOf('/')
     prefix = lastSlash >= 0 ? trimmed.slice(0, lastSlash + 1) : ''
+    clearSearch()
     notifyPrefix()
+  }
+
+  function objectLabel(key: string): string {
+    if (searchQuery && prefix && key.startsWith(prefix)) {
+      return key.slice(prefix.length)
+    }
+    return displayName(key)
+  }
+
+  function prefixLabel(folderPrefix: string): string {
+    if (searchQuery && prefix && folderPrefix.startsWith(prefix)) {
+      return folderPrefix.slice(prefix.length)
+    }
+    return displayName(folderPrefix)
   }
 
   function formatSize(bytes: number): string {
@@ -284,7 +318,7 @@
     <Callout type="danger">{objectsQuery.error instanceof ApiError ? objectsQuery.error.message : 'Failed to load objects'}</Callout>
   {/if}
 
-  <div class="flex items-center gap-2">
+  <div class="flex flex-wrap items-center gap-2">
     <input
       bind:this={fileInput}
       type="file"
@@ -298,6 +332,26 @@
     <Button variant="outline" class="h-8" onclick={() => (showCreateFolder = true)}>
       <FolderPlus class="size-4 mr-1" /> New Folder
     </Button>
+    <div class="relative min-w-[12rem] flex-1 max-w-sm">
+      <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        type="search"
+        placeholder="Search in this folder…"
+        class="h-8 pl-8 pr-8"
+        bind:value={searchInput}
+        aria-label="Search objects"
+      />
+      {#if searchInput}
+        <button
+          type="button"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+          onclick={clearSearch}
+          aria-label="Clear search"
+        >
+          <X class="size-4" />
+        </button>
+      {/if}
+    </div>
   </div>
 
   {#if objectsQuery.isPending}
@@ -305,8 +359,13 @@
   {:else if files.length === 0 && prefixes.length === 0 && !objectsQuery.isError}
     <Callout type="info">
       <span class="inline-flex items-center gap-2">
-        <Folder class="size-4 opacity-70" />
-        This location is empty — upload a file or create a folder to get started.
+        {#if searchQuery}
+          <Search class="size-4 opacity-70" />
+          No objects matching &ldquo;{searchQuery}&rdquo; in this location.
+        {:else}
+          <Folder class="size-4 opacity-70" />
+          This location is empty — upload a file or create a folder to get started.
+        {/if}
       </span>
     </Callout>
   {:else}
@@ -326,7 +385,7 @@
             <Table.Cell>
               <span class="flex items-center gap-2">
                 <Folder class="size-4 shrink-0 text-muted-foreground" />
-                <span class="font-medium">{displayName(p)}/</span>
+                <span class="font-medium">{prefixLabel(p).replace(/\/$/, '')}/</span>
               </span>
             </Table.Cell>
             <Table.Cell class="text-muted-foreground">&mdash;</Table.Cell>
@@ -340,7 +399,7 @@
             <Table.Cell>
               <span class="flex items-center gap-2">
                 <FileIcon class="size-4 shrink-0 text-muted-foreground" />
-                <span class="font-medium">{displayName(file.key)}</span>
+                <span class="font-medium">{objectLabel(file.key)}</span>
               </span>
             </Table.Cell>
             <Table.Cell class="truncate text-muted-foreground">{file.contentType || '—'}</Table.Cell>

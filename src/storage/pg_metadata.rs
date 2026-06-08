@@ -241,10 +241,12 @@ impl MetadataStore for PgMetadataStore {
         prefix: &str,
         start_after: Option<&str>,
         max_keys: usize,
+        search: Option<&str>,
     ) -> Result<ListPage, StorageError> {
         meta_op!(self, "list_objects_page", {
             let (objects, is_truncated, next) =
-                repos::list_objects_page(&self.ctx, bucket, prefix, start_after, max_keys).await?;
+                repos::list_objects_page(&self.ctx, bucket, prefix, start_after, max_keys, search)
+                    .await?;
             Ok(ListPage {
                 objects,
                 is_truncated,

@@ -230,7 +230,7 @@ pub async fn list_object_versions_page(
     let versioned = super::is_versioned(ctx, bucket_name).await?;
     if !versioned {
         let (objects, is_truncated, next) =
-            super::list_objects_page(ctx, bucket_name, prefix, key_marker, max_keys).await?;
+            super::list_objects_page(ctx, bucket_name, prefix, key_marker, max_keys, None).await?;
         return Ok(VersionsPage {
             items: objects,
             is_truncated,

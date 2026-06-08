@@ -13,6 +13,7 @@ pub async fn list_objects_page(
     prefix: &str,
     start_after: Option<&str>,
     max_keys: usize,
+    search: Option<&str>,
 ) -> Result<(Vec<ObjectMeta>, bool, Option<String>), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
@@ -31,6 +32,11 @@ pub async fn list_objects_page(
         if !marker.is_empty() {
             query = query.filter(objects::key.gt(marker));
         }
+    }
+
+    if let Some(q) = search.filter(|s| !s.is_empty()) {
+        let pattern = format!("%{}%", super::escape_like(q));
+        query = query.filter(objects::key.ilike(pattern));
     }
 
     let rows: Vec<ObjectRow> = query

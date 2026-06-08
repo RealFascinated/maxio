@@ -96,6 +96,7 @@ pub trait Storage: Send + Sync {
         prefix: &str,
         start_after: Option<&str>,
         max_keys: usize,
+        search: Option<&str>,
     ) -> Result<ListPage, StorageError>;
     async fn put_object_acl(
         &self,

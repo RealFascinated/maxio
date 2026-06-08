@@ -251,7 +251,7 @@ pub async fn list_objects_all(
     let mut start_after = None;
     loop {
         let page = storage
-            .list_objects_page(bucket, prefix, start_after.as_deref(), 1000)
+            .list_objects_page(bucket, prefix, start_after.as_deref(), 1000, None)
             .await?;
         all.extend(page.objects);
         if !page.is_truncated {

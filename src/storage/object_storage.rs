@@ -820,11 +820,12 @@ impl Storage for ObjectStorage {
         prefix: &str,
         start_after: Option<&str>,
         max_keys: usize,
+        search: Option<&str>,
     ) -> Result<ListPage, StorageError> {
         let t = std::time::Instant::now();
         let result = self
             .meta
-            .list_objects_page(bucket, prefix, start_after, max_keys)
+            .list_objects_page(bucket, prefix, start_after, max_keys, search)
             .await;
         self.record("list_objects", t.elapsed());
         result

@@ -2629,6 +2629,119 @@ async fn test_console_mutation_rejects_cross_site_origin() {
 }
 
 #[tokio::test]
+async fn test_console_list_objects_search() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/search-bucket", base_url), vec![]).await;
+
+    for key in [
+        "alpha.txt",
+        "folder/beta.txt",
+        "folder/gamma-alpha.txt",
+        "other.txt",
+    ] {
+        s3_request(
+            "PUT",
+            &format!("{}/search-bucket/{}", base_url, key),
+            b"x".to_vec(),
+        )
+        .await;
+    }
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/search-bucket/objects?q=alpha",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let keys: Vec<String> = body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(keys, vec!["alpha.txt".to_string()]);
+    let prefixes: Vec<String> = body["prefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(prefixes, vec!["folder/".to_string()]);
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/search-bucket/objects?q=folder",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["files"].as_array().unwrap().is_empty());
+    let prefixes: Vec<String> = body["prefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(prefixes, vec!["folder/".to_string()]);
+
+    s3_request(
+        "PUT",
+        &format!("{}/search-bucket/empty-archive/", base_url),
+        vec![],
+    )
+    .await;
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/search-bucket/objects?q=archive",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let prefixes: Vec<String> = body["prefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(prefixes.contains(&"empty-archive/".to_string()));
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/search-bucket/objects?prefix=folder/&q=alpha",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let keys: Vec<String> = body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(keys, vec!["folder/gamma-alpha.txt".to_string()]);
+}
+
+#[tokio::test]
 async fn test_console_delete_object_missing_bucket_returns_404() {
     let base_url = start_server().await;
     let session = console_login(&base_url).await;
@@ -3799,7 +3912,7 @@ async fn test_list_objects_page_db_pagination() {
     }
 
     let page1 = storage
-        .list_objects_page("page-bucket", "", None, 2)
+        .list_objects_page("page-bucket", "", None, 2, None)
         .await
         .unwrap();
     assert_eq!(page1.objects.len(), 2);
@@ -3807,7 +3920,13 @@ async fn test_list_objects_page_db_pagination() {
     assert_eq!(page1.next_continuation.as_deref(), Some("b.txt"));
 
     let page2 = storage
-        .list_objects_page("page-bucket", "", page1.next_continuation.as_deref(), 2)
+        .list_objects_page(
+            "page-bucket",
+            "",
+            page1.next_continuation.as_deref(),
+            2,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(page2.objects.len(), 2);
@@ -3815,7 +3934,13 @@ async fn test_list_objects_page_db_pagination() {
     assert_eq!(page2.next_continuation.as_deref(), Some("d.txt"));
 
     let page3 = storage
-        .list_objects_page("page-bucket", "", page2.next_continuation.as_deref(), 2)
+        .list_objects_page(
+            "page-bucket",
+            "",
+            page2.next_continuation.as_deref(),
+            2,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(page3.objects.len(), 1);

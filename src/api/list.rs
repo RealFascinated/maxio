@@ -121,7 +121,7 @@ async fn list_objects_v2(
 
     let page_result = state
         .storage
-        .list_objects_page(&bucket, &prefix, effective_start.as_deref(), max_keys)
+        .list_objects_page(&bucket, &prefix, effective_start.as_deref(), max_keys, None)
         .await
         .map_err(|e| S3Error::internal(e))?;
 
@@ -172,7 +172,7 @@ async fn list_objects_v1(
 
     let page_result = state
         .storage
-        .list_objects_page(&bucket, &prefix, marker.as_deref(), max_keys)
+        .list_objects_page(&bucket, &prefix, marker.as_deref(), max_keys, None)
         .await
         .map_err(|e| S3Error::internal(e))?;
 

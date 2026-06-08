@@ -12,7 +12,8 @@ export const bucketKeys = {
 
 export const objectKeys = {
   all: ['objects'] as const,
-  list: (bucket: string, prefix: string) => [...objectKeys.all, 'list', bucket, prefix] as const,
+  list: (bucket: string, prefix: string, q?: string) =>
+    [...objectKeys.all, 'list', bucket, prefix, q ?? ''] as const,
 }
 
 export const versionKeys = {

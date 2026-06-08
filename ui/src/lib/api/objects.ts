@@ -15,10 +15,19 @@ export interface ObjectsResponse {
   nextContinuationToken?: string | null
 }
 
-export async function listObjects(bucket: string, prefix: string, startAfter?: string): Promise<ObjectsResponse> {
+export async function listObjects(
+  bucket: string,
+  prefix: string,
+  startAfter?: string,
+  q?: string,
+): Promise<ObjectsResponse> {
   const params = new URLSearchParams({ prefix, delimiter: '/' })
   if (startAfter) {
     params.set('start_after', startAfter)
+  }
+  const trimmed = q?.trim()
+  if (trimmed) {
+    params.set('q', trimmed)
   }
   return apiFetch<ObjectsResponse>(`/api/buckets/${encodeURIComponent(bucket)}/objects?${params}`)
 }
