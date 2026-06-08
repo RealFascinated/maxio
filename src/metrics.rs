@@ -60,7 +60,7 @@ impl StorageTotalsSnapshot {
     }
 }
 
-pub const LATENCY_WINDOW_SECS: u64 = 15;
+pub const LATENCY_WINDOW_SECS: u64 = 60;
 
 const READ_LATENCY_OPS: &[&str] = &["get_object", "get_object_range"];
 const WRITE_LATENCY_OPS: &[&str] = &["put_object", "complete_multipart_upload"];
