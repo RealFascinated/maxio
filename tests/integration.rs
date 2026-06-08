@@ -1318,6 +1318,121 @@ async fn test_delete_objects_batch_missing_bucket_returns_404() {
 }
 
 #[tokio::test]
+async fn test_delete_objects_batch_with_version_id() {
+    let base_url = start_server().await;
+
+    s3_request("PUT", &format!("{}/ver-bucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/ver-bucket?versioning", base_url),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Status>Enabled</Status>
+</VersioningConfiguration>"#
+            .to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/ver-bucket/obj.txt", base_url),
+        b"v1".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/ver-bucket/obj.txt", base_url),
+        b"v2".to_vec(),
+    )
+    .await;
+
+    let list_resp = s3_request("GET", &format!("{}/ver-bucket?versions", base_url), vec![]).await;
+    let list_body = list_resp.text().await.unwrap();
+    let old_vid = list_body
+        .split("<VersionId>")
+        .nth(2)
+        .and_then(|s| s.split("</VersionId>").next())
+        .expect("second version id");
+    assert_ne!(old_vid, "null");
+
+    let delete_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Delete>
+  <Object><Key>obj.txt</Key><VersionId>{old_vid}</VersionId></Object>
+</Delete>"#
+    );
+    let resp = s3_request(
+        "POST",
+        &format!("{}/ver-bucket?delete", base_url),
+        delete_xml.into_bytes(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("<Deleted>"), "body: {}", body);
+    assert!(
+        !body.contains(old_vid),
+        "deleted version should not appear as error: {}",
+        body
+    );
+
+    let list_resp = s3_request("GET", &format!("{}/ver-bucket?versions", base_url), vec![]).await;
+    let list_body = list_resp.text().await.unwrap();
+    assert!(
+        !list_body.contains(&format!("<VersionId>{old_vid}</VersionId>")),
+        "old version should be gone: {}",
+        list_body
+    );
+}
+
+#[tokio::test]
+async fn test_list_object_versions_pagination() {
+    let base_url = start_server().await;
+
+    s3_request("PUT", &format!("{}/page-bucket", base_url), vec![]).await;
+    for key in ["a.txt", "b.txt", "c.txt"] {
+        s3_request(
+            "PUT",
+            &format!("{}/page-bucket/{key}", base_url),
+            b"x".to_vec(),
+        )
+        .await;
+    }
+
+    let resp = s3_request(
+        "GET",
+        &format!("{}/page-bucket?versions&max-keys=2", base_url),
+        vec![],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("<IsTruncated>true</IsTruncated>"), "{}", body);
+    assert!(body.contains("<NextKeyMarker>"), "{}", body);
+
+    let marker = body
+        .split("<NextKeyMarker>")
+        .nth(1)
+        .and_then(|s| s.split("</NextKeyMarker>").next())
+        .expect("next key marker");
+    let resp = s3_request(
+        "GET",
+        &format!(
+            "{}/page-bucket?versions&max-keys=2&key-marker={marker}",
+            base_url
+        ),
+        vec![],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("<IsTruncated>false</IsTruncated>"),
+        "{}",
+        body
+    );
+}
+
+#[tokio::test]
 async fn test_trailing_slash_bucket_routes() {
     // mc sends PUT /bucket/ (with trailing slash)
     let base_url = start_server().await;

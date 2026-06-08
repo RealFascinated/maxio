@@ -45,6 +45,11 @@ pub trait MetadataStore: Send + Sync {
         key: &str,
     ) -> Result<ObjectMeta, StorageError>;
     async fn delete_object_meta(&self, bucket: &str, key: &str) -> Result<(), StorageError>;
+    async fn delete_objects_by_keys(
+        &self,
+        bucket: &str,
+        keys: &[String],
+    ) -> Result<Vec<String>, StorageError>;
     async fn object_exists(&self, bucket: &str, key: &str) -> Result<bool, StorageError>;
     async fn list_objects_page(
         &self,
@@ -90,11 +95,24 @@ pub trait MetadataStore: Send + Sync {
         key: &str,
         version_id: &str,
     ) -> Result<(), StorageError>;
+    async fn delete_object_versions_batch(
+        &self,
+        bucket: &str,
+        pairs: &[(String, String)],
+    ) -> Result<Vec<(String, String, bool)>, StorageError>;
     async fn list_object_versions(
         &self,
         bucket: &str,
         prefix: &str,
     ) -> Result<Vec<ObjectMeta>, StorageError>;
+    async fn list_object_versions_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        key_marker: Option<&str>,
+        version_id_marker: Option<&str>,
+        max_keys: usize,
+    ) -> Result<crate::db::repos::VersionsPage, StorageError>;
     async fn update_current_after_delete(
         &self,
         bucket: &str,

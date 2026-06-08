@@ -875,6 +875,88 @@ pub async fn post_object(
 
 const DELETE_BODY_MAX: usize = 1024 * 1024;
 
+fn parse_delete_objects_xml(
+    bytes: &[u8],
+) -> Result<Vec<crate::storage::BatchDeleteObject>, S3Error> {
+    let body_str = String::from_utf8_lossy(bytes);
+    let mut objects = Vec::new();
+    let mut reader = quick_xml::Reader::from_str(&body_str);
+    reader.config_mut().trim_text(true);
+    let mut in_object = false;
+    let mut in_key = false;
+    let mut in_version_id = false;
+    let mut current_key = String::new();
+    let mut current_version_id: Option<String> = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Start(e)) => match e.name().as_ref() {
+                b"Object" => {
+                    in_object = true;
+                    current_key.clear();
+                    current_version_id = None;
+                }
+                b"Key" if in_object => in_key = true,
+                b"VersionId" if in_object => in_version_id = true,
+                _ => {}
+            },
+            Ok(quick_xml::events::Event::Text(e)) if in_key => {
+                current_key = e.unescape().unwrap_or_default().into_owned();
+                in_key = false;
+            }
+            Ok(quick_xml::events::Event::Text(e)) if in_version_id => {
+                current_version_id = Some(e.unescape().unwrap_or_default().into_owned());
+                in_version_id = false;
+            }
+            Ok(quick_xml::events::Event::End(e)) => match e.name().as_ref() {
+                b"Key" => in_key = false,
+                b"VersionId" => in_version_id = false,
+                b"Object" => {
+                    if !current_key.is_empty() {
+                        objects.push(crate::storage::BatchDeleteObject {
+                            key: current_key.clone(),
+                            version_id: current_version_id.clone(),
+                        });
+                    }
+                    in_object = false;
+                }
+                _ => {}
+            },
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => return Err(S3Error::malformed_xml()),
+            _ => {}
+        }
+    }
+
+    if objects.is_empty() {
+        let mut in_key = false;
+        let mut reader = quick_xml::Reader::from_str(&body_str);
+        reader.config_mut().trim_text(true);
+        loop {
+            match reader.read_event() {
+                Ok(quick_xml::events::Event::Start(e)) if e.name().as_ref() == b"Key" => {
+                    in_key = true;
+                }
+                Ok(quick_xml::events::Event::Text(e)) if in_key => {
+                    objects.push(crate::storage::BatchDeleteObject {
+                        key: e.unescape().unwrap_or_default().into_owned(),
+                        version_id: None,
+                    });
+                    in_key = false;
+                }
+                Ok(quick_xml::events::Event::End(e)) if e.name().as_ref() == b"Key" => {
+                    in_key = false;
+                }
+                Ok(quick_xml::events::Event::Eof) => break,
+                Err(_) => return Err(S3Error::malformed_xml()),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(objects)
+}
+
 /// Handle POST /{bucket}?delete — multi-object delete (DeleteObjects API).
 pub async fn delete_objects(
     State(state): State<AppState>,
@@ -889,64 +971,38 @@ pub async fn delete_objects(
     let bytes = axum::body::to_bytes(body, DELETE_BODY_MAX)
         .await
         .map_err(|e| S3Error::internal(e))?;
-    let body_str = String::from_utf8_lossy(&bytes);
+    let objects = parse_delete_objects_xml(&bytes)?;
 
-    let mut keys = Vec::new();
-    let mut reader = quick_xml::Reader::from_str(&body_str);
-    reader.config_mut().trim_text(true);
-    let mut in_key = false;
-    loop {
-        match reader.read_event() {
-            Ok(quick_xml::events::Event::Start(e)) if e.name().as_ref() == b"Key" => {
-                in_key = true;
-            }
-            Ok(quick_xml::events::Event::Text(e)) if in_key => {
-                keys.push(e.unescape().unwrap_or_default().into_owned());
-                in_key = false;
-            }
-            Ok(quick_xml::events::Event::End(e)) if e.name().as_ref() == b"Key" => {
-                in_key = false;
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => return Err(S3Error::malformed_xml()),
-            _ => {}
-        }
-    }
-
-    let mut set = tokio::task::JoinSet::new();
-    for key in keys {
-        let storage = state.storage.clone();
-        let bucket = bucket.clone();
-        set.spawn(async move {
-            let result = storage.delete_object(&bucket, &key).await;
-            (key, result)
-        });
-    }
+    let batch_results = state
+        .storage
+        .delete_objects_batch(&bucket, &objects)
+        .await
+        .map_err(|e| S3Error::internal(e))?;
 
     let mut deleted_xml = String::new();
     let mut error_xml = String::new();
-    while let Some(result) = set.join_next().await {
-        if let Ok((key, delete_result)) = result {
-            match delete_result {
-                Ok(dr) => {
-                    let mut entry =
-                        format!("<Deleted><Key>{}</Key>", quick_xml::escape::escape(&key));
-                    if let Some(vid) = &dr.version_id {
-                        entry.push_str(&format!("<VersionId>{}</VersionId>", vid));
-                    }
-                    if dr.is_delete_marker {
-                        entry.push_str("<DeleteMarker>true</DeleteMarker>");
-                    }
-                    entry.push_str("</Deleted>");
-                    deleted_xml.push_str(&entry);
+    for (obj, delete_result) in batch_results {
+        match delete_result {
+            Ok(dr) => {
+                let mut entry = format!(
+                    "<Deleted><Key>{}</Key>",
+                    quick_xml::escape::escape(&obj.key)
+                );
+                if let Some(vid) = &dr.version_id {
+                    entry.push_str(&format!("<VersionId>{}</VersionId>", vid));
                 }
-                Err(e) => {
-                    error_xml.push_str(&format!(
-                        "<Error><Key>{}</Key><Code>InternalError</Code><Message>{}</Message></Error>",
-                        quick_xml::escape::escape(&key),
-                        quick_xml::escape::escape(&e.to_string())
-                    ));
+                if dr.is_delete_marker {
+                    entry.push_str("<DeleteMarker>true</DeleteMarker>");
                 }
+                entry.push_str("</Deleted>");
+                deleted_xml.push_str(&entry);
+            }
+            Err(e) => {
+                error_xml.push_str(&format!(
+                    "<Error><Key>{}</Key><Code>InternalError</Code><Message>{}</Message></Error>",
+                    quick_xml::escape::escape(&obj.key),
+                    quick_xml::escape::escape(&e.to_string())
+                ));
             }
         }
     }
@@ -967,7 +1023,32 @@ pub async fn delete_objects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::ObjectMeta;
+    use crate::storage::{BatchDeleteObject, ObjectMeta};
+
+    #[test]
+    fn parse_delete_objects_xml_reads_version_id() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Delete>
+  <Object><Key>a.txt</Key><VersionId>vid-1</VersionId></Object>
+  <Object><Key>b.txt</Key></Object>
+</Delete>"#;
+        let objects = parse_delete_objects_xml(xml).unwrap();
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].key, "a.txt");
+        assert_eq!(objects[0].version_id.as_deref(), Some("vid-1"));
+        assert_eq!(objects[1].key, "b.txt");
+        assert!(objects[1].version_id.is_none());
+    }
+
+    #[test]
+    fn parse_delete_objects_xml_legacy_bare_keys() {
+        let xml = br#"<Delete><Key>only.txt</Key></Delete>"#;
+        let objects = parse_delete_objects_xml(xml).unwrap();
+        assert_eq!(objects, vec![BatchDeleteObject {
+            key: "only.txt".into(),
+            version_id: None,
+        }]);
+    }
 
     fn make_meta(etag: &str, last_modified: &str) -> ObjectMeta {
         ObjectMeta {

@@ -414,6 +414,15 @@ impl BlobStorage {
     }
 
     pub async fn unlink_object(&self, bucket: &str, key: &str) -> Result<(), StorageError> {
+        self.unlink_object_inner(bucket, key, true).await
+    }
+
+    async fn unlink_object_inner(
+        &self,
+        bucket: &str,
+        key: &str,
+        cleanup_parents: bool,
+    ) -> Result<(), StorageError> {
         let obj_path = self.object_path(bucket, key);
         remove_file_if_exists(&obj_path).await?;
         if let Some(cache) = &self.cache {
@@ -421,8 +430,77 @@ impl BlobStorage {
             let _ = remove_file_if_exists(&cache_path).await;
             cache.remove_entry(bucket, key).await;
         }
-        self.cleanup_empty_parents(bucket, key).await;
+        if cleanup_parents {
+            self.cleanup_empty_parents(bucket, key).await;
+        }
         Ok(())
+    }
+
+    /// Unlink many object files with bounded concurrency; parent cleanup runs once after.
+    pub async fn unlink_objects_batch(
+        &self,
+        bucket: &str,
+        keys: &[String],
+        concurrency: usize,
+    ) -> Result<(), StorageError> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let sem = Arc::new(Semaphore::new(concurrency.max(1)));
+        let buckets_dir = self.buckets_dir.clone();
+        let cache = self.cache.clone();
+        let bucket_name = bucket.to_string();
+        let mut handles = Vec::with_capacity(keys.len());
+        for key in keys {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StorageError::Io(std::io::Error::other(e)))?;
+            let buckets_dir = buckets_dir.clone();
+            let cache = cache.clone();
+            let bucket_name = bucket_name.clone();
+            let key = key.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = permit;
+                let obj_path = object_path_in(&buckets_dir, &bucket_name, &key);
+                let _ = remove_file_if_exists(&obj_path).await;
+                if let Some(cache) = cache {
+                    let cache_path = cache.object_path(&bucket_name, &key);
+                    let _ = remove_file_if_exists(&cache_path).await;
+                    cache.remove_entry(&bucket_name, &key).await;
+                }
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .map_err(|e| StorageError::Io(std::io::Error::other(e)))?;
+        }
+        self.prune_empty_dirs(bucket).await;
+        Ok(())
+    }
+
+    pub async fn remove_bucket_tree(&self, bucket: &str) -> Result<(), StorageError> {
+        let path = self.buckets_dir.join(bucket);
+        match fs::remove_dir_all(&path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(StorageError::Io(e)),
+        }
+        if let Some(cache) = &self.cache {
+            let cache_path = cache.buckets_dir().join(bucket);
+            let _ = fs::remove_dir_all(&cache_path).await;
+        }
+        Ok(())
+    }
+
+    pub async fn prune_empty_dirs(&self, bucket: &str) {
+        let bucket_dir = self.buckets_dir.join(bucket);
+        prune_empty_dirs_up(bucket_dir.clone(), &bucket_dir).await;
     }
 
     pub async fn cleanup_empty_parents(&self, bucket: &str, key: &str) {
@@ -671,6 +749,19 @@ impl BlobStorage {
             temp_removed += sweep_buckets_dir(cache.buckets_dir()).await;
         }
         temp_removed
+    }
+}
+
+async fn prune_empty_dirs_up(mut dir: PathBuf, stop_at: &Path) {
+    while dir != stop_at {
+        match fs::remove_dir(&dir).await {
+            Ok(()) => {}
+            Err(_) => break,
+        }
+        dir = match dir.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => break,
+        };
     }
 }
 

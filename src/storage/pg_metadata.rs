@@ -223,6 +223,18 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
+    async fn delete_objects_by_keys(
+        &self,
+        bucket: &str,
+        keys: &[String],
+    ) -> Result<Vec<String>, StorageError> {
+        meta_op!(
+            self,
+            "delete_objects_by_keys",
+            repos::delete_objects_by_keys(&self.ctx, bucket, keys).await
+        )
+    }
+
     async fn object_exists(&self, bucket: &str, key: &str) -> Result<bool, StorageError> {
         meta_op!(
             self,
@@ -339,6 +351,18 @@ impl MetadataStore for PgMetadataStore {
         })
     }
 
+    async fn delete_object_versions_batch(
+        &self,
+        bucket: &str,
+        pairs: &[(String, String)],
+    ) -> Result<Vec<(String, String, bool)>, StorageError> {
+        meta_op!(
+            self,
+            "delete_object_versions_batch",
+            repos::delete_object_versions_batch(&self.ctx, bucket, pairs).await
+        )
+    }
+
     async fn list_object_versions(
         &self,
         bucket: &str,
@@ -348,6 +372,29 @@ impl MetadataStore for PgMetadataStore {
             self,
             "list_object_versions",
             repos::list_object_versions(&self.ctx, bucket, prefix).await
+        )
+    }
+
+    async fn list_object_versions_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        key_marker: Option<&str>,
+        version_id_marker: Option<&str>,
+        max_keys: usize,
+    ) -> Result<repos::VersionsPage, StorageError> {
+        meta_op!(
+            self,
+            "list_object_versions_page",
+            repos::list_object_versions_page(
+                &self.ctx,
+                bucket,
+                prefix,
+                key_marker,
+                version_id_marker,
+                max_keys,
+            )
+            .await
         )
     }
 

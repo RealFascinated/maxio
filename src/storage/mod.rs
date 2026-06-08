@@ -69,6 +69,13 @@ pub struct DeleteResult {
     pub is_delete_marker: bool,
 }
 
+/// One entry in a DeleteObjects batch request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchDeleteObject {
+    pub key: String,
+    pub version_id: Option<String>,
+}
+
 fn is_false(v: &bool) -> bool {
     !*v
 }

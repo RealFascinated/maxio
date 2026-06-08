@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 
 use super::{
-    BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult, MultipartUploadMeta,
-    ObjectMeta, PartMeta, PutResult, StorageError,
+    BatchDeleteObject, BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult,
+    MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError,
 };
 
 #[derive(Debug, Clone)]
@@ -75,6 +75,11 @@ pub trait Storage: Send + Sync {
     ) -> Result<(), StorageError>;
     async fn delete_object_tagging(&self, bucket: &str, key: &str) -> Result<(), StorageError>;
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<DeleteResult, StorageError>;
+    async fn delete_objects_batch(
+        &self,
+        bucket: &str,
+        objects: &[BatchDeleteObject],
+    ) -> Result<Vec<(BatchDeleteObject, Result<DeleteResult, StorageError>)>, StorageError>;
     async fn list_objects_page(
         &self,
         bucket: &str,
@@ -158,6 +163,14 @@ pub trait Storage: Send + Sync {
         bucket: &str,
         prefix: &str,
     ) -> Result<Vec<ObjectMeta>, StorageError>;
+    async fn list_object_versions_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        key_marker: Option<&str>,
+        version_id_marker: Option<&str>,
+        max_keys: usize,
+    ) -> Result<crate::db::repos::VersionsPage, StorageError>;
 
     // Housekeeping
     async fn housekeeping_sweep(&self, stale_after: chrono::Duration) -> (u64, u64);

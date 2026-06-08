@@ -237,6 +237,13 @@ pub struct ListVersionsResult {
     pub max_keys: i32,
     #[serde(rename = "IsTruncated")]
     pub is_truncated: bool,
+    #[serde(rename = "NextKeyMarker", skip_serializing_if = "Option::is_none")]
+    pub next_key_marker: Option<String>,
+    #[serde(
+        rename = "NextVersionIdMarker",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next_version_id_marker: Option<String>,
     #[serde(rename = "Version", skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<VersionEntry>,
     #[serde(rename = "DeleteMarker", skip_serializing_if = "Vec::is_empty")]

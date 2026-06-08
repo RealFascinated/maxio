@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,9 +7,12 @@ use super::blob::{BlobStorage, validate_key, validate_upload_id};
 use super::metadata::{MetadataStore, PutBucketContext};
 use super::traits::{ListPage, Storage};
 use super::{
-    BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult, MultipartUploadMeta,
-    ObjectMeta, PartMeta, PutResult, StorageError, normalize_object_meta, validate_bucket_name,
+    BatchDeleteObject, BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult,
+    MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError, normalize_object_meta,
+    validate_bucket_name,
 };
+
+const DELETE_BLOB_CONCURRENCY: usize = 32;
 use crate::metrics::MetricsRegistry;
 
 pub struct ObjectStorage {
@@ -250,19 +253,130 @@ impl ObjectStorage {
             });
         }
 
-        if !self.meta.object_exists(bucket, key).await? {
-            return Ok(DeleteResult {
-                version_id: None,
-                is_delete_marker: false,
-            });
-        }
-
         self.meta.delete_object_meta(bucket, key).await?;
         self.blobs.unlink_object(bucket, key).await?;
         Ok(DeleteResult {
             version_id: None,
             is_delete_marker: false,
         })
+    }
+
+    async fn delete_objects_batch_inner(
+        &self,
+        bucket: &str,
+        objects: &[BatchDeleteObject],
+    ) -> Result<Vec<(BatchDeleteObject, Result<DeleteResult, StorageError>)>, StorageError> {
+        if objects.is_empty() {
+            return Ok(Vec::new());
+        }
+        validate_bucket_name(bucket)?;
+        for obj in objects {
+            validate_key(&obj.key)?;
+        }
+
+        let prep = self.meta.fetch_put_bucket_context(bucket).await?;
+        let mut results: HashMap<(String, Option<String>), Result<DeleteResult, StorageError>> =
+            HashMap::new();
+
+        if prep.versioning {
+            let mut version_pairs = Vec::new();
+            let mut marker_keys = Vec::new();
+
+            for obj in objects {
+                match obj.version_id.as_deref() {
+                    Some(vid) if vid != "null" => {
+                        version_pairs.push((obj.key.clone(), vid.to_string()));
+                    }
+                    _ => marker_keys.push(obj.key.clone()),
+                }
+            }
+            marker_keys.sort();
+            marker_keys.dedup();
+
+            if !version_pairs.is_empty() {
+                let deleted = self
+                    .meta
+                    .delete_object_versions_batch(bucket, &version_pairs)
+                    .await?;
+                let deleted_set: HashSet<(String, String)> = deleted
+                    .iter()
+                    .map(|(k, v, _)| (k.clone(), v.clone()))
+                    .collect();
+
+                let mut current_keys = HashSet::new();
+                for (key, vid, was_current) in &deleted {
+                    if *was_current {
+                        current_keys.insert(key.clone());
+                    }
+                    self.blobs.unlink_version_blobs(bucket, key, vid).await?;
+                    results.insert(
+                        (key.clone(), Some(vid.clone())),
+                        Ok(DeleteResult {
+                            version_id: Some(vid.clone()),
+                            is_delete_marker: false,
+                        }),
+                    );
+                }
+                for key in current_keys {
+                    self.meta.update_current_after_delete(bucket, &key).await?;
+                    self.sync_current_blobs_after_version_change(bucket, &key)
+                        .await?;
+                }
+
+                for (key, vid) in &version_pairs {
+                    if !deleted_set.contains(&(key.clone(), vid.clone())) {
+                        results.insert(
+                            (key.clone(), Some(vid.clone())),
+                            Err(StorageError::VersionNotFound(vid.clone())),
+                        );
+                    }
+                }
+            }
+
+            for key in marker_keys {
+                let outcome = self.delete_object_inner(bucket, &key).await.map_err(|e| e);
+                results.insert((key.clone(), None), outcome);
+            }
+        } else {
+            let keys: Vec<String> = objects.iter().map(|o| o.key.clone()).collect();
+            let deleted = self.meta.delete_objects_by_keys(bucket, &keys).await?;
+            let deleted_set: HashSet<String> = deleted.into_iter().collect();
+            let to_unlink: Vec<String> = deleted_set.iter().cloned().collect();
+            self.blobs
+                .unlink_objects_batch(bucket, &to_unlink, DELETE_BLOB_CONCURRENCY)
+                .await?;
+
+            for obj in objects {
+                let existed = deleted_set.contains(&obj.key);
+                let outcome = if existed {
+                    Ok(DeleteResult {
+                        version_id: None,
+                        is_delete_marker: false,
+                    })
+                } else {
+                    Ok(DeleteResult {
+                        version_id: None,
+                        is_delete_marker: false,
+                    })
+                };
+                results.insert((obj.key.clone(), obj.version_id.clone()), outcome);
+            }
+        }
+
+        Ok(objects
+            .iter()
+            .map(|obj| {
+                let outcome = results
+                    .remove(&(obj.key.clone(), obj.version_id.clone()))
+                    .unwrap_or_else(|| {
+                        Ok(DeleteResult {
+                            version_id: obj.version_id.clone(),
+                            is_delete_marker: false,
+                        })
+                    });
+                (obj.clone(), outcome)
+            })
+            .collect())
     }
 
     async fn upload_part_inner(
@@ -436,6 +550,9 @@ impl Storage for ObjectStorage {
     async fn delete_bucket(&self, name: &str) -> Result<bool, StorageError> {
         let t = std::time::Instant::now();
         let result = self.meta.delete_bucket(name).await;
+        if matches!(&result, Ok(true)) {
+            let _ = self.blobs.remove_bucket_tree(name).await;
+        }
         self.record("delete_bucket", t.elapsed());
         result
     }
@@ -616,6 +733,17 @@ impl Storage for ObjectStorage {
         let t = std::time::Instant::now();
         let result = self.delete_object_inner(bucket, key).await;
         self.record("delete_object", t.elapsed());
+        result
+    }
+
+    async fn delete_objects_batch(
+        &self,
+        bucket: &str,
+        objects: &[BatchDeleteObject],
+    ) -> Result<Vec<(BatchDeleteObject, Result<DeleteResult, StorageError>)>, StorageError> {
+        let t = std::time::Instant::now();
+        let result = self.delete_objects_batch_inner(bucket, objects).await;
+        self.record("delete_objects_batch", t.elapsed());
         result
     }
 
@@ -814,14 +942,16 @@ impl Storage for ObjectStorage {
         validate_key(key)?;
 
         if version_id == "null" {
-            let existed = self.meta.object_exists(bucket, key).await?;
-            if !existed {
-                return Ok(DeleteResult {
-                    version_id: None,
-                    is_delete_marker: false,
-                });
-            }
-            let meta = self.meta.get_object_meta(bucket, key).await?;
+            let meta = match self.meta.get_object_meta(bucket, key).await {
+                Ok(meta) => meta,
+                Err(StorageError::NotFound(_)) => {
+                    return Ok(DeleteResult {
+                        version_id: None,
+                        is_delete_marker: false,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
             self.meta.delete_object_meta(bucket, key).await?;
             self.blobs.unlink_object(bucket, key).await?;
             self.meta.update_current_after_delete(bucket, key).await?;
@@ -860,6 +990,20 @@ impl Storage for ObjectStorage {
     ) -> Result<Vec<ObjectMeta>, StorageError> {
         validate_bucket_name(bucket)?;
         self.meta.list_object_versions(bucket, prefix).await
+    }
+
+    async fn list_object_versions_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        key_marker: Option<&str>,
+        version_id_marker: Option<&str>,
+        max_keys: usize,
+    ) -> Result<crate::db::repos::VersionsPage, StorageError> {
+        validate_bucket_name(bucket)?;
+        self.meta
+            .list_object_versions_page(bucket, prefix, key_marker, version_id_marker, max_keys)
+            .await
     }
 
     async fn housekeeping_sweep(&self, stale_after: chrono::Duration) -> (u64, u64) {

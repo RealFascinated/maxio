@@ -257,16 +257,19 @@ async fn list_object_versions(
     params: HashMap<String, String>,
 ) -> Result<Response<Body>, S3Error> {
     let prefix = params.get("prefix").cloned().unwrap_or_default();
+    let max_keys = parse_max_keys(&params)?;
+    let key_marker = params.get("key-marker").map(|s| s.as_str());
+    let version_id_marker = params.get("version-id-marker").map(|s| s.as_str());
 
-    let all_versions = state
+    let page = state
         .storage
-        .list_object_versions(&bucket, &prefix)
+        .list_object_versions_page(&bucket, &prefix, key_marker, version_id_marker, max_keys)
         .await
         .map_err(|e| S3Error::internal(e))?;
 
     // Determine which version is latest per key (first in list since sorted newest-first per key)
     let mut latest_per_key: HashMap<String, String> = HashMap::new();
-    for v in &all_versions {
+    for v in &page.items {
         let vid = v.version_id.clone().unwrap_or_else(|| "null".to_string());
         latest_per_key.entry(v.key.clone()).or_insert(vid);
     }
@@ -274,7 +277,7 @@ async fn list_object_versions(
     let mut versions = Vec::new();
     let mut delete_markers = Vec::new();
 
-    for v in &all_versions {
+    for v in &page.items {
         let vid = v.version_id.as_deref().unwrap_or("null");
         let is_latest = latest_per_key
             .get(&v.key)
@@ -302,10 +305,12 @@ async fn list_object_versions(
     let result = ListVersionsResult {
         name: bucket,
         prefix,
-        key_marker: String::new(),
-        version_id_marker: String::new(),
-        max_keys: 1000,
-        is_truncated: false,
+        key_marker: key_marker.unwrap_or("").to_string(),
+        version_id_marker: version_id_marker.unwrap_or("").to_string(),
+        max_keys: max_keys as i32,
+        is_truncated: page.is_truncated,
+        next_key_marker: page.next_key_marker,
+        next_version_id_marker: page.next_version_id_marker,
         versions,
         delete_markers,
     };

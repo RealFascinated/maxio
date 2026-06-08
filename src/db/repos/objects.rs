@@ -174,6 +174,29 @@ pub async fn delete_object(
     Ok(())
 }
 
+/// Delete many current-object rows in one round-trip. Returns keys that existed.
+pub async fn delete_objects_by_keys(
+    ctx: &DbContext,
+    bucket_name: &str,
+    keys: &[String],
+) -> Result<Vec<String>, StorageError> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+
+    diesel::delete(
+        objects::table
+            .filter(objects::bucket_id.eq(bucket_id))
+            .filter(objects::key.eq_any(keys)),
+    )
+    .returning(objects::key)
+    .load::<String>(&mut conn)
+    .await
+    .map_err(db_err)
+}
+
 pub async fn object_exists(
     ctx: &DbContext,
     bucket_name: &str,

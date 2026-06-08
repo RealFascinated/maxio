@@ -12,10 +12,18 @@ use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    AclGrantRow, checksum_from_db, checksum_to_db, db_err, encode_grantee, format_ts, get_conn,
-    grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
+    AclGrantRow, checksum_from_db, checksum_to_db, db_err, encode_grantee, escape_like, format_ts,
+    get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
     resolve_bucket_id,
 };
+
+#[derive(Debug, Clone)]
+pub struct VersionsPage {
+    pub items: Vec<ObjectMeta>,
+    pub is_truncated: bool,
+    pub next_key_marker: Option<String>,
+    pub next_version_id_marker: Option<String>,
+}
 
 pub async fn insert_version(
     ctx: &DbContext,
@@ -181,59 +189,169 @@ pub async fn list_object_versions(
     bucket_name: &str,
     prefix: &str,
 ) -> Result<Vec<ObjectMeta>, StorageError> {
+    let page = list_object_versions_page(ctx, bucket_name, prefix, None, None, usize::MAX).await?;
+    Ok(page.items)
+}
+
+pub async fn list_object_versions_page(
+    ctx: &DbContext,
+    bucket_name: &str,
+    prefix: &str,
+    key_marker: Option<&str>,
+    version_id_marker: Option<&str>,
+    max_keys: usize,
+) -> Result<VersionsPage, StorageError> {
+    if max_keys == 0 {
+        return Ok(VersionsPage {
+            items: Vec::new(),
+            is_truncated: false,
+            next_key_marker: None,
+            next_version_id_marker: None,
+        });
+    }
+
+    let versioned = super::is_versioned(ctx, bucket_name).await?;
+    if !versioned {
+        let (objects, is_truncated, next) =
+            super::list_objects_page(ctx, bucket_name, prefix, key_marker, max_keys).await?;
+        return Ok(VersionsPage {
+            items: objects,
+            is_truncated,
+            next_key_marker: next,
+            next_version_id_marker: None,
+        });
+    }
+
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
-    let mut query = object_versions::table
+    let mut version_query = object_versions::table
         .filter(object_versions::bucket_id.eq(bucket_id))
+        .order((
+            object_versions::key.asc(),
+            object_versions::version_id.desc(),
+        ))
         .into_boxed();
 
     if !prefix.is_empty() {
-        let pattern = format!("{}%", super::escape_like(prefix));
-        query = query.filter(object_versions::key.like(pattern));
+        let pattern = format!("{}%", escape_like(prefix));
+        version_query = version_query.filter(object_versions::key.like(pattern));
     }
 
-    let version_rows: Vec<VersionRow> = query
+    if let Some(marker) = key_marker {
+        if !marker.is_empty() {
+            let vid = version_id_marker.unwrap_or("");
+            version_query = version_query.filter(
+                object_versions::key.gt(marker).or(object_versions::key
+                    .eq(marker)
+                    .and(object_versions::version_id.lt(vid))),
+            );
+        }
+    }
+
+    let fetch_limit = max_keys.saturating_add(1) as i64;
+    let version_rows: Vec<VersionRow> = version_query
+        .limit(fetch_limit)
         .select(VersionRow::as_select())
         .load(&mut conn)
         .await
         .map_err(db_err)?;
+    let versions_exhausted = version_rows.len() > max_keys;
 
-    let mut results = Vec::new();
-    for row in version_rows {
-        results.push(version_row_into_meta(&mut conn, row).await?);
+    let mut items: Vec<ObjectMeta> = version_rows
+        .into_iter()
+        .take(max_keys)
+        .map(version_row_into_read_meta)
+        .collect();
+
+    // Null-version current objects only appear on the first page.
+    if key_marker.is_none() || key_marker.is_some_and(|m| m.is_empty()) {
+        let mut current_query = objects::table
+            .filter(objects::bucket_id.eq(bucket_id))
+            .filter(objects::version_id.is_null())
+            .order(objects::key.asc())
+            .into_boxed();
+        if !prefix.is_empty() {
+            let pattern = format!("{}%", escape_like(prefix));
+            current_query = current_query.filter(objects::key.like(pattern));
+        }
+        let current_rows: Vec<super::objects::ObjectRow> = current_query
+            .select(super::objects::ObjectRow::as_select())
+            .load(&mut conn)
+            .await
+            .map_err(db_err)?;
+        items.extend(
+            current_rows
+                .into_iter()
+                .map(super::objects::row_into_read_meta),
+        );
+        items.sort_by(version_sort_key);
     }
 
-    // Include current null-version objects (S3 suspended-state compatibility).
-    let mut current_query = objects::table
-        .filter(objects::bucket_id.eq(bucket_id))
-        .filter(objects::version_id.is_null())
-        .into_boxed();
-
-    if !prefix.is_empty() {
-        let pattern = format!("{}%", super::escape_like(prefix));
-        current_query = current_query.filter(objects::key.like(pattern));
-    }
-
-    let current_rows: Vec<super::objects::ObjectRow> = current_query
-        .select(super::objects::ObjectRow::as_select())
-        .load(&mut conn)
-        .await
-        .map_err(db_err)?;
-
-    for row in current_rows {
-        results.push(super::objects::row_into_meta(&mut conn, row).await?);
-    }
-
-    results.sort_by(|a, b| {
-        a.key.cmp(&b.key).then_with(|| {
-            let va = a.version_id.as_deref().unwrap_or("");
-            let vb = b.version_id.as_deref().unwrap_or("");
-            vb.cmp(va)
+    let truncated = items.len() > max_keys || versions_exhausted;
+    items.truncate(max_keys);
+    let next = if truncated {
+        items.last().map(|last| {
+            (
+                last.key.clone(),
+                last.version_id.clone().unwrap_or_default(),
+            )
         })
-    });
+    } else {
+        None
+    };
 
-    Ok(results)
+    Ok(VersionsPage {
+        items,
+        is_truncated: truncated,
+        next_key_marker: next.as_ref().map(|(k, _)| k.clone()),
+        next_version_id_marker: next.map(|(_, v)| v),
+    })
+}
+
+fn version_sort_key(a: &ObjectMeta, b: &ObjectMeta) -> std::cmp::Ordering {
+    a.key.cmp(&b.key).then_with(|| {
+        let va = a.version_id.as_deref().unwrap_or("");
+        let vb = b.version_id.as_deref().unwrap_or("");
+        vb.cmp(va)
+    })
+}
+
+/// Delete explicit object versions in one transaction. Returns affected (key, version_id) pairs
+/// whose rows were current before deletion.
+pub async fn delete_object_versions_batch(
+    ctx: &DbContext,
+    bucket_name: &str,
+    pairs: &[(String, String)],
+) -> Result<Vec<(String, String, bool)>, StorageError> {
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+
+    let mut deleted = Vec::with_capacity(pairs.len());
+    for (key, version_id) in pairs {
+        let row: Option<(String, String, bool)> = diesel::delete(
+            object_versions::table
+                .filter(object_versions::bucket_id.eq(bucket_id))
+                .filter(object_versions::key.eq(key))
+                .filter(object_versions::version_id.eq(version_id)),
+        )
+        .returning((
+            object_versions::key,
+            object_versions::version_id,
+            object_versions::is_current,
+        ))
+        .get_result(&mut conn)
+        .await
+        .optional()
+        .map_err(db_err)?;
+        if let Some(entry) = row {
+            deleted.push(entry);
+        }
+    }
+    Ok(deleted)
 }
 
 pub async fn update_current_after_delete(
@@ -303,6 +421,25 @@ struct VersionRow {
     owner_display_name: String,
     is_delete_marker: bool,
     part_sizes: Option<Vec<i64>>,
+}
+
+fn version_row_into_read_meta(row: VersionRow) -> ObjectMeta {
+    ObjectMeta {
+        key: row.key,
+        size: row.size as u64,
+        etag: row.etag,
+        content_type: row.content_type,
+        last_modified: format_ts(row.last_modified),
+        owner_id: row.owner_id,
+        owner_display_name: row.owner_display_name,
+        acl: None,
+        version_id: Some(row.version_id),
+        is_delete_marker: row.is_delete_marker,
+        checksum_algorithm: None,
+        checksum_value: None,
+        tags: None,
+        part_sizes: part_sizes_from_db(row.part_sizes),
+    }
 }
 
 async fn version_row_into_meta(
