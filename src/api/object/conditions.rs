@@ -8,8 +8,6 @@ pub(super) fn to_http_date(iso: &str) -> String {
         .unwrap_or_else(|_| iso.to_string())
 }
 
-// ── Conditional request header evaluation ────────────────────────────────────
-
 pub(crate) enum ConditionalResult {
     NotModified,
     PreconditionFailed,

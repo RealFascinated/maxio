@@ -2562,8 +2562,6 @@ async fn test_presigned_bad_signature() {
     assert_eq!(resp.status(), 403);
 }
 
-// ── Console presign endpoint tests ───────────────────────────────────
-
 /// Helper: login via console API and return the session cookie value.
 async fn console_login(base_url: &str) -> String {
     let resp = client()
@@ -3064,8 +3062,6 @@ async fn test_console_presign_uses_forwarded_host() {
     assert_eq!(resp.bytes().await.unwrap().as_ref(), body);
 }
 
-// ── Range request tests ──────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_get_object_range_first_bytes() {
     let base_url = start_server().await;
@@ -3416,8 +3412,6 @@ async fn test_delete_folder_marker() {
     let resp = s3_request("HEAD", &format!("{}/mybucket/empty-dir/", base_url), vec![]).await;
     assert_eq!(resp.status(), 404);
 }
-
-// ── Object Tagging ────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_put_and_get_object_tagging() {

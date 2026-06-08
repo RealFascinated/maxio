@@ -49,8 +49,6 @@ fn make_meta(etag: &str, last_modified: &str) -> ObjectMeta {
     }
 }
 
-// ── etag_matches ────────────────────────────────────────────────────────
-
 #[test]
 fn test_etag_matches_exact_quoted() {
     assert!(etag_matches("\"abc123\"", "\"abc123\""));
@@ -75,8 +73,6 @@ fn test_etag_matches_comma_list() {
 fn test_etag_no_match() {
     assert!(!etag_matches("\"wrong\"", "\"abc123\""));
 }
-
-// ── check_conditions ────────────────────────────────────────────────────
 
 fn headers_with(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
     let mut map = axum::http::HeaderMap::new();
