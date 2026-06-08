@@ -3923,3 +3923,69 @@ async fn test_housekeeping_removes_stale_multipart_uploads() {
     );
     let _postgres = postgres;
 }
+
+#[tokio::test]
+async fn test_orphan_meta_scan_and_delete() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap().to_string();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "orphan-bucket".to_string(),
+            created_at: "2026-06-08T00:00:00.000Z".to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    let body: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"orphan test".to_vec()));
+    storage
+        .put_object("orphan-bucket", "missing.txt", "text/plain", body, None)
+        .await
+        .unwrap();
+
+    tokio::fs::remove_file(
+        tmp.path()
+            .join("buckets")
+            .join("orphan-bucket")
+            .join("missing.txt"),
+    )
+    .await
+    .unwrap();
+
+    let pool = maxio::db::create_pool(&database_url).await.unwrap();
+    let blobs = BlobStorage::new(&data_dir).await.unwrap();
+    let orphans = maxio::storage::orphans::scan_orphaned_meta(Arc::new(pool.clone()), &blobs, None)
+        .await
+        .unwrap();
+    assert_eq!(orphans.len(), 1);
+    assert_eq!(orphans[0].bucket, "orphan-bucket");
+    assert_eq!(orphans[0].key, "missing.txt");
+
+    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
+    let removed = maxio::storage::orphans::delete_orphaned_meta(meta.as_ref(), &orphans)
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+
+    let blobs = BlobStorage::new(&data_dir).await.unwrap();
+    let pool = maxio::db::create_pool(&database_url).await.unwrap();
+    let orphans = maxio::storage::orphans::scan_orphaned_meta(Arc::new(pool), &blobs, None)
+        .await
+        .unwrap();
+    assert!(orphans.is_empty());
+
+    let _postgres = postgres;
+}

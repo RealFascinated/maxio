@@ -1044,10 +1044,13 @@ mod tests {
     fn parse_delete_objects_xml_legacy_bare_keys() {
         let xml = br#"<Delete><Key>only.txt</Key></Delete>"#;
         let objects = parse_delete_objects_xml(xml).unwrap();
-        assert_eq!(objects, vec![BatchDeleteObject {
-            key: "only.txt".into(),
-            version_id: None,
-        }]);
+        assert_eq!(
+            objects,
+            vec![BatchDeleteObject {
+                key: "only.txt".into(),
+                version_id: None,
+            }]
+        );
     }
 
     fn make_meta(etag: &str, last_modified: &str) -> ObjectMeta {

@@ -3,6 +3,7 @@ mod iam;
 mod listing;
 mod multipart;
 mod objects;
+mod orphans;
 mod versions;
 
 pub use buckets::*;
@@ -10,6 +11,7 @@ pub use iam::*;
 pub use listing::*;
 pub use multipart::*;
 pub use objects::*;
+pub use orphans::*;
 pub use versions::*;
 
 use crate::db::{BucketCache, CachedBucketEntry, DbPool};

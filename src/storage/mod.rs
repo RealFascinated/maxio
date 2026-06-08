@@ -2,6 +2,7 @@ pub mod blob;
 pub mod cache;
 pub mod metadata;
 pub mod object_storage;
+pub mod orphans;
 pub mod pg_metadata;
 pub mod traits;
 

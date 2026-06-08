@@ -78,6 +78,23 @@ enum Commands {
     /// Manage IAM policies
     #[command(subcommand)]
     Policy(PolicyCmd),
+
+    /// List metadata rows whose object bytes are missing on disk
+    OrphanMeta {
+        /// Delete listed orphaned metadata rows
+        #[arg(long)]
+        delete: bool,
+
+        #[arg(long, env = "MAXIO_DATABASE_URL")]
+        database_url: String,
+
+        #[arg(long, env = "MAXIO_DATA_DIR", default_value = "./data")]
+        data_dir: String,
+
+        /// Also check SSD cache directory when configured
+        #[arg(long, env = "MAXIO_CACHE_DIR")]
+        cache_dir: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -182,6 +199,15 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::User(cmd)) => return run_user_cmd(cmd).await,
         Some(Commands::Policy(cmd)) => return run_policy_cmd(cmd).await,
+        Some(Commands::OrphanMeta {
+            delete,
+            database_url,
+            data_dir,
+            cache_dir,
+        }) => {
+            return run_orphan_meta_cmd(delete, &database_url, &data_dir, cache_dir.as_deref())
+                .await;
+        }
     }
 
     tracing_subscriber::fmt()
@@ -313,6 +339,47 @@ async fn run_healthcheck(url: &str, timeout_ms: u64) -> anyhow::Result<()> {
     }
 
     anyhow::bail!("healthcheck failed with HTTP status {}", status_code);
+}
+
+async fn run_orphan_meta_cmd(
+    delete: bool,
+    database_url: &str,
+    data_dir: &str,
+    cache_dir: Option<&str>,
+) -> anyhow::Result<()> {
+    use storage::blob::BlobStorage;
+    use storage::orphans;
+    use storage::{MetadataStore, PgMetadataStore};
+
+    db::run_migrations(database_url).await?;
+    let pool = Arc::new(db::create_pool(database_url).await?);
+    let blobs = BlobStorage::new(data_dir).await?;
+    let orphans = orphans::scan_orphaned_meta(Arc::clone(&pool), &blobs, cache_dir).await?;
+
+    if orphans.is_empty() {
+        println!("no orphaned metadata");
+        return Ok(());
+    }
+
+    for entry in &orphans {
+        match &entry.source {
+            db::repos::MetaBlobSource::Current => {
+                println!("{}/{}", entry.bucket, entry.key);
+            }
+            db::repos::MetaBlobSource::Version(version_id) => {
+                println!("{}/{}?versionId={}", entry.bucket, entry.key, version_id);
+            }
+        }
+    }
+    println!("{} orphaned metadata row(s)", orphans.len());
+
+    if delete {
+        let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(pool));
+        let removed = orphans::delete_orphaned_meta(meta.as_ref(), &orphans).await?;
+        println!("✓ deleted {removed} orphaned metadata row(s)");
+    }
+
+    Ok(())
 }
 
 async fn load_iam_store(database_url: &str) -> anyhow::Result<Arc<dyn iam::IamStore>> {

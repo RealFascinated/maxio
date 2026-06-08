@@ -50,7 +50,6 @@ pub trait MetadataStore: Send + Sync {
         bucket: &str,
         keys: &[String],
     ) -> Result<Vec<String>, StorageError>;
-    async fn object_exists(&self, bucket: &str, key: &str) -> Result<bool, StorageError>;
     async fn list_objects_page(
         &self,
         bucket: &str,

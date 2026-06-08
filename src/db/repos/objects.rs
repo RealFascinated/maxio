@@ -197,23 +197,6 @@ pub async fn delete_objects_by_keys(
     .map_err(db_err)
 }
 
-pub async fn object_exists(
-    ctx: &DbContext,
-    bucket_name: &str,
-    key: &str,
-) -> Result<bool, StorageError> {
-    let mut conn = get_conn(ctx.pool()).await?;
-    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
-    diesel::select(diesel::dsl::exists(
-        objects::table
-            .filter(objects::bucket_id.eq(bucket_id))
-            .filter(objects::key.eq(key)),
-    ))
-    .get_result::<bool>(&mut conn)
-    .await
-    .map_err(db_err)
-}
-
 pub async fn put_object_acl(
     ctx: &DbContext,
     bucket_name: &str,

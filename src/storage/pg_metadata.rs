@@ -235,14 +235,6 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
-    async fn object_exists(&self, bucket: &str, key: &str) -> Result<bool, StorageError> {
-        meta_op!(
-            self,
-            "object_exists",
-            repos::object_exists(&self.ctx, bucket, key).await
-        )
-    }
-
     async fn list_objects_page(
         &self,
         bucket: &str,
