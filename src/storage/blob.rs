@@ -219,6 +219,12 @@ impl BlobStorage {
             return Err(StorageError::NotFound(key.to_string()));
         }
 
+        if let Some(cache) = &self.cache {
+            return cache
+                .populate_from_data(bucket, key, &data_path, data_size)
+                .await;
+        }
+
         Ok(data_path)
     }
 
@@ -940,6 +946,49 @@ mod read_path_tests {
     }
 
     #[tokio::test]
+    async fn read_miss_populates_cache_and_records_metrics() {
+        let data_root = TempDir::new().unwrap();
+        let cache_root = TempDir::new().unwrap();
+        let data_buckets = data_root.path().join("buckets");
+        let data_path = data_buckets.join("bucket-a").join("obj.txt");
+        tokio::fs::create_dir_all(data_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&data_path, b"payload").await.unwrap();
+
+        let metrics = Arc::new(crate::metrics::MetricsRegistry::new().unwrap());
+        let cache = CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            1024 * 1024,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .with_metrics(Arc::clone(&metrics));
+        let blobs = BlobStorage::new(data_root.path().to_str().unwrap())
+            .await
+            .unwrap()
+            .with_cache(Arc::new(cache));
+
+        let object_meta = meta(7);
+        blobs
+            .open_object("bucket-a", "obj.txt", &object_meta)
+            .await
+            .unwrap();
+        assert_eq!(metrics.snapshot().cache.misses, 1);
+        assert_eq!(metrics.snapshot().cache.hits, 0);
+
+        blobs
+            .open_object("bucket-a", "obj.txt", &object_meta)
+            .await
+            .unwrap();
+        assert_eq!(metrics.snapshot().cache.misses, 1);
+        assert_eq!(metrics.snapshot().cache.hits, 1);
+    }
+
+    #[tokio::test]
     async fn stale_cache_file_is_skipped_for_read() {
         let data_root = TempDir::new().unwrap();
         let cache_root = TempDir::new().unwrap();
@@ -984,10 +1033,8 @@ mod read_path_tests {
             .await
             .unwrap();
         assert_eq!(buf, payload);
-        assert!(
-            !tokio::fs::try_exists(&cache_path).await.unwrap(),
-            "stale cache file should be removed"
-        );
+        let cached = tokio::fs::read(&cache_path).await.unwrap();
+        assert_eq!(cached, payload, "stale cache file should be replaced from data");
     }
 
     #[tokio::test]
