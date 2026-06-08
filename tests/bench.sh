@@ -9,6 +9,7 @@ set -euo pipefail
 #   --minio-host=HOST    Use external MinIO (skip starting server)
 #   --maxio-bin=PATH     Path to maxio binary (default: ./maxio or ./target/release/maxio)
 #   --database-url=URL   Postgres URL for MaxIO metadata (or set MAXIO_DATABASE_URL)
+#   --outdir=DIR         Output directory for benchmark artifacts (default: temp dir)
 #   --help               Show this help
 #
 # MaxIO requires Postgres. Export MAXIO_DATABASE_URL before running, e.g.:
@@ -26,10 +27,8 @@ MINIO_PORT=9801
 BENCH_HOST="127.0.0.1"
 ACCESS_KEY="maxioadmin"
 SECRET_KEY="maxioadmin"
-OUTDIR=$(mktemp -d /tmp/maxio-bench-XXXXXX)
-RESULTS_FILE="$OUTDIR/results.md"
-MAXIO_DATA="$OUTDIR/maxio-data"
-MINIO_DATA="$OUTDIR/minio-data"
+OUTDIR=""
+OUTDIR_IS_TEMP=0
 BIN_DIR="$HOME/.cache/maxio-bench/bin"
 MAXIO_PID=""
 MINIO_PID=""
@@ -53,13 +52,24 @@ for arg in "$@"; do
         --minio-host=*) MINIO_HOST="${arg#*=}" ;;
         --maxio-bin=*)  MAXIO_BIN="${arg#*=}" ;;
         --database-url=*) MAXIO_DATABASE_URL="${arg#*=}" ;;
+        --outdir=*) OUTDIR="${arg#*=}" ;;
         --help)
-            head -16 "$0" | tail -14
+            head -17 "$0" | tail -15
             exit 0
             ;;
         *) red "Unknown argument: $arg"; exit 1 ;;
     esac
 done
+
+if [ -z "$OUTDIR" ]; then
+    OUTDIR=$(mktemp -d /tmp/maxio-bench-XXXXXX)
+    OUTDIR_IS_TEMP=1
+else
+    mkdir -p "$OUTDIR"
+fi
+RESULTS_FILE="$OUTDIR/results.md"
+MAXIO_DATA="$OUTDIR/maxio-data"
+MINIO_DATA="$OUTDIR/minio-data"
 
 # Resolve scenario list
 ALL_SCENARIOS="put-small put-med put-large get-small get-med mixed multipart"
@@ -205,8 +215,10 @@ cleanup() {
         kill "$MINIO_PID" 2>/dev/null || true
         wait "$MINIO_PID" 2>/dev/null || true
     fi
-    # Remove raw benchmark data (results.md is printed to stdout)
-    rm -rf "$OUTDIR"
+    # Remove temp benchmark data (results.md is printed to stdout)
+    if [ "$OUTDIR_IS_TEMP" -eq 1 ]; then
+        rm -rf "$OUTDIR"
+    fi
 }
 trap cleanup EXIT
 
