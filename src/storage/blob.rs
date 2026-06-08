@@ -184,16 +184,26 @@ impl BlobStorage {
         Ok(())
     }
 
-    async fn resolve_read_path(&self, bucket: &str, key: &str) -> Result<PathBuf, StorageError> {
+    async fn resolve_read_path(
+        &self,
+        bucket: &str,
+        key: &str,
+        expected_size: u64,
+    ) -> Result<PathBuf, StorageError> {
         if let Some(cache) = &self.cache {
             let cache_path = cache.object_path(bucket, key);
             if fs::try_exists(&cache_path).await.unwrap_or(false) {
-                let size = fs::metadata(&cache_path)
+                let cache_size = fs::metadata(&cache_path)
                     .await
                     .map_err(StorageError::Io)?
                     .len();
-                cache.record_read_hit(bucket, key, size).await;
-                return Ok(cache_path);
+                if cache_size == expected_size {
+                    cache.record_read_hit(bucket, key, cache_size).await;
+                    return Ok(cache_path);
+                }
+                // Partial/stale cache file from an interrupted write — drop and fall back.
+                let _ = fs::remove_file(&cache_path).await;
+                cache.remove_entry(bucket, key).await;
             }
         }
 
@@ -202,14 +212,12 @@ impl BlobStorage {
             return Err(StorageError::NotFound(key.to_string()));
         }
 
-        if let Some(cache) = &self.cache {
-            let size = fs::metadata(&data_path)
-                .await
-                .map_err(StorageError::Io)?
-                .len();
-            return cache
-                .populate_from_data(bucket, key, &data_path, size)
-                .await;
+        let data_size = fs::metadata(&data_path)
+            .await
+            .map_err(StorageError::Io)?
+            .len();
+        if data_size != expected_size {
+            return Err(StorageError::NotFound(key.to_string()));
         }
 
         Ok(data_path)
@@ -378,7 +386,7 @@ impl BlobStorage {
         key: &str,
         meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self.resolve_read_path(bucket, key).await?;
+        let obj_path = self.resolve_read_path(bucket, key, meta.size).await?;
         if meta.size <= SMALL_OBJECT_THRESHOLD {
             let data = fs::read(&obj_path).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
@@ -395,7 +403,7 @@ impl BlobStorage {
         offset: u64,
         length: u64,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self.resolve_read_path(bucket, key).await?;
+        let obj_path = self.resolve_read_path(bucket, key, _meta.size).await?;
         if length <= SMALL_OBJECT_THRESHOLD {
             let mut file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
             file.seek(std::io::SeekFrom::Start(offset))
@@ -853,6 +861,86 @@ async fn remove_dir_all_if_exists(path: &Path) -> Result<(), StorageError> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(StorageError::Io(e)),
+    }
+}
+
+#[cfg(test)]
+mod read_path_tests {
+    use super::*;
+    use crate::storage::ObjectMeta;
+    use crate::storage::cache::CacheLayer;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    fn meta(size: u64) -> ObjectMeta {
+        ObjectMeta {
+            key: "obj.txt".to_string(),
+            size,
+            etag: "\"abc\"".to_string(),
+            content_type: "text/plain".to_string(),
+            last_modified: "2025-01-01T00:00:00.000Z".to_string(),
+            owner_id: "owner".to_string(),
+            owner_display_name: "Owner".to_string(),
+            acl: None,
+            version_id: None,
+            is_delete_marker: false,
+            checksum_algorithm: None,
+            checksum_value: None,
+            tags: None,
+            part_sizes: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_cache_file_is_skipped_for_read() {
+        let data_root = TempDir::new().unwrap();
+        let cache_root = TempDir::new().unwrap();
+        let data_buckets = data_root.path().join("buckets");
+        let data_path = data_buckets.join("bucket-a").join("obj.txt");
+        tokio::fs::create_dir_all(data_path.parent().unwrap())
+            .await
+            .unwrap();
+        let payload = b"full-payload";
+        tokio::fs::write(&data_path, payload).await.unwrap();
+
+        let cache_path = cache_root
+            .path()
+            .join("buckets")
+            .join("bucket-a")
+            .join("obj.txt");
+        tokio::fs::create_dir_all(cache_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&cache_path, b"partial").await.unwrap();
+
+        let cache = CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            1024 * 1024,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        let blobs = BlobStorage::new(data_root.path().to_str().unwrap())
+            .await
+            .unwrap()
+            .with_cache(Arc::new(cache));
+
+        let mut stream = blobs
+            .open_object("bucket-a", "obj.txt", &meta(payload.len() as u64))
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, payload);
+        assert!(
+            !tokio::fs::try_exists(&cache_path).await.unwrap(),
+            "stale cache file should be removed"
+        );
     }
 }
 

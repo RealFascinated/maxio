@@ -120,19 +120,19 @@ impl CacheLayer {
                 let size = fs::metadata(&path).await?.len();
                 if let Some((bucket, key)) = self.path_to_object_key(&path) {
                     self.record_access_inner(&bucket, &key, size).await;
-                    if self.writeback {
-                        let data_path =
-                            super::blob::object_path_in(&self.data_buckets_dir, &bucket, &key);
-                        let mark_dirty = match fs::metadata(&data_path).await {
-                            Ok(meta) => meta.len() != size,
-                            Err(_) => true,
-                        };
-                        if mark_dirty {
-                            self.dirty
-                                .lock()
-                                .await
-                                .insert((bucket.clone(), key.clone()));
-                        }
+                    if self.writeback
+                        && !fs::try_exists(&super::blob::object_path_in(
+                            &self.data_buckets_dir,
+                            &bucket,
+                            &key,
+                        ))
+                        .await
+                        .unwrap_or(false)
+                    {
+                        self.dirty
+                            .lock()
+                            .await
+                            .insert((bucket.clone(), key.clone()));
                     }
                 }
             }

@@ -37,11 +37,6 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         .await?
         .with_metrics(Arc::clone(&metrics));
         metrics.init_cache_metrics(config.cache_max_size);
-        if config.cache_writeback {
-            if let Err(e) = cache.flush_dirty().await {
-                tracing::warn!("cache writeback startup flush: {}", e);
-            }
-        }
         let cache = Arc::new(cache);
         cache_handle = Some(Arc::clone(&cache));
         cache.clone().spawn_flush_task();
