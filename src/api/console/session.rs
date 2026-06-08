@@ -1,0 +1,193 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::time::Instant;
+
+use axum::http::HeaderMap;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
+use crate::server::AppState;
+
+type HmacSha256 = Hmac<Sha256>;
+
+pub(crate) const COOKIE_NAME: &str = "maxio_session";
+pub(crate) const TOKEN_MAX_AGE_SECS: i64 = 7 * 24 * 60 * 60; // 7 days
+
+const RATE_LIMIT_MAX: u32 = 10;
+const RATE_LIMIT_WINDOW_SECS: u64 = 300; // 5 minutes
+
+struct Bucket {
+    count: u32,
+    window_start: Instant,
+}
+
+pub struct LoginRateLimiter {
+    buckets: std::sync::Mutex<HashMap<String, Bucket>>,
+}
+
+impl LoginRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            buckets: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns `Some(retry_after_secs)` if the IP is rate-limited, `None` if allowed.
+    /// Increments the counter on every call (success and failure both count).
+    pub fn check_and_increment(&self, ip: &str) -> Option<u64> {
+        let mut map = self.buckets.lock().unwrap();
+        let now = Instant::now();
+
+        // Prune expired entries to prevent unbounded memory growth
+        map.retain(|_, b| {
+            now.duration_since(b.window_start).as_secs() < RATE_LIMIT_WINDOW_SECS * 2
+        });
+
+        let bucket = map.entry(ip.to_string()).or_insert(Bucket {
+            count: 0,
+            window_start: now,
+        });
+
+        if now.duration_since(bucket.window_start).as_secs() >= RATE_LIMIT_WINDOW_SECS {
+            bucket.count = 0;
+            bucket.window_start = now;
+        }
+
+        bucket.count += 1;
+
+        if bucket.count > RATE_LIMIT_MAX {
+            let remaining = RATE_LIMIT_WINDOW_SECS
+                .saturating_sub(now.duration_since(bucket.window_start).as_secs());
+            Some(remaining.max(1))
+        } else {
+            None
+        }
+    }
+}
+
+pub(crate) fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
+    let _ = headers;
+    // Public console: do not trust spoofable X-Forwarded-For unless/until a
+    // trusted-proxy allowlist is configured. Use the connected peer IP.
+    addr.ip().to_string()
+}
+
+pub(crate) fn generate_token(username: &str, secret_key: &str, issued_at: i64) -> String {
+    let issued_hex = format!("{:x}", issued_at);
+    let mut mac =
+        HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(format!("{}:{}", username, issued_hex).as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+    format!("{}.{}", issued_hex, sig)
+}
+
+fn verify_token(token: &str, username: &str, secret_key: &str) -> bool {
+    let Some((issued_hex, signature)) = token.split_once('.') else {
+        return false;
+    };
+
+    let Ok(issued_at) = i64::from_str_radix(issued_hex, 16) else {
+        return false;
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    if now - issued_at > TOKEN_MAX_AGE_SECS || issued_at > now + 60 {
+        return false;
+    }
+
+    let mut mac =
+        HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(format!("{}:{}", username, issued_hex).as_bytes());
+    let expected = hex::encode(mac.finalize().into_bytes());
+
+    constant_time_eq(signature.as_bytes(), expected.as_bytes())
+}
+
+pub(crate) async fn resolve_session_username(token: &str, state: &AppState) -> Option<String> {
+    if verify_token(token, crate::iam::ROOT_USERNAME, &state.config.secret_key) {
+        return Some(crate::iam::ROOT_USERNAME.to_string());
+    }
+    for user in state.user_store.list_users().await {
+        if verify_token(token, &user.username, &state.config.secret_key) {
+            return Some(user.username);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConsoleSession {
+    pub username: String,
+    pub is_root: bool,
+    pub user_id: String,
+}
+
+impl ConsoleSession {
+    pub(crate) fn root() -> Self {
+        Self {
+            username: crate::iam::ROOT_USERNAME.to_string(),
+            is_root: true,
+            user_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
+        }
+    }
+
+    pub(crate) fn from_user(user: &crate::iam::types::IamUser) -> Self {
+        Self {
+            username: user.username.clone(),
+            is_root: false,
+            user_id: user.user_id.clone(),
+        }
+    }
+
+    pub fn principal(&self) -> crate::iam::Principal {
+        if self.is_root {
+            crate::iam::Principal::root()
+        } else {
+            crate::iam::Principal {
+                username: self.username.clone(),
+                user_id: self.user_id.clone(),
+                display_name: self.username.clone(),
+                canonical_id: self.user_id.clone(),
+                is_root: false,
+                is_anonymous: false,
+            }
+        }
+    }
+}
+
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+pub(crate) fn extract_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .map(|c| c.trim())
+                .find(|c| c.starts_with(&format!("{}=", COOKIE_NAME)))
+                .map(|c| c[COOKIE_NAME.len() + 1..].to_string())
+        })
+}
+
+pub(crate) fn make_cookie(value: &str, max_age: i64, secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{}",
+        COOKIE_NAME, value, max_age, secure_flag
+    )
+}
+
+pub(crate) fn cookies_require_https(state: &AppState) -> bool {
+    state.config.secure_cookies && !state.config.allow_insecure_dev
+}
