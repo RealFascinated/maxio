@@ -1,6 +1,8 @@
 import { apiFetch } from './http'
 
 export interface CacheSnapshot {
+  id: string
+  name: string
   hits: number
   misses: number
   evictions: number
@@ -39,10 +41,17 @@ export interface StorageTotalsSnapshot {
   sizeBytes: number
 }
 
+export interface LatencySnapshot {
+  windowSeconds: number
+  readSeconds: number | null
+  writeSeconds: number | null
+}
+
 export interface MetricsSnapshot {
   uptimeSeconds: number
   storageTotals: StorageTotalsSnapshot
-  cache: CacheSnapshot
+  latency: LatencySnapshot
+  caches: CacheSnapshot[]
   storageOps: StorageOpSnapshot[]
   metadataOps: MetadataOpSnapshot[]
   process: ProcessSnapshot | null

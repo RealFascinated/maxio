@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
+use crate::metrics::{MetricsRegistry, cache_name};
 use crate::storage::ObjectMeta;
 
 fn cache_key(bucket: &str, key: &str) -> String {
@@ -12,29 +13,50 @@ fn bucket_prefix(bucket: &str) -> String {
 }
 
 /// In-memory cache of current-object read metadata for GET/HEAD hot paths.
-#[derive(Debug, Default)]
 pub struct ObjectReadCache {
     map: RwLock<HashMap<String, ObjectMeta>>,
+    metrics: Option<Arc<MetricsRegistry>>,
 }
 
 impl ObjectReadCache {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(metrics: Option<Arc<MetricsRegistry>>) -> Self {
+        Self {
+            map: RwLock::new(HashMap::new()),
+            metrics,
+        }
     }
 
     pub fn get(&self, bucket: &str, key: &str) -> Option<ObjectMeta> {
-        self.map.read().ok()?.get(&cache_key(bucket, key)).cloned()
+        let result = self.map.read().ok()?.get(&cache_key(bucket, key)).cloned();
+        if result.is_some() {
+            if let Some(m) = &self.metrics {
+                m.record_cache_hit(cache_name::OBJECT_READ);
+            }
+        }
+        result
+    }
+
+    pub fn record_miss(&self) {
+        if let Some(m) = &self.metrics {
+            m.record_cache_miss(cache_name::OBJECT_READ);
+        }
     }
 
     pub fn insert(&self, bucket: &str, key: &str, meta: ObjectMeta) {
         if let Ok(mut map) = self.map.write() {
             map.insert(cache_key(bucket, key), meta);
+            self.sync_entries(map.len());
         }
     }
 
     pub fn remove(&self, bucket: &str, key: &str) {
         if let Ok(mut map) = self.map.write() {
-            map.remove(&cache_key(bucket, key));
+            if map.remove(&cache_key(bucket, key)).is_some() {
+                if let Some(m) = &self.metrics {
+                    m.record_cache_eviction(cache_name::OBJECT_READ);
+                }
+                self.sync_entries(map.len());
+            }
         }
     }
 
@@ -43,8 +65,17 @@ impl ObjectReadCache {
             return;
         }
         if let Ok(mut map) = self.map.write() {
+            let mut removed = 0u64;
             for key in keys {
-                map.remove(&cache_key(bucket, key));
+                if map.remove(&cache_key(bucket, key)).is_some() {
+                    removed += 1;
+                }
+            }
+            if removed > 0 {
+                if let Some(m) = &self.metrics {
+                    m.record_cache_evictions(cache_name::OBJECT_READ, removed);
+                    m.set_cache_entries(cache_name::OBJECT_READ, map.len());
+                }
             }
         }
     }
@@ -52,7 +83,21 @@ impl ObjectReadCache {
     pub fn remove_bucket(&self, bucket: &str) {
         let prefix = bucket_prefix(bucket);
         if let Ok(mut map) = self.map.write() {
+            let before = map.len();
             map.retain(|k, _| !k.starts_with(&prefix));
+            let removed = (before - map.len()) as u64;
+            if removed > 0 {
+                if let Some(m) = &self.metrics {
+                    m.record_cache_evictions(cache_name::OBJECT_READ, removed);
+                    m.set_cache_entries(cache_name::OBJECT_READ, map.len());
+                }
+            }
+        }
+    }
+
+    fn sync_entries(&self, entries: usize) {
+        if let Some(m) = &self.metrics {
+            m.set_cache_entries(cache_name::OBJECT_READ, entries);
         }
     }
 }
@@ -82,7 +127,7 @@ mod tests {
 
     #[test]
     fn caches_and_returns_read_meta() {
-        let cache = ObjectReadCache::new();
+        let cache = ObjectReadCache::new(None);
         let meta = sample_meta("obj.txt");
         cache.insert("bench", "obj.txt", meta.clone());
 
@@ -93,7 +138,7 @@ mod tests {
 
     #[test]
     fn remove_evicts_entry() {
-        let cache = ObjectReadCache::new();
+        let cache = ObjectReadCache::new(None);
         cache.insert("b", "k", sample_meta("k"));
         cache.remove("b", "k");
         assert!(cache.get("b", "k").is_none());
@@ -101,7 +146,7 @@ mod tests {
 
     #[test]
     fn remove_bucket_purges_all_keys_for_bucket() {
-        let cache = ObjectReadCache::new();
+        let cache = ObjectReadCache::new(None);
         cache.insert("b1", "a", sample_meta("a"));
         cache.insert("b1", "b", sample_meta("b"));
         cache.insert("b2", "c", sample_meta("c"));

@@ -172,6 +172,7 @@ pub(crate) async fn resolve_bucket_id(
         return Ok(entry.id);
     }
 
+    cache.record_miss();
     let entry = buckets::load_bucket_cache_entry(conn, bucket_name).await?;
     cache.insert(bucket_name, entry.clone());
     Ok(entry.id)

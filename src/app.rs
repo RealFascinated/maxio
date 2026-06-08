@@ -37,7 +37,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         )
         .await?
         .with_metrics(Arc::clone(&metrics));
-        metrics.init_cache_metrics(config.cache_max_size);
+        metrics.init_object_disk_cache(config.cache_max_size);
         let cache = Arc::new(cache);
         cache_handle = Some(Arc::clone(&cache));
         cache.clone().spawn_scan_task();
@@ -55,12 +55,13 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
 
     crate::storage::provision_default_buckets(storage.as_ref(), &config.default_buckets).await;
 
-    let signing_key_cache = Arc::new(SigningKeyCache::new());
+    let signing_key_cache = Arc::new(SigningKeyCache::new(Some(Arc::clone(&metrics))));
     let pg_iam = Arc::new(PgIamStore::new(pool.clone()));
     let user_store: Arc<dyn IamStore> = Arc::new(CachingIamStore::new(
         pg_iam,
         Duration::from_secs(5 * 60),
         Arc::clone(&signing_key_cache),
+        Some(Arc::clone(&metrics)),
     ));
     let stats = BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
 

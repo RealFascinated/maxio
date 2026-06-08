@@ -141,6 +141,7 @@ pub async fn get_object_for_read(
         return Ok(meta);
     }
 
+    ctx.object_read_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = if let Some(entry) = ctx.bucket_cache().get(bucket_name) {
         entry.id

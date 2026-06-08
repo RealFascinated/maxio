@@ -94,6 +94,7 @@ pub async fn head_bucket(ctx: &DbContext, name: &str) -> Result<bool, StorageErr
     if ctx.bucket_cache().get(name).is_some() {
         return Ok(true);
     }
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     diesel::select(diesel::dsl::exists(
         buckets::table.filter(buckets::name.eq(name)),
@@ -252,6 +253,7 @@ pub async fn get_bucket_policy(
     if let Some(entry) = ctx.bucket_cache().get(bucket) {
         return Ok(entry.policy);
     }
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
@@ -284,6 +286,7 @@ pub async fn get_bucket_acl(ctx: &DbContext, bucket: &str) -> Result<Acl, Storag
             .acl
             .unwrap_or_else(|| Acl::private(&entry.owner_id, &entry.owner_display_name)));
     }
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
@@ -312,6 +315,7 @@ pub async fn get_bucket_cors(
     if let Some(entry) = ctx.bucket_cache().get(bucket) {
         return Ok(Some(entry.cors_rules));
     }
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
@@ -339,6 +343,7 @@ pub async fn fetch_put_bucket_context(
         return Ok(entry.into());
     }
 
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
@@ -355,6 +360,7 @@ pub async fn fetch_bucket_auth_context(
         return Ok(entry.into());
     }
 
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
@@ -413,6 +419,7 @@ pub async fn is_versioned(ctx: &DbContext, bucket: &str) -> Result<bool, Storage
     if let Some(entry) = ctx.bucket_cache().get(bucket) {
         return Ok(entry.versioning);
     }
+    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());

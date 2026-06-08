@@ -1,5 +1,5 @@
 use super::StorageError;
-use crate::metrics::MetricsRegistry;
+use crate::metrics::{MetricsRegistry, cache_name};
 use futures::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -279,7 +279,7 @@ impl CacheLayer {
 
     pub async fn record_read_hit(&self, bucket: &str, key: &str, size: u64) {
         if let Some(m) = &self.metrics {
-            m.record_cache_hit();
+            m.record_cache_hit(cache_name::OBJECT_DISK);
         }
         self.record_access_inner(bucket, key, size).await;
     }
@@ -310,12 +310,16 @@ impl CacheLayer {
         let lru = self.lru.lock().await;
         let dirty = self.dirty.lock().await;
         m.set_cache_state(
+            cache_name::OBJECT_DISK,
             lru.total_size,
             lru.entries.len(),
             dirty.len(),
             self.dirty_bytes.load(Ordering::Relaxed),
         );
-        m.set_cache_writeback_halted(self.writeback_halted.load(Ordering::Relaxed));
+        m.set_cache_writeback_halted(
+            cache_name::OBJECT_DISK,
+            self.writeback_halted.load(Ordering::Relaxed),
+        );
     }
 
     pub async fn remove_entry(&self, bucket: &str, key: &str) {
@@ -387,7 +391,7 @@ impl CacheLayer {
                 ));
             };
             if let Some(m) = &self.metrics {
-                m.record_cache_eviction();
+                m.record_cache_eviction(cache_name::OBJECT_DISK);
             }
             let path = self.object_path(&key.0, &key.1);
             fs::remove_file(&path).await.map_err(StorageError::Io)?;
@@ -409,7 +413,7 @@ impl CacheLayer {
         size: u64,
     ) -> Result<PathBuf, StorageError> {
         if let Some(m) = &self.metrics {
-            m.record_cache_miss();
+            m.record_cache_miss(cache_name::OBJECT_DISK);
         }
         self.reserve_space(size).await?;
         let cache_path = self.object_path(bucket, key);
@@ -496,7 +500,7 @@ impl CacheLayer {
         if had_failure {
             self.writeback_halted.store(true, Ordering::Relaxed);
             if let Some(m) = &self.metrics {
-                m.record_cache_flush(false, flushed_bytes, elapsed);
+                m.record_cache_flush(cache_name::OBJECT_DISK, false, flushed_bytes, elapsed);
             }
             return Err(StorageError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -506,7 +510,7 @@ impl CacheLayer {
 
         self.writeback_halted.store(false, Ordering::Relaxed);
         if let Some(m) = &self.metrics {
-            m.record_cache_flush(true, flushed_bytes, elapsed);
+            m.record_cache_flush(cache_name::OBJECT_DISK, true, flushed_bytes, elapsed);
         }
         Ok(())
     }

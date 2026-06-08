@@ -20,13 +20,14 @@ pub struct PgMetadataStore {
 impl PgMetadataStore {
     pub fn new(pool: Arc<DbPool>) -> Self {
         Self {
-            ctx: DbContext::new(pool),
+            ctx: DbContext::new(pool, None),
             metrics: None,
         }
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
-        self.metrics = Some(metrics);
+        self.metrics = Some(Arc::clone(&metrics));
+        self.ctx = DbContext::new(self.ctx.pool_arc(), Some(metrics));
         self
     }
 

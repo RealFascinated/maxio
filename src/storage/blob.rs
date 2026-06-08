@@ -931,15 +931,27 @@ mod read_path_tests {
             .open_object("bucket-a", "obj.txt", &object_meta)
             .await
             .unwrap();
-        assert_eq!(metrics.snapshot().cache.misses, 1);
-        assert_eq!(metrics.snapshot().cache.hits, 0);
+        let disk = metrics
+            .snapshot()
+            .caches
+            .into_iter()
+            .find(|c| c.id == crate::metrics::cache_name::OBJECT_DISK)
+            .unwrap();
+        assert_eq!(disk.misses, 1);
+        assert_eq!(disk.hits, 0);
 
         blobs
             .open_object("bucket-a", "obj.txt", &object_meta)
             .await
             .unwrap();
-        assert_eq!(metrics.snapshot().cache.misses, 1);
-        assert_eq!(metrics.snapshot().cache.hits, 1);
+        let disk = metrics
+            .snapshot()
+            .caches
+            .into_iter()
+            .find(|c| c.id == crate::metrics::cache_name::OBJECT_DISK)
+            .unwrap();
+        assert_eq!(disk.misses, 1);
+        assert_eq!(disk.hits, 1);
     }
 
     #[tokio::test]

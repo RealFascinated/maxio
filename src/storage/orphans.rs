@@ -35,7 +35,7 @@ pub async fn scan_orphaned_meta(
     blobs: &BlobStorage,
     cache_dir: Option<&str>,
 ) -> Result<Vec<OrphanMetaEntry>, StorageError> {
-    let ctx = DbContext::new(pool);
+    let ctx = DbContext::new(pool, None);
     eprintln!("loading metadata from database...");
     let refs = repos::list_blob_backed_meta(&ctx).await?;
     let total = refs.len();

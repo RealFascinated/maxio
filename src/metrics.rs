@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -8,6 +8,39 @@ use prometheus::{
 use serde::Serialize;
 
 use crate::stats::BucketStatsCache;
+
+pub mod cache_name {
+    pub const OBJECT_DISK: &str = "object_disk";
+    pub const BUCKET: &str = "bucket";
+    pub const OBJECT_READ: &str = "object_read";
+    pub const SIGNING_KEY: &str = "signing_key";
+    pub const IAM_ACCESS_KEY: &str = "iam_access_key";
+    pub const IAM_USER: &str = "iam_user";
+    pub const IAM_POLICIES: &str = "iam_policies";
+
+    pub const ALL: &[&str] = &[
+        OBJECT_DISK,
+        BUCKET,
+        OBJECT_READ,
+        SIGNING_KEY,
+        IAM_ACCESS_KEY,
+        IAM_USER,
+        IAM_POLICIES,
+    ];
+
+    pub fn display_name(name: &str) -> &'static str {
+        match name {
+            OBJECT_DISK => "Object disk",
+            BUCKET => "Bucket metadata",
+            OBJECT_READ => "Object read metadata",
+            SIGNING_KEY => "Signing key",
+            IAM_ACCESS_KEY => "IAM access key",
+            IAM_USER => "IAM user",
+            IAM_POLICIES => "IAM policies",
+            _ => "Unknown",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,12 +60,18 @@ impl StorageTotalsSnapshot {
     }
 }
 
+pub const LATENCY_WINDOW_SECS: u64 = 15;
+
+const READ_LATENCY_OPS: &[&str] = &["get_object", "get_object_range"];
+const WRITE_LATENCY_OPS: &[&str] = &["put_object", "complete_multipart_upload"];
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricsSnapshot {
     pub uptime_seconds: f64,
     pub storage_totals: StorageTotalsSnapshot,
-    pub cache: CacheSnapshot,
+    pub latency: LatencySnapshot,
+    pub caches: Vec<CacheSnapshot>,
     pub storage_ops: Vec<StorageOpSnapshot>,
     pub metadata_ops: Vec<MetadataOpSnapshot>,
     pub process: Option<ProcessSnapshot>,
@@ -40,7 +79,17 @@ pub struct MetricsSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LatencySnapshot {
+    pub window_seconds: u64,
+    pub read_seconds: Option<f64>,
+    pub write_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CacheSnapshot {
+    pub id: String,
+    pub name: String,
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,
@@ -87,6 +136,45 @@ struct RawProcessMetrics {
     max_fds: u64,
 }
 
+struct RollingLatencyWindow {
+    window: Duration,
+    samples: Mutex<VecDeque<(Instant, f64)>>,
+}
+
+impl RollingLatencyWindow {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            samples: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn record(&self, elapsed: Duration) {
+        let now = Instant::now();
+        let mut samples = self.samples.lock().unwrap();
+        samples.push_back((now, elapsed.as_secs_f64()));
+        Self::prune(&self.window, &mut samples, now);
+    }
+
+    fn average_seconds(&self) -> Option<f64> {
+        let mut samples = self.samples.lock().unwrap();
+        let now = Instant::now();
+        Self::prune(&self.window, &mut samples, now);
+        if samples.is_empty() {
+            return None;
+        }
+        let sum: f64 = samples.iter().map(|(_, secs)| secs).sum();
+        Some(sum / samples.len() as f64)
+    }
+
+    fn prune(window: &Duration, samples: &mut VecDeque<(Instant, f64)>, now: Instant) {
+        let cutoff = now.checked_sub(*window).unwrap_or(now);
+        while samples.front().is_some_and(|(t, _)| *t < cutoff) {
+            samples.pop_front();
+        }
+    }
+}
+
 pub struct MetricsRegistry {
     registry: Registry,
     http_requests_total: CounterVec,
@@ -95,23 +183,25 @@ pub struct MetricsRegistry {
     metadata_duration: HistogramVec,
     storage_op_stats: Mutex<HashMap<String, (u64, f64)>>,
     metadata_op_stats: Mutex<HashMap<String, (u64, f64)>>,
-    cache_hits: prometheus::Counter,
-    cache_misses: prometheus::Counter,
-    cache_evictions: prometheus::Counter,
+    cache_hits: CounterVec,
+    cache_misses: CounterVec,
+    cache_evictions: CounterVec,
     cache_flush_total: CounterVec,
-    cache_flush_bytes: prometheus::Counter,
-    cache_flush_duration: prometheus::Histogram,
-    cache_size_bytes: prometheus::Gauge,
-    cache_entries: prometheus::Gauge,
-    cache_dirty_objects: prometheus::Gauge,
-    cache_dirty_bytes: prometheus::Gauge,
-    cache_max_size_bytes: prometheus::Gauge,
-    cache_writeback_halted: prometheus::Gauge,
-    cache_enabled: prometheus::Gauge,
+    cache_flush_bytes: CounterVec,
+    cache_flush_duration: HistogramVec,
+    cache_size_bytes: GaugeVec,
+    cache_entries: GaugeVec,
+    cache_dirty_objects: GaugeVec,
+    cache_dirty_bytes: GaugeVec,
+    cache_max_size_bytes: GaugeVec,
+    cache_writeback_halted: GaugeVec,
+    cache_enabled: GaugeVec,
     uptime: prometheus::Gauge,
     process_cpu_usage: prometheus::Gauge,
     start_time: Instant,
     last_process_cpu: Mutex<Option<(f64, Instant)>>,
+    read_latency: RollingLatencyWindow,
+    write_latency: RollingLatencyWindow,
 }
 
 impl MetricsRegistry {
@@ -169,82 +259,109 @@ impl MetricsRegistry {
         )?;
         registry.register(Box::new(process_cpu_usage.clone()))?;
 
-        let cache_hits =
-            prometheus::Counter::new("maxio_cache_hits_total", "Object read cache hits")?;
+        let cache_hits = CounterVec::new(
+            Opts::new("maxio_cache_hits_total", "Cache hits"),
+            &["cache"],
+        )?;
         registry.register(Box::new(cache_hits.clone()))?;
 
-        let cache_misses = prometheus::Counter::new(
-            "maxio_cache_misses_total",
-            "Object read cache misses (read-through populate)",
+        let cache_misses = CounterVec::new(
+            Opts::new("maxio_cache_misses_total", "Cache misses"),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_misses.clone()))?;
 
-        let cache_evictions = prometheus::Counter::new(
-            "maxio_cache_evictions_total",
-            "LRU cache evictions of clean objects",
+        let cache_evictions = CounterVec::new(
+            Opts::new(
+                "maxio_cache_evictions_total",
+                "Cache evictions or invalidations",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_evictions.clone()))?;
 
         let cache_flush_total = CounterVec::new(
             Opts::new("maxio_cache_flush_total", "Writeback flush runs"),
-            &["result"],
+            &["cache", "result"],
         )?;
         registry.register(Box::new(cache_flush_total.clone()))?;
 
-        let cache_flush_bytes = prometheus::Counter::new(
-            "maxio_cache_flush_bytes_total",
-            "Bytes flushed from cache to data directory",
+        let cache_flush_bytes = CounterVec::new(
+            Opts::new(
+                "maxio_cache_flush_bytes_total",
+                "Bytes flushed from cache to data directory",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_flush_bytes.clone()))?;
 
-        let cache_flush_duration = prometheus::Histogram::with_opts(
+        let cache_flush_duration = HistogramVec::new(
             HistogramOpts::new(
                 "maxio_cache_flush_duration_seconds",
                 "Writeback flush duration in seconds",
             )
             .buckets(vec![0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 30.0]),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_flush_duration.clone()))?;
 
-        let cache_size_bytes = prometheus::Gauge::new(
-            "maxio_cache_size_bytes",
-            "Current tracked cache size in bytes",
+        let cache_size_bytes = GaugeVec::new(
+            Opts::new(
+                "maxio_cache_size_bytes",
+                "Current tracked cache size in bytes",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_size_bytes.clone()))?;
 
-        let cache_entries = prometheus::Gauge::new(
-            "maxio_cache_entries",
-            "Number of objects tracked in the cache LRU",
+        let cache_entries = GaugeVec::new(
+            Opts::new(
+                "maxio_cache_entries",
+                "Number of entries tracked in the cache",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_entries.clone()))?;
 
-        let cache_dirty_objects = prometheus::Gauge::new(
-            "maxio_cache_dirty_objects",
-            "Dirty objects awaiting writeback flush",
+        let cache_dirty_objects = GaugeVec::new(
+            Opts::new(
+                "maxio_cache_dirty_objects",
+                "Dirty objects awaiting writeback flush",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_dirty_objects.clone()))?;
 
-        let cache_dirty_bytes = prometheus::Gauge::new(
-            "maxio_cache_dirty_bytes",
-            "Bytes in dirty objects awaiting writeback flush",
+        let cache_dirty_bytes = GaugeVec::new(
+            Opts::new(
+                "maxio_cache_dirty_bytes",
+                "Bytes in dirty objects awaiting writeback flush",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_dirty_bytes.clone()))?;
 
-        let cache_max_size_bytes = prometheus::Gauge::new(
-            "maxio_cache_max_size_bytes",
-            "Configured maximum cache size in bytes",
+        let cache_max_size_bytes = GaugeVec::new(
+            Opts::new(
+                "maxio_cache_max_size_bytes",
+                "Configured maximum cache size in bytes",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_max_size_bytes.clone()))?;
 
-        let cache_writeback_halted = prometheus::Gauge::new(
-            "maxio_cache_writeback_halted",
-            "1 when writeback is halted due to flush failures",
+        let cache_writeback_halted = GaugeVec::new(
+            Opts::new(
+                "maxio_cache_writeback_halted",
+                "1 when writeback is halted due to flush failures",
+            ),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_writeback_halted.clone()))?;
 
-        let cache_enabled = prometheus::Gauge::new(
-            "maxio_cache_enabled",
-            "1 when an object cache directory is configured",
+        let cache_enabled = GaugeVec::new(
+            Opts::new("maxio_cache_enabled", "1 when the cache is active"),
+            &["cache"],
         )?;
         registry.register(Box::new(cache_enabled.clone()))?;
 
@@ -273,51 +390,84 @@ impl MetricsRegistry {
             process_cpu_usage,
             start_time: Instant::now(),
             last_process_cpu: Mutex::new(None),
+            read_latency: RollingLatencyWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            write_latency: RollingLatencyWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
         })
     }
 
-    pub fn init_cache_metrics(&self, max_size: u64) {
-        self.cache_enabled.set(1.0);
-        self.cache_max_size_bytes.set(max_size as f64);
+    pub fn init_object_disk_cache(&self, max_size: u64) {
+        let cache = cache_name::OBJECT_DISK;
+        self.cache_enabled.with_label_values(&[cache]).set(1.0);
+        self.cache_max_size_bytes
+            .with_label_values(&[cache])
+            .set(max_size as f64);
     }
 
-    pub fn record_cache_hit(&self) {
-        self.cache_hits.inc();
+    pub fn record_cache_hit(&self, cache: &str) {
+        self.cache_hits.with_label_values(&[cache]).inc();
     }
 
-    pub fn record_cache_miss(&self) {
-        self.cache_misses.inc();
+    pub fn record_cache_miss(&self, cache: &str) {
+        self.cache_misses.with_label_values(&[cache]).inc();
     }
 
-    pub fn record_cache_eviction(&self) {
-        self.cache_evictions.inc();
+    pub fn record_cache_eviction(&self, cache: &str) {
+        self.cache_evictions.with_label_values(&[cache]).inc();
+    }
+
+    pub fn record_cache_evictions(&self, cache: &str, count: u64) {
+        if count > 0 {
+            self.cache_evictions
+                .with_label_values(&[cache])
+                .inc_by(count as f64);
+        }
+    }
+
+    pub fn set_cache_entries(&self, cache: &str, entries: usize) {
+        self.cache_entries
+            .with_label_values(&[cache])
+            .set(entries as f64);
     }
 
     pub fn set_cache_state(
         &self,
+        cache: &str,
         size_bytes: u64,
         entries: usize,
         dirty_objects: usize,
         dirty_bytes: u64,
     ) {
-        self.cache_size_bytes.set(size_bytes as f64);
-        self.cache_entries.set(entries as f64);
-        self.cache_dirty_objects.set(dirty_objects as f64);
-        self.cache_dirty_bytes.set(dirty_bytes as f64);
+        self.cache_size_bytes
+            .with_label_values(&[cache])
+            .set(size_bytes as f64);
+        self.set_cache_entries(cache, entries);
+        self.cache_dirty_objects
+            .with_label_values(&[cache])
+            .set(dirty_objects as f64);
+        self.cache_dirty_bytes
+            .with_label_values(&[cache])
+            .set(dirty_bytes as f64);
     }
 
-    pub fn set_cache_writeback_halted(&self, halted: bool) {
+    pub fn set_cache_writeback_halted(&self, cache: &str, halted: bool) {
         self.cache_writeback_halted
+            .with_label_values(&[cache])
             .set(if halted { 1.0 } else { 0.0 });
     }
 
-    pub fn record_cache_flush(&self, success: bool, bytes: u64, elapsed: Duration) {
+    pub fn record_cache_flush(&self, cache: &str, success: bool, bytes: u64, elapsed: Duration) {
         let result = if success { "success" } else { "failure" };
-        self.cache_flush_total.with_label_values(&[result]).inc();
+        self.cache_flush_total
+            .with_label_values(&[cache, result])
+            .inc();
         if success {
-            self.cache_flush_bytes.inc_by(bytes as f64);
+            self.cache_flush_bytes
+                .with_label_values(&[cache])
+                .inc_by(bytes as f64);
         }
-        self.cache_flush_duration.observe(elapsed.as_secs_f64());
+        self.cache_flush_duration
+            .with_label_values(&[cache])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn record_http(&self, method: &str, route: &str, status: &str, elapsed: Duration) {
@@ -338,6 +488,11 @@ impl MetricsRegistry {
         let entry = stats.entry(operation.to_string()).or_insert((0, 0.0));
         entry.0 += 1;
         entry.1 += secs;
+        if READ_LATENCY_OPS.contains(&operation) {
+            self.read_latency.record(elapsed);
+        } else if WRITE_LATENCY_OPS.contains(&operation) {
+            self.write_latency.record(elapsed);
+        }
     }
 
     pub fn record_metadata_op(&self, operation: &str, elapsed: Duration) {
@@ -360,21 +515,35 @@ impl MetricsRegistry {
         }
     }
 
+    fn cache_snapshot(&self, id: &str) -> CacheSnapshot {
+        let disk = id == cache_name::OBJECT_DISK;
+        CacheSnapshot {
+            id: id.to_string(),
+            name: cache_name::display_name(id).to_string(),
+            hits: self.cache_hits.with_label_values(&[id]).get() as u64,
+            misses: self.cache_misses.with_label_values(&[id]).get() as u64,
+            evictions: self.cache_evictions.with_label_values(&[id]).get() as u64,
+            dirty_bytes: self.cache_dirty_bytes.with_label_values(&[id]).get() as u64,
+            size_bytes: self.cache_size_bytes.with_label_values(&[id]).get() as u64,
+            entries: self.cache_entries.with_label_values(&[id]).get() as u64,
+            dirty_objects: self.cache_dirty_objects.with_label_values(&[id]).get() as u64,
+            max_size_bytes: self.cache_max_size_bytes.with_label_values(&[id]).get() as u64,
+            writeback_halted: self.cache_writeback_halted.with_label_values(&[id]).get() > 0.0,
+            enabled: if disk {
+                self.cache_enabled.with_label_values(&[id]).get() > 0.0
+            } else {
+                true
+            },
+        }
+    }
+
     pub fn snapshot(&self) -> MetricsSnapshot {
         self.update_uptime();
 
-        let cache = CacheSnapshot {
-            hits: self.cache_hits.get() as u64,
-            misses: self.cache_misses.get() as u64,
-            evictions: self.cache_evictions.get() as u64,
-            dirty_bytes: self.cache_dirty_bytes.get() as u64,
-            size_bytes: self.cache_size_bytes.get() as u64,
-            entries: self.cache_entries.get() as u64,
-            dirty_objects: self.cache_dirty_objects.get() as u64,
-            max_size_bytes: self.cache_max_size_bytes.get() as u64,
-            writeback_halted: self.cache_writeback_halted.get() > 0.0,
-            enabled: self.cache_enabled.get() > 0.0,
-        };
+        let caches = cache_name::ALL
+            .iter()
+            .map(|id| self.cache_snapshot(id))
+            .collect();
 
         let storage_ops = {
             let stats = self.storage_op_stats.lock().unwrap();
@@ -421,7 +590,12 @@ impl MetricsRegistry {
                 object_count: 0,
                 size_bytes: 0,
             },
-            cache,
+            latency: LatencySnapshot {
+                window_seconds: LATENCY_WINDOW_SECS,
+                read_seconds: self.read_latency.average_seconds(),
+                write_seconds: self.write_latency.average_seconds(),
+            },
+            caches,
             storage_ops,
             metadata_ops,
             process,
@@ -489,6 +663,20 @@ impl MetricsRegistry {
         let mut buf = Vec::new();
         let _ = encoder.encode(&all_families, &mut buf);
         String::from_utf8(buf).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rolling_latency_averages_recent_samples() {
+        let window = RollingLatencyWindow::new(Duration::from_secs(15));
+        window.record(Duration::from_millis(100));
+        window.record(Duration::from_millis(200));
+        let avg = window.average_seconds().unwrap();
+        assert!((avg - 0.15).abs() < 0.001);
     }
 }
 

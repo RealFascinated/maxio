@@ -8,6 +8,7 @@ use crate::auth::signing_key_cache::SigningKeyCache;
 use crate::iam::iam_store::IamStore;
 use crate::iam::policy::PolicyDocument;
 use crate::iam::types::*;
+use crate::metrics::{MetricsRegistry, cache_name};
 
 struct KeyEntry {
     user: Arc<IamUser>,
@@ -40,6 +41,7 @@ pub struct CachingIamStore {
     user_cache: RwLock<HashMap<String, UserEntry>>,
     policies_cache: RwLock<HashMap<String, PoliciesEntry>>,
     signing_keys: Arc<SigningKeyCache>,
+    metrics: Option<Arc<MetricsRegistry>>,
 }
 
 impl CachingIamStore {
@@ -47,6 +49,7 @@ impl CachingIamStore {
         inner: Arc<dyn IamStore>,
         ttl: Duration,
         signing_keys: Arc<SigningKeyCache>,
+        metrics: Option<Arc<MetricsRegistry>>,
     ) -> Self {
         Self {
             inner,
@@ -55,19 +58,48 @@ impl CachingIamStore {
             user_cache: RwLock::new(HashMap::new()),
             policies_cache: RwLock::new(HashMap::new()),
             signing_keys,
+            metrics,
         }
     }
 
     fn evict_key(&self, access_key_id: &str) {
         if let Ok(mut cache) = self.key_cache.write() {
-            cache.remove(access_key_id);
+            if cache.remove(access_key_id).is_some() {
+                if let Some(m) = &self.metrics {
+                    m.record_cache_eviction(cache_name::IAM_ACCESS_KEY);
+                    m.set_cache_entries(cache_name::IAM_ACCESS_KEY, cache.len());
+                }
+            }
         }
         self.signing_keys.evict(access_key_id);
     }
 
     fn evict_user_policies(&self, username: &str) {
         if let Ok(mut cache) = self.policies_cache.write() {
-            cache.remove(username);
+            if cache.remove(username).is_some() {
+                if let Some(m) = &self.metrics {
+                    m.record_cache_eviction(cache_name::IAM_POLICIES);
+                    m.set_cache_entries(cache_name::IAM_POLICIES, cache.len());
+                }
+            }
+        }
+    }
+
+    fn sync_key_entries(&self, entries: usize) {
+        if let Some(m) = &self.metrics {
+            m.set_cache_entries(cache_name::IAM_ACCESS_KEY, entries);
+        }
+    }
+
+    fn sync_user_entries(&self, entries: usize) {
+        if let Some(m) = &self.metrics {
+            m.set_cache_entries(cache_name::IAM_USER, entries);
+        }
+    }
+
+    fn sync_policies_entries(&self, entries: usize) {
+        if let Some(m) = &self.metrics {
+            m.set_cache_entries(cache_name::IAM_POLICIES, entries);
         }
     }
 }
@@ -79,11 +111,17 @@ impl IamStore for CachingIamStore {
             let cache = self.key_cache.read().ok()?;
             if let Some(entry) = cache.get(access_key_id) {
                 if entry.expires_at > Instant::now() {
+                    if let Some(m) = &self.metrics {
+                        m.record_cache_hit(cache_name::IAM_ACCESS_KEY);
+                    }
                     return Some(((*entry.user).clone(), entry.key.clone()));
                 }
             }
         }
 
+        if let Some(m) = &self.metrics {
+            m.record_cache_miss(cache_name::IAM_ACCESS_KEY);
+        }
         let (user, key) = self.inner.lookup_by_access_key(access_key_id).await?;
         let expires_at = Instant::now() + self.ttl;
         let user_arc = Arc::new(user.clone());
@@ -97,6 +135,7 @@ impl IamStore for CachingIamStore {
                     expires_at,
                 },
             );
+            self.sync_key_entries(cache.len());
         }
         if let Ok(mut cache) = self.user_cache.write() {
             cache.insert(
@@ -106,6 +145,7 @@ impl IamStore for CachingIamStore {
                     expires_at,
                 },
             );
+            self.sync_user_entries(cache.len());
         }
         Some((user, key))
     }
@@ -125,12 +165,18 @@ impl IamStore for CachingIamStore {
             if let Ok(cache) = self.user_cache.read() {
                 if let Some(entry) = cache.get(username) {
                     if entry.expires_at > Instant::now() {
+                        if let Some(m) = &self.metrics {
+                            m.record_cache_hit(cache_name::IAM_USER);
+                        }
                         return Some((*entry.user).clone());
                     }
                 }
             }
         }
 
+        if let Some(m) = &self.metrics {
+            m.record_cache_miss(cache_name::IAM_USER);
+        }
         let user = self.inner.get_user(username).await?;
         let expires_at = Instant::now() + self.ttl;
         if let Ok(mut cache) = self.user_cache.write() {
@@ -141,6 +187,7 @@ impl IamStore for CachingIamStore {
                     expires_at,
                 },
             );
+            self.sync_user_entries(cache.len());
         }
         Some(user)
     }
@@ -154,12 +201,18 @@ impl IamStore for CachingIamStore {
             if let Ok(cache) = self.policies_cache.read() {
                 if let Some(entry) = cache.get(&user.username) {
                     if entry.expires_at > Instant::now() {
+                        if let Some(m) = &self.metrics {
+                            m.record_cache_hit(cache_name::IAM_POLICIES);
+                        }
                         return (*entry.policies).clone();
                     }
                 }
             }
         }
 
+        if let Some(m) = &self.metrics {
+            m.record_cache_miss(cache_name::IAM_POLICIES);
+        }
         let policies = self.inner.effective_policies(user).await;
         let expires_at = Instant::now() + self.ttl;
         if let Ok(mut cache) = self.policies_cache.write() {
@@ -170,6 +223,7 @@ impl IamStore for CachingIamStore {
                     expires_at,
                 },
             );
+            self.sync_policies_entries(cache.len());
         }
         policies
     }

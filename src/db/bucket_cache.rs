@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::iam::Acl;
+use crate::metrics::{MetricsRegistry, cache_name};
 use crate::storage::CorsRule;
 use uuid::Uuid;
 
@@ -18,29 +19,50 @@ pub struct CachedBucketEntry {
 }
 
 /// In-memory bucket → metadata cache to avoid repeated Postgres lookups.
-#[derive(Debug, Default)]
 pub struct BucketCache {
     map: RwLock<HashMap<String, CachedBucketEntry>>,
+    metrics: Option<Arc<MetricsRegistry>>,
 }
 
 impl BucketCache {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(metrics: Option<Arc<MetricsRegistry>>) -> Self {
+        Self {
+            map: RwLock::new(HashMap::new()),
+            metrics,
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<CachedBucketEntry> {
-        self.map.read().ok()?.get(name).cloned()
+        let result = self.map.read().ok()?.get(name).cloned();
+        if result.is_some() {
+            if let Some(m) = &self.metrics {
+                m.record_cache_hit(cache_name::BUCKET);
+            }
+        }
+        result
+    }
+
+    pub fn record_miss(&self) {
+        if let Some(m) = &self.metrics {
+            m.record_cache_miss(cache_name::BUCKET);
+        }
     }
 
     pub fn insert(&self, name: impl Into<String>, entry: CachedBucketEntry) {
         if let Ok(mut map) = self.map.write() {
             map.insert(name.into(), entry);
+            self.sync_entries(map.len());
         }
     }
 
     pub fn remove(&self, name: &str) {
         if let Ok(mut map) = self.map.write() {
-            map.remove(name);
+            if map.remove(name).is_some() {
+                if let Some(m) = &self.metrics {
+                    m.record_cache_eviction(cache_name::BUCKET);
+                }
+                self.sync_entries(map.len());
+            }
         }
     }
 
@@ -75,6 +97,12 @@ impl BucketCache {
             }
         }
     }
+
+    fn sync_entries(&self, entries: usize) {
+        if let Some(m) = &self.metrics {
+            m.set_cache_entries(cache_name::BUCKET, entries);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -95,7 +123,7 @@ mod tests {
 
     #[test]
     fn caches_and_returns_put_context() {
-        let cache = BucketCache::new();
+        let cache = BucketCache::new(None);
         let entry = sample_entry();
         let id = entry.id;
         cache.insert("bench", entry);
@@ -106,7 +134,7 @@ mod tests {
 
     #[test]
     fn updates_versioning_in_place() {
-        let cache = BucketCache::new();
+        let cache = BucketCache::new(None);
         cache.insert("b", sample_entry());
         cache.set_versioning("b", true);
         assert!(cache.get("b").unwrap().versioning);

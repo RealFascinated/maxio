@@ -6,14 +6,16 @@
   import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
   import Cpu from 'lucide-svelte/icons/cpu'
   import Database from 'lucide-svelte/icons/database'
+  import Download from 'lucide-svelte/icons/download'
   import HardDrive from 'lucide-svelte/icons/hard-drive'
   import Package from 'lucide-svelte/icons/package'
   import Server from 'lucide-svelte/icons/server'
   import Table2 from 'lucide-svelte/icons/table-2'
+  import Upload from 'lucide-svelte/icons/upload'
   import { metricsKeys } from '$lib/api/keys'
-  import { fetchMetrics } from '$lib/api/metrics'
+  import { fetchMetrics, type CacheSnapshot } from '$lib/api/metrics'
   import { formatBytes } from '$lib/format-bytes'
-  import { formatDuration, formatUptime, hitRate } from '$lib/format'
+  import { formatDuration, formatMetricName, formatUptime, hitRate } from '$lib/format'
 
   const metricsQuery = createQuery(() => ({
     queryKey: metricsKeys.snapshot(),
@@ -21,6 +23,14 @@
     refetchInterval: 1_000,
   }))
 
+  function formatLatency(seconds: number | null | undefined): string {
+    if (seconds == null) return '—'
+    return formatDuration(seconds)
+  }
+
+  function isObjectDiskCache(cache: CacheSnapshot): boolean {
+    return cache.id === 'object_disk'
+  }
 </script>
 
 <div class="mx-auto max-w-5xl space-y-6">
@@ -70,71 +80,93 @@
         <Server class="size-5 text-coollabs dark:text-warning" />
         <h2 class="text-lg font-bold dark:text-white">Server</h2>
       </div>
-      <dl class="grid gap-3 sm:grid-cols-2">
+      <dl class="grid gap-4 sm:grid-cols-3">
         <div>
           <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Uptime</dt>
           <dd class="text-lg font-semibold dark:text-white">{formatUptime(data.uptimeSeconds)}</dd>
         </div>
+        <div>
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
+            <Download class="size-3.5" />
+            Avg read latency
+          </dt>
+          <dd class="text-lg font-semibold dark:text-white">{formatLatency(data.latency.readSeconds)}</dd>
+          <dd class="text-xs text-neutral-500">Last {data.latency.windowSeconds}s, end-to-end</dd>
+        </div>
+        <div>
+          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
+            <Upload class="size-3.5" />
+            Avg write latency
+          </dt>
+          <dd class="text-lg font-semibold dark:text-white">{formatLatency(data.latency.writeSeconds)}</dd>
+          <dd class="text-xs text-neutral-500">Last {data.latency.windowSeconds}s, end-to-end</dd>
+        </div>
       </dl>
     </section>
 
-    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <div class="mb-3 flex flex-wrap items-center gap-2">
-        <HardDrive class="size-5 shrink-0 text-coollabs dark:text-warning" />
-        <h2 class="text-lg font-bold dark:text-white">Cache</h2>
-        {#if data.cache.enabled}
-          <Badge variant="success" label="Enabled" />
-        {:else}
-          <span class="text-xs font-bold text-muted-foreground">Disabled</span>
-        {/if}
-        {#if data.cache.writebackHalted}
-          <Badge variant="error" label="Writeback halted" />
-        {/if}
-      </div>
-      <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hits</dt>
-          <dd class="text-lg font-semibold dark:text-white">{data.cache.hits.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Misses</dt>
-          <dd class="text-lg font-semibold dark:text-white">{data.cache.misses.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hit rate</dt>
-          <dd class="text-lg font-semibold dark:text-white">
-            {hitRate(data.cache.hits, data.cache.misses)}
-          </dd>
-        </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Evictions</dt>
-          <dd class="text-lg font-semibold dark:text-white">{data.cache.evictions.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Size</dt>
-          <dd class="text-lg font-semibold dark:text-white">
-            {formatBytes(data.cache.sizeBytes)}
-            {#if data.cache.maxSizeBytes > 0}
-              <span class="text-sm font-normal text-neutral-500">
-                / {formatBytes(data.cache.maxSizeBytes)}
-              </span>
+    {#each data.caches as cache (cache.id)}
+      <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <HardDrive class="size-5 shrink-0 text-coollabs dark:text-warning" />
+          <h2 class="text-lg font-bold dark:text-white">{formatMetricName(cache.id)}</h2>
+          {#if isObjectDiskCache(cache)}
+            {#if cache.enabled}
+              <Badge variant="success" label="Enabled" />
+            {:else}
+              <span class="text-xs font-bold text-muted-foreground">Disabled</span>
             {/if}
-          </dd>
+            {#if cache.writebackHalted}
+              <Badge variant="error" label="Writeback halted" />
+            {/if}
+          {/if}
         </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Entries</dt>
-          <dd class="text-lg font-semibold dark:text-white">{data.cache.entries.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty objects</dt>
-          <dd class="text-lg font-semibold dark:text-white">{data.cache.dirtyObjects.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty bytes</dt>
-          <dd class="text-lg font-semibold dark:text-white">{formatBytes(data.cache.dirtyBytes)}</dd>
-        </div>
-      </dl>
-    </section>
+        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hits</dt>
+            <dd class="text-lg font-semibold dark:text-white">{cache.hits.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Misses</dt>
+            <dd class="text-lg font-semibold dark:text-white">{cache.misses.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hit rate</dt>
+            <dd class="text-lg font-semibold dark:text-white">
+              {hitRate(cache.hits, cache.misses)}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Evictions</dt>
+            <dd class="text-lg font-semibold dark:text-white">{cache.evictions.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Entries</dt>
+            <dd class="text-lg font-semibold dark:text-white">{cache.entries.toLocaleString()}</dd>
+          </div>
+          {#if isObjectDiskCache(cache)}
+            <div>
+              <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Size</dt>
+              <dd class="text-lg font-semibold dark:text-white">
+                {formatBytes(cache.sizeBytes)}
+                {#if cache.maxSizeBytes > 0}
+                  <span class="text-sm font-normal text-neutral-500">
+                    / {formatBytes(cache.maxSizeBytes)}
+                  </span>
+                {/if}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty objects</dt>
+              <dd class="text-lg font-semibold dark:text-white">{cache.dirtyObjects.toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty bytes</dt>
+              <dd class="text-lg font-semibold dark:text-white">{formatBytes(cache.dirtyBytes)}</dd>
+            </div>
+          {/if}
+        </dl>
+      </section>
+    {/each}
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
       <div class="mb-3 flex items-center gap-2">

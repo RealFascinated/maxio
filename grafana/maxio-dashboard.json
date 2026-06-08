@@ -990,7 +990,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_enabled{job=~\"$job\"}",
+                      "expr": "maxio_cache_enabled{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": true,
                       "legendFormat": "enabled",
                       "range": false
@@ -1097,9 +1097,9 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "100 * sum(rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) / clamp_min(sum(rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) + sum(rate(maxio_cache_misses_total{job=~\"$job\"}[$__rate_interval])), 1e-9)",
+                      "expr": "100 * sum by (cache) (rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) / clamp_min(sum by (cache) (rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) + sum by (cache) (rate(maxio_cache_misses_total{job=~\"$job\"}[$__rate_interval])), 1e-9)",
                       "instant": false,
-                      "legendFormat": "hit rate",
+                      "legendFormat": "{{cache}} hit rate",
                       "range": true
                     },
                     "version": "v0"
@@ -1188,7 +1188,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "100 * maxio_cache_size_bytes{job=~\"$job\"} / clamp_min(maxio_cache_max_size_bytes{job=~\"$job\"}, 1)",
+                      "expr": "100 * maxio_cache_size_bytes{job=~\"$job\", cache=\"object_disk\"} / clamp_min(maxio_cache_max_size_bytes{job=~\"$job\", cache=\"object_disk\"}, 1)",
                       "instant": false,
                       "legendFormat": "utilization",
                       "range": true
@@ -1290,7 +1290,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_size_bytes{job=~\"$job\"}",
+                      "expr": "maxio_cache_size_bytes{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": false,
                       "legendFormat": "used",
                       "range": true
@@ -1311,7 +1311,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_max_size_bytes{job=~\"$job\"}",
+                      "expr": "maxio_cache_max_size_bytes{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": false,
                       "legendFormat": "max",
                       "range": true
@@ -1394,7 +1394,7 @@
                     "spec": {
                       "expr": "maxio_cache_entries{job=~\"$job\"}",
                       "instant": false,
-                      "legendFormat": "entries",
+                      "legendFormat": "{{cache}} entries",
                       "range": true
                     },
                     "version": "v0"
@@ -1473,7 +1473,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_dirty_objects{job=~\"$job\"}",
+                      "expr": "maxio_cache_dirty_objects{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": false,
                       "legendFormat": "dirty",
                       "range": true
@@ -1562,7 +1562,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_enabled{job=~\"$job\"}",
+                      "expr": "maxio_cache_enabled{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": true,
                       "legendFormat": "enabled",
                       "range": false
@@ -1669,9 +1669,9 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])",
+                      "expr": "sum by (cache) (rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval]))",
                       "instant": false,
-                      "legendFormat": "hits",
+                      "legendFormat": "{{cache}} hits",
                       "range": true
                     },
                     "version": "v0"
@@ -1690,9 +1690,9 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\"}[$__rate_interval])",
+                      "expr": "sum by (cache) (rate(maxio_cache_misses_total{job=~\"$job\"}[$__rate_interval]))",
                       "instant": false,
-                      "legendFormat": "misses",
+                      "legendFormat": "{{cache}} misses",
                       "range": true
                     },
                     "version": "v0"
@@ -1839,7 +1839,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_dirty_bytes{job=~\"$job\"}",
+                      "expr": "maxio_cache_dirty_bytes{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": false,
                       "legendFormat": "dirty bytes",
                       "range": true
@@ -1860,7 +1860,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "rate(maxio_cache_flush_bytes_total{job=~\"$job\"}[$__rate_interval])",
+                      "expr": "rate(maxio_cache_flush_bytes_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval])",
                       "instant": false,
                       "legendFormat": "flush",
                       "range": true
@@ -1991,9 +1991,9 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "rate(maxio_cache_evictions_total{job=~\"$job\"}[$__rate_interval])",
+                      "expr": "sum by (cache) (rate(maxio_cache_evictions_total{job=~\"$job\"}[$__rate_interval]))",
                       "instant": false,
-                      "legendFormat": "evictions",
+                      "legendFormat": "{{cache}} evictions",
                       "range": true
                     },
                     "version": "v0"
@@ -2106,7 +2106,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "sum by (result) (rate(maxio_cache_flush_total{job=~\"$job\"}[$__rate_interval]))",
+                      "expr": "sum by (result) (rate(maxio_cache_flush_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval]))",
                       "instant": false,
                       "legendFormat": "{{result}}",
                       "range": true
@@ -2254,7 +2254,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "histogram_quantile(0.50, sum by (le) (rate(maxio_cache_flush_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.50, sum by (le) (rate(maxio_cache_flush_duration_seconds_bucket{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval])))",
                       "instant": false,
                       "legendFormat": "p50",
                       "range": true
@@ -2275,7 +2275,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "histogram_quantile(0.95, sum by (le) (rate(maxio_cache_flush_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.95, sum by (le) (rate(maxio_cache_flush_duration_seconds_bucket{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval])))",
                       "instant": false,
                       "legendFormat": "p95",
                       "range": true
@@ -2393,7 +2393,7 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "maxio_cache_writeback_halted{job=~\"$job\"}",
+                      "expr": "maxio_cache_writeback_halted{job=~\"$job\", cache=\"object_disk\"}",
                       "instant": true,
                       "legendFormat": "halted",
                       "range": false
