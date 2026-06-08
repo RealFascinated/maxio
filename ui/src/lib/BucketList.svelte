@@ -19,6 +19,7 @@
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
   import { formatBytes } from '$lib/format-bytes'
+  import { formatDate } from '$lib/format'
 
   interface Props {
     onSelect: (bucket: string) => void
@@ -99,13 +100,6 @@
     }
   }
 
-  function formatDate(iso: string): string {
-    try {
-      return new Date(iso).toLocaleString()
-    } catch {
-      return iso
-    }
-  }
 </script>
 
 <div class="space-y-6">

@@ -11,4 +11,8 @@ export function displayName(fullPath: string): string {
 	return lastSlash >= 0 ? trimmed.slice(lastSlash + 1) : trimmed
 }
 
+export function truncateId(id: string): string {
+	return id.length > 16 ? id.slice(0, 16) + '...' : id
+}
+
 export type { WithElementRef } from "bits-ui";

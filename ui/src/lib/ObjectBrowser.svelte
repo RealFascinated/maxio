@@ -22,6 +22,7 @@
   import VersionHistory from './VersionHistory.svelte'
   import FilePreview from './FilePreview.svelte'
   import { formatBytes } from '$lib/format-bytes'
+  import { formatDate } from '$lib/format'
   import { isPreviewable } from '$lib/preview'
   import { toast } from '$lib/toast'
   import { objectKeys, settingsKeys } from '$lib/api/keys'
@@ -206,14 +207,6 @@
       return folderPrefix.slice(prefix.length)
     }
     return displayName(folderPrefix)
-  }
-
-  function formatDate(iso: string): string {
-    try {
-      return new Date(iso).toLocaleString()
-    } catch {
-      return iso
-    }
   }
 
   let breadcrumbs = $derived.by(() => {

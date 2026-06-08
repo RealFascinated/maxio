@@ -13,6 +13,8 @@
   import { ApiError, encodeObjectKey } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
   import { formatBytes } from '$lib/format-bytes'
+  import { formatDate } from '$lib/format'
+  import { truncateId } from '$lib/utils'
 
   interface Props {
     bucket: string
@@ -61,17 +63,6 @@
     )
   }
 
-  function formatDate(iso: string): string {
-    try {
-      return new Date(iso).toLocaleString()
-    } catch {
-      return iso
-    }
-  }
-
-  function truncateId(id: string): string {
-    return id.length > 16 ? id.slice(0, 16) + '...' : id
-  }
 </script>
 
 <div class="rounded-sm border bg-card">
