@@ -215,22 +215,28 @@
             </Table.Cell>
             <Table.Cell class="text-muted-foreground">{formatDate(bucket.createdAt)}</Table.Cell>
             <Table.Cell class="w-20">
-              <div class="flex items-center gap-4">
-                <button
-                  class="text-muted-foreground hover:text-foreground transition-colors"
-                  onclick={(e: Event) => { e.stopPropagation(); onSettings(bucket.name) }}
-                  title="Bucket settings"
-                >
-                  <Settings class="size-4" />
-                </button>
-                <button
-                  class="text-muted-foreground hover:text-destructive transition-colors"
-                  onclick={(e: Event) => deleteBucket(bucket.name, e)}
-                  title="Delete bucket"
-                >
-                  <Trash2 class="size-4" />
-                </button>
-              </div>
+              {#if bucket.canManageSettings || bucket.canDelete}
+                <div class="flex items-center gap-4">
+                  {#if bucket.canManageSettings}
+                    <button
+                      class="text-muted-foreground hover:text-foreground transition-colors"
+                      onclick={(e: Event) => { e.stopPropagation(); onSettings(bucket.name) }}
+                      title="Bucket settings"
+                    >
+                      <Settings class="size-4" />
+                    </button>
+                  {/if}
+                  {#if bucket.canDelete}
+                    <button
+                      class="text-muted-foreground hover:text-destructive transition-colors"
+                      onclick={(e: Event) => deleteBucket(bucket.name, e)}
+                      title="Delete bucket"
+                    >
+                      <Trash2 class="size-4" />
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             </Table.Cell>
           </Table.Row>
         {/each}

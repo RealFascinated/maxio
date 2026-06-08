@@ -6,6 +6,8 @@ export interface Bucket {
   versioning: boolean
   objectCount: number | null
   sizeBytes: number | null
+  canDelete?: boolean
+  canManageSettings?: boolean
 }
 
 export interface BucketsResponse { buckets: Bucket[] }

@@ -297,6 +297,47 @@ async fn console_bucket_check(
     }
 }
 
+async fn console_bucket_can(
+    state: &AppState,
+    session: &ConsoleSession,
+    bucket: &str,
+    action: &str,
+) -> bool {
+    if session.is_root {
+        return true;
+    }
+    match state.storage.get_bucket_auth_info(bucket).await {
+        Ok((policy, acl)) => console_check(
+            state,
+            session,
+            action,
+            &crate::iam::authz::bucket_arn(bucket),
+            policy.as_deref(),
+            Some(&acl),
+        )
+        .await
+        .is_ok(),
+        Err(_) => false,
+    }
+}
+
+async fn console_bucket_can_manage_settings(
+    state: &AppState,
+    session: &ConsoleSession,
+    bucket: &str,
+) -> bool {
+    for action in [
+        "s3:PutBucketVersioning",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketCors",
+    ] {
+        if console_bucket_can(state, session, bucket, action).await {
+            return true;
+        }
+    }
+    false
+}
+
 async fn console_object_check(
     state: &AppState,
     session: &ConsoleSession,
@@ -557,19 +598,23 @@ pub async fn list_buckets(
             let buckets =
                 crate::iam::authz::filter_buckets_by_access(&state, &session.principal(), buckets)
                     .await;
-            let list: Vec<serde_json::Value> = buckets
-                .into_iter()
-                .map(|b| {
-                    let stat = state.stats.get(&b.name);
-                    serde_json::json!({
-                        "name": b.name,
-                        "createdAt": b.created_at,
-                        "versioning": b.versioning,
-                        "objectCount": stat.as_ref().map(|s| s.object_count),
-                        "sizeBytes": stat.as_ref().map(|s| s.size_bytes),
-                    })
-                })
-                .collect();
+            let mut list = Vec::with_capacity(buckets.len());
+            for b in buckets {
+                let can_delete =
+                    console_bucket_can(&state, &session, &b.name, "s3:DeleteBucket").await;
+                let can_manage_settings =
+                    console_bucket_can_manage_settings(&state, &session, &b.name).await;
+                let stat = state.stats.get(&b.name);
+                list.push(serde_json::json!({
+                    "name": b.name,
+                    "createdAt": b.created_at,
+                    "versioning": b.versioning,
+                    "objectCount": stat.as_ref().map(|s| s.object_count),
+                    "sizeBytes": stat.as_ref().map(|s| s.size_bytes),
+                    "canDelete": can_delete,
+                    "canManageSettings": can_manage_settings,
+                }));
+            }
             (StatusCode::OK, Json(serde_json::json!({ "buckets": list }))).into_response()
         }
         Err(e) => (
