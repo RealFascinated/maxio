@@ -154,7 +154,6 @@ impl BlobStorage {
 
     fn write_buckets_dir(&self) -> Result<&Path, StorageError> {
         if let Some(cache) = &self.cache {
-            cache.check_write_allowed()?;
             if cache.writeback() {
                 return Ok(cache.buckets_dir());
             }
@@ -204,6 +203,9 @@ impl BlobStorage {
                 // Partial/stale cache file from an interrupted write — drop and fall back.
                 let _ = fs::remove_file(&cache_path).await;
                 cache.remove_entry(bucket, key).await;
+            }
+            if cache.writeback() && cache.is_dirty(bucket, key).await {
+                return Err(StorageError::NotFound(key.to_string()));
             }
         }
 
@@ -432,12 +434,25 @@ impl BlobStorage {
         cleanup_parents: bool,
     ) -> Result<(), StorageError> {
         let obj_path = self.object_path(bucket, key);
-        remove_file_if_exists(&obj_path).await?;
+        let writeback = self.cache.as_ref().is_some_and(|c| c.writeback());
+
         if let Some(cache) = &self.cache {
+            cache.remove_entry(bucket, key).await;
             let cache_path = cache.object_path(bucket, key);
             let _ = remove_file_if_exists(&cache_path).await;
-            cache.remove_entry(bucket, key).await;
         }
+
+        if writeback {
+            let bucket_dir = self.buckets_dir.join(bucket);
+            tokio::spawn(remove_array_object_background(
+                obj_path,
+                bucket_dir,
+                cleanup_parents,
+            ));
+            return Ok(());
+        }
+
+        remove_file_if_exists(&obj_path).await?;
         if cleanup_parents {
             self.cleanup_empty_parents(bucket, key).await;
         }
@@ -460,6 +475,7 @@ impl BlobStorage {
         let sem = Arc::new(Semaphore::new(concurrency.max(1)));
         let buckets_dir = self.buckets_dir.clone();
         let cache = self.cache.clone();
+        let writeback = cache.as_ref().is_some_and(|c| c.writeback());
         let bucket_name = bucket.to_string();
         let mut handles = Vec::with_capacity(keys.len());
         for key in keys {
@@ -475,11 +491,19 @@ impl BlobStorage {
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 let obj_path = object_path_in(&buckets_dir, &bucket_name, &key);
-                let _ = remove_file_if_exists(&obj_path).await;
-                if let Some(cache) = cache {
+                if let Some(cache) = &cache {
+                    cache.remove_entry(&bucket_name, &key).await;
                     let cache_path = cache.object_path(&bucket_name, &key);
                     let _ = remove_file_if_exists(&cache_path).await;
-                    cache.remove_entry(&bucket_name, &key).await;
+                }
+                if writeback {
+                    tokio::spawn(remove_array_object_background(
+                        obj_path,
+                        buckets_dir.join(&bucket_name),
+                        false,
+                    ));
+                } else {
+                    let _ = remove_file_if_exists(&obj_path).await;
                 }
             }));
         }
@@ -488,20 +512,40 @@ impl BlobStorage {
                 .await
                 .map_err(|e| StorageError::Io(std::io::Error::other(e)))?;
         }
-        self.prune_empty_dirs(bucket).await;
+        if writeback {
+            let buckets_dir = self.buckets_dir.clone();
+            let bucket_name = bucket.to_string();
+            tokio::spawn(async move {
+                prune_empty_dirs_up(
+                    buckets_dir.join(&bucket_name),
+                    &buckets_dir.join(&bucket_name),
+                )
+                .await;
+            });
+        } else {
+            self.prune_empty_dirs(bucket).await;
+        }
         Ok(())
     }
 
     pub async fn remove_bucket_tree(&self, bucket: &str) -> Result<(), StorageError> {
+        let writeback = self.cache.as_ref().is_some_and(|c| c.writeback());
+        if let Some(cache) = &self.cache {
+            cache.purge_bucket(bucket).await;
+            let cache_path = cache.buckets_dir().join(bucket);
+            let _ = fs::remove_dir_all(&cache_path).await;
+        }
         let path = self.buckets_dir.join(bucket);
+        if writeback {
+            tokio::spawn(async move {
+                let _ = remove_dir_all_if_exists(&path).await;
+            });
+            return Ok(());
+        }
         match fs::remove_dir_all(&path).await {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(StorageError::Io(e)),
-        }
-        if let Some(cache) = &self.cache {
-            let cache_path = cache.buckets_dir().join(bucket);
-            let _ = fs::remove_dir_all(&cache_path).await;
         }
         Ok(())
     }
@@ -535,9 +579,6 @@ impl BlobStorage {
         mut body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
     ) -> Result<(String, u64, Option<ChecksumAlgorithm>, Option<String>), StorageError> {
-        if let Some(cache) = &self.cache {
-            cache.check_write_allowed()?;
-        }
         self.ensure_upload_dir(bucket, upload_id).await?;
         let part_path = self.part_path(bucket, upload_id, part_number);
         let file = fs::File::create(&part_path).await?;
@@ -856,6 +897,46 @@ async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
     }
 }
 
+async fn remove_array_object_background(
+    obj_path: PathBuf,
+    bucket_dir: PathBuf,
+    cleanup_parents: bool,
+) {
+    let log_path = obj_path.display().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            if let Err(e) = std::fs::remove_file(&obj_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e);
+                }
+            }
+            if cleanup_parents {
+                let mut dir = obj_path.parent().map(|p| p.to_path_buf());
+                while let Some(d) = dir {
+                    if d == bucket_dir {
+                        break;
+                    }
+                    match std::fs::remove_dir(&d) {
+                        Ok(()) => {}
+                        Err(_) => break,
+                    }
+                    dir = d.parent().map(|p| p.to_path_buf());
+                }
+            }
+            Ok(())
+        })();
+        let _ = tx.send(result);
+    });
+    if let Ok(Err(e)) = rx.await {
+        tracing::warn!(
+            path = %log_path,
+            error = %e,
+            "background array object delete failed"
+        );
+    }
+}
+
 async fn remove_dir_all_if_exists(path: &Path) -> Result<(), StorageError> {
     match fs::remove_dir_all(path).await {
         Ok(()) => Ok(()),
@@ -940,6 +1021,54 @@ mod read_path_tests {
         assert!(
             !tokio::fs::try_exists(&cache_path).await.unwrap(),
             "stale cache file should be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn writeback_unlink_clears_cache_immediately() {
+        let data_root = TempDir::new().unwrap();
+        let cache_root = TempDir::new().unwrap();
+        let data_buckets = data_root.path().join("buckets");
+        let data_path = data_buckets.join("bucket-a").join("obj.txt");
+        let cache_path = cache_root
+            .path()
+            .join("buckets")
+            .join("bucket-a")
+            .join("obj.txt");
+        tokio::fs::create_dir_all(cache_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&cache_path, b"cached-only").await.unwrap();
+        tokio::fs::create_dir_all(data_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&data_path, b"cached-only").await.unwrap();
+
+        let cache = CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            1024 * 1024,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        cache.mark_dirty("bucket-a", "obj.txt", 11).await;
+        let blobs = BlobStorage::new(data_root.path().to_str().unwrap())
+            .await
+            .unwrap()
+            .with_cache(Arc::new(cache));
+
+        blobs.unlink_object("bucket-a", "obj.txt").await.unwrap();
+
+        assert!(
+            !tokio::fs::try_exists(&cache_path).await.unwrap(),
+            "cache file should be removed before returning"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !tokio::fs::try_exists(&data_path).await.unwrap(),
+            "data file should be removed in background"
         );
     }
 }
