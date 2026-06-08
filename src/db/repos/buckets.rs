@@ -130,6 +130,7 @@ pub async fn delete_bucket(ctx: &DbContext, name: &str) -> Result<bool, StorageE
 
     if deleted > 0 {
         ctx.bucket_cache().remove(name);
+        ctx.object_read_cache().remove_bucket(name);
     }
     Ok(deleted > 0)
 }

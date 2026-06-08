@@ -24,12 +24,16 @@ fn object_has_side_tables(meta: &ObjectMeta) -> bool {
 /// Upsert an object row using a caller-supplied connection and bucket_id.
 /// Used by version pointer updates that already hold an open connection.
 pub(super) async fn upsert_object_conn(
+    ctx: &DbContext,
+    bucket_name: &str,
     conn: &mut diesel_async::AsyncPgConnection,
     bucket_id: Uuid,
     meta: &ObjectMeta,
 ) -> Result<(), StorageError> {
     let last_modified = parse_ts(&meta.last_modified)?;
-    do_upsert_object(conn, bucket_id, meta, last_modified).await
+    do_upsert_object(conn, bucket_id, meta, last_modified).await?;
+    write_through_read_cache(ctx, bucket_name, meta);
+    Ok(())
 }
 
 pub async fn upsert_object(
@@ -47,7 +51,9 @@ pub async fn upsert_object(
         resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
     };
     let last_modified = parse_ts(&meta.last_modified)?;
-    do_upsert_object(&mut conn, bucket_id, meta, last_modified).await
+    do_upsert_object(&mut conn, bucket_id, meta, last_modified).await?;
+    write_through_read_cache(ctx, bucket_name, meta);
+    Ok(())
 }
 
 async fn do_upsert_object(
@@ -131,6 +137,10 @@ pub async fn get_object_for_read(
     bucket_name: &str,
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
+    if let Some(meta) = ctx.object_read_cache().get(bucket_name, key) {
+        return Ok(meta);
+    }
+
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = if let Some(entry) = ctx.bucket_cache().get(bucket_name) {
         entry.id
@@ -149,7 +159,10 @@ pub async fn get_object_for_read(
             other => db_err(other),
         })?;
 
-    Ok(row_into_read_meta(row))
+    let meta = row_into_read_meta(row);
+    ctx.object_read_cache()
+        .insert(bucket_name, key, meta.clone());
+    Ok(meta)
 }
 
 pub async fn get_object_meta(
@@ -190,6 +203,7 @@ pub async fn delete_object(
     .execute(&mut conn)
     .await
     .map_err(db_err)?;
+    ctx.object_read_cache().remove(bucket_name, key);
     Ok(())
 }
 
@@ -205,15 +219,18 @@ pub async fn delete_objects_by_keys(
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
-    diesel::delete(
+    let deleted_keys: Vec<String> = diesel::delete(
         objects::table
             .filter(objects::bucket_id.eq(bucket_id))
             .filter(objects::key.eq_any(keys)),
     )
     .returning(objects::key)
-    .load::<String>(&mut conn)
+    .load(&mut conn)
     .await
-    .map_err(db_err)
+    .map_err(db_err)?;
+
+    ctx.object_read_cache().remove_many(bucket_name, keys);
+    Ok(deleted_keys)
 }
 
 pub async fn put_object_acl(
@@ -330,6 +347,30 @@ pub async fn delete_object_tags(
     key: &str,
 ) -> Result<(), StorageError> {
     put_object_tags(ctx, bucket_name, key, HashMap::new()).await
+}
+
+fn meta_for_read_cache(meta: &ObjectMeta) -> ObjectMeta {
+    ObjectMeta {
+        key: meta.key.clone(),
+        size: meta.size,
+        etag: meta.etag.clone(),
+        content_type: meta.content_type.clone(),
+        last_modified: meta.last_modified.clone(),
+        owner_id: meta.owner_id.clone(),
+        owner_display_name: meta.owner_display_name.clone(),
+        acl: None,
+        version_id: meta.version_id.clone(),
+        is_delete_marker: meta.is_delete_marker,
+        checksum_algorithm: None,
+        checksum_value: None,
+        tags: None,
+        part_sizes: meta.part_sizes.clone(),
+    }
+}
+
+fn write_through_read_cache(ctx: &DbContext, bucket_name: &str, meta: &ObjectMeta) {
+    ctx.object_read_cache()
+        .insert(bucket_name, &meta.key, meta_for_read_cache(meta));
 }
 
 pub(crate) fn row_into_read_meta(row: ObjectRow) -> ObjectMeta {

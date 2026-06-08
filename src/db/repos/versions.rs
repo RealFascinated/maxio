@@ -410,12 +410,14 @@ pub async fn update_current_after_delete(
 
     if let Some(row) = latest {
         let meta = version_row_into_meta(&mut conn, row.clone()).await?;
-        super::objects::upsert_object_conn(&mut conn, bucket_id, &meta).await?;
+        super::objects::upsert_object_conn(ctx, bucket_name, &mut conn, bucket_id, &meta).await?;
         diesel::update(object_versions::table.filter(object_versions::id.eq(row.id)))
             .set(object_versions::is_current.eq(true))
             .execute(&mut conn)
             .await
             .map_err(db_err)?;
+    } else {
+        ctx.object_read_cache().remove(bucket_name, key);
     }
 
     Ok(())

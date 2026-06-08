@@ -1,5 +1,6 @@
 pub mod bucket_cache;
 pub mod context;
+pub mod object_read_cache;
 pub mod repos;
 pub mod schema;
 
