@@ -280,6 +280,9 @@ async fn main() -> anyhow::Result<()> {
     .with_graceful_shutdown(async move {
         shutdown_signal().await;
         if let Some(cache) = cache_for_shutdown {
+            if let Err(e) = cache.save_index().await {
+                tracing::warn!("shutdown cache index save: {}", e);
+            }
             if let Err(e) = cache.flush_dirty().await {
                 tracing::warn!("shutdown writeback flush: {}", e);
             }

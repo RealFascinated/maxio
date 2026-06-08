@@ -40,6 +40,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         metrics.init_cache_metrics(config.cache_max_size);
         let cache = Arc::new(cache);
         cache_handle = Some(Arc::clone(&cache));
+        cache.clone().spawn_scan_task();
         cache.clone().spawn_gauge_task();
         cache.clone().spawn_flush_task();
         blobs.with_cache(cache)
