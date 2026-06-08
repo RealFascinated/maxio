@@ -1,5 +1,6 @@
 pub mod blob;
 pub mod cache;
+mod hashing;
 pub mod metadata;
 pub mod object_storage;
 pub mod orphans;

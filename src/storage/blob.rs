@@ -1,7 +1,8 @@
-use super::cache::CacheLayer;
-use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
 use base64::Engine;
-use md5::{Digest, Md5};
+
+use super::cache::CacheLayer;
+use super::hashing::{ChecksumHasher, EtagMd5};
+use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
 use rand::RngExt;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -26,43 +27,6 @@ pub struct WrittenPayload {
     pub checksum_value: Option<String>,
     pub tmp_path: PathBuf,
     pub final_path: PathBuf,
-}
-
-enum ChecksumHasher {
-    Crc32(crc32fast::Hasher),
-    Crc32c(u32),
-    Sha1(sha1::Sha1),
-    Sha256(sha2::Sha256),
-}
-
-impl ChecksumHasher {
-    fn new(algo: ChecksumAlgorithm) -> Self {
-        match algo {
-            ChecksumAlgorithm::CRC32 => Self::Crc32(crc32fast::Hasher::new()),
-            ChecksumAlgorithm::CRC32C => Self::Crc32c(0),
-            ChecksumAlgorithm::SHA1 => Self::Sha1(<sha1::Sha1 as Digest>::new()),
-            ChecksumAlgorithm::SHA256 => Self::Sha256(<sha2::Sha256 as Digest>::new()),
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        match self {
-            Self::Crc32(h) => h.update(data),
-            Self::Crc32c(v) => *v = crc32c::crc32c_append(*v, data),
-            Self::Sha1(h) => Digest::update(h, data),
-            Self::Sha256(h) => Digest::update(h, data),
-        }
-    }
-
-    fn finalize_base64(self) -> String {
-        let b64 = base64::engine::general_purpose::STANDARD;
-        match self {
-            Self::Crc32(h) => b64.encode(h.finalize().to_be_bytes()),
-            Self::Crc32c(v) => b64.encode(v.to_be_bytes()),
-            Self::Sha1(h) => b64.encode(Digest::finalize(h)),
-            Self::Sha256(h) => b64.encode(Digest::finalize(h)),
-        }
-    }
 }
 
 pub fn validate_key(key: &str) -> Result<(), StorageError> {
@@ -304,7 +268,7 @@ impl BlobStorage {
 
         let file = fs::File::create(&write_path).await?;
         let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
-        let mut hasher = Md5::new();
+        let mut hasher = EtagMd5::new();
         let mut checksum_hasher = checksum
             .as_ref()
             .map(|(algo, _)| ChecksumHasher::new(*algo));
@@ -574,7 +538,7 @@ impl BlobStorage {
         let part_path = self.part_path(bucket, upload_id, part_number);
         let file = fs::File::create(&part_path).await?;
         let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
-        let mut hasher = Md5::new();
+        let mut hasher = EtagMd5::new();
         let mut checksum_hasher = checksum
             .as_ref()
             .map(|(algo, _)| ChecksumHasher::new(*algo));
@@ -641,7 +605,7 @@ impl BlobStorage {
         let out = fs::File::create(&tmp_obj_path).await?;
         let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, out);
         let mut total_size = 0u64;
-        let mut etag_hasher = Md5::new();
+        let mut etag_hasher = EtagMd5::new();
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
 
         for part in parts {
@@ -658,7 +622,7 @@ impl BlobStorage {
 
             let raw_md5 = hex::decode(part.etag.trim_matches('"'))
                 .map_err(|_| StorageError::InvalidKey("invalid part etag".into()))?;
-            etag_hasher.update(raw_md5);
+            etag_hasher.update(&raw_md5);
         }
         writer.flush().await?;
 

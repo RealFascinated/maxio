@@ -2742,6 +2742,83 @@ async fn test_console_list_objects_search() {
 }
 
 #[tokio::test]
+async fn test_console_list_objects_returns_all_sibling_folders_on_first_page() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/sibling-bucket", base_url), vec![]).await;
+
+    s3_request(
+        "PUT",
+        &format!("{}/sibling-bucket/a-file.txt", base_url),
+        b"x".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/sibling-bucket/z-file.txt", base_url),
+        b"x".to_vec(),
+    )
+    .await;
+
+    for i in 0..250 {
+        s3_request(
+            "PUT",
+            &format!("{}/sibling-bucket/big-folder/item-{:03}.txt", base_url, i),
+            b"x".to_vec(),
+        )
+        .await;
+    }
+
+    s3_request(
+        "PUT",
+        &format!("{}/sibling-bucket/other-folder/", base_url),
+        vec![],
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/sibling-bucket/third-folder/", base_url),
+        vec![],
+    )
+    .await;
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .get(format!("{}/api/buckets/sibling-bucket/objects", base_url))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let prefixes: Vec<String> = body["prefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        prefixes,
+        vec![
+            "big-folder/".to_string(),
+            "other-folder/".to_string(),
+            "third-folder/".to_string(),
+        ]
+    );
+    let keys: Vec<String> = body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        keys,
+        vec!["a-file.txt".to_string(), "z-file.txt".to_string()]
+    );
+    assert!(body["nextContinuationToken"].is_null());
+}
+
+#[tokio::test]
 async fn test_console_list_objects_omits_current_folder_marker() {
     let base_url = start_server().await;
     s3_request("PUT", &format!("{}/marker-bucket", base_url), vec![]).await;
