@@ -3,7 +3,7 @@ use crate::metrics::MetricsRegistry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::Mutex;
@@ -18,6 +18,7 @@ pub struct CacheLayer {
     flush_interval: Duration,
     lru: Mutex<LruState>,
     dirty: Mutex<HashSet<ObjectKey>>,
+    dirty_bytes: AtomicU64,
     writeback_halted: AtomicBool,
     metrics: Option<Arc<MetricsRegistry>>,
 }
@@ -48,11 +49,12 @@ impl CacheLayer {
                 total_size: 0,
             }),
             dirty: Mutex::new(HashSet::new()),
+            dirty_bytes: AtomicU64::new(0),
             writeback_halted: AtomicBool::new(false),
             metrics: None,
         };
         layer.scan_cache_dir().await?;
-        layer.sync_gauges().await;
+        layer.recalc_dirty_bytes().await;
         Ok(layer)
     }
 
@@ -75,7 +77,7 @@ impl CacheLayer {
         lru.total_size = lru.entries.values().map(|(_, size)| *size).sum();
         drop(lru);
         self.dirty.lock().await.retain(|(b, _)| b != bucket);
-        self.sync_gauges().await;
+        self.recalc_dirty_bytes().await;
     }
 
     pub fn object_path(&self, bucket: &str, key: &str) -> PathBuf {
@@ -161,7 +163,6 @@ impl CacheLayer {
             m.record_cache_hit();
         }
         self.record_access_inner(bucket, key, size).await;
-        self.sync_gauges().await;
     }
 
     async fn record_access_inner(&self, bucket: &str, key: &str, size: u64) {
@@ -173,48 +174,76 @@ impl CacheLayer {
         lru.total_size += size;
     }
 
+    async fn recalc_dirty_bytes(&self) {
+        let lru = self.lru.lock().await;
+        let dirty = self.dirty.lock().await;
+        let bytes: u64 = dirty
+            .iter()
+            .filter_map(|k| lru.entries.get(k).map(|(_, size)| *size))
+            .sum();
+        self.dirty_bytes.store(bytes, Ordering::Relaxed);
+    }
+
     async fn sync_gauges(&self) {
         let Some(m) = &self.metrics else {
             return;
         };
         let lru = self.lru.lock().await;
         let dirty = self.dirty.lock().await;
-        let dirty_bytes: u64 = dirty
-            .iter()
-            .filter_map(|k| lru.entries.get(k).map(|(_, size)| *size))
-            .sum();
-        m.set_cache_state(lru.total_size, lru.entries.len(), dirty.len(), dirty_bytes);
+        m.set_cache_state(
+            lru.total_size,
+            lru.entries.len(),
+            dirty.len(),
+            self.dirty_bytes.load(Ordering::Relaxed),
+        );
         m.set_cache_writeback_halted(self.writeback_halted.load(Ordering::Relaxed));
     }
 
     pub async fn remove_entry(&self, bucket: &str, key: &str) {
         let entry_key = (bucket.to_string(), key.to_string());
-        {
+        let removed_size = {
             let mut lru = self.lru.lock().await;
-            if let Some((_, size)) = lru.entries.remove(&entry_key) {
+            lru.entries.remove(&entry_key).map(|(_, size)| {
                 lru.total_size = lru.total_size.saturating_sub(size);
+                size
+            })
+        };
+        if self.dirty.lock().await.remove(&entry_key) {
+            if let Some(size) = removed_size {
+                self.dirty_bytes.fetch_sub(size, Ordering::Relaxed);
             }
         }
-        self.dirty.lock().await.remove(&entry_key);
-        self.sync_gauges().await;
     }
 
     pub async fn mark_dirty(&self, bucket: &str, key: &str, size: u64) {
+        let entry_key = (bucket.to_string(), key.to_string());
+        let old_size = {
+            let lru = self.lru.lock().await;
+            lru.entries.get(&entry_key).map(|(_, s)| *s)
+        };
         self.record_access_inner(bucket, key, size).await;
-        self.dirty
-            .lock()
-            .await
-            .insert((bucket.to_string(), key.to_string()));
-        self.sync_gauges().await;
+        let mut dirty = self.dirty.lock().await;
+        if dirty.insert(entry_key) {
+            self.dirty_bytes.fetch_add(size, Ordering::Relaxed);
+        } else if let Some(old) = old_size {
+            if size != old {
+                self.dirty_bytes
+                    .fetch_add(size.saturating_sub(old), Ordering::Relaxed);
+            }
+        }
     }
 
     pub async fn mark_clean(&self, bucket: &str, key: &str, size: u64) {
+        let entry_key = (bucket.to_string(), key.to_string());
         self.record_access_inner(bucket, key, size).await;
-        self.dirty
-            .lock()
-            .await
-            .remove(&(bucket.to_string(), key.to_string()));
-        self.sync_gauges().await;
+        let mut dirty = self.dirty.lock().await;
+        if dirty.remove(&entry_key) {
+            let bytes = {
+                let lru = self.lru.lock().await;
+                lru.entries.get(&entry_key).map(|(_, s)| *s).unwrap_or(size)
+            };
+            self.dirty_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        }
     }
 
     pub async fn reserve_space(&self, needed: u64) -> Result<Vec<PathBuf>, StorageError> {
@@ -249,7 +278,6 @@ impl CacheLayer {
             }
             evicted.push(path);
         }
-        self.sync_gauges().await;
         Ok(evicted)
     }
 
@@ -272,7 +300,6 @@ impl CacheLayer {
             .await
             .map_err(StorageError::Io)?;
         self.record_access_inner(bucket, key, size).await;
-        self.sync_gauges().await;
         Ok(cache_path)
     }
 
@@ -285,7 +312,6 @@ impl CacheLayer {
         let dirty_keys: Vec<ObjectKey> = self.dirty.lock().await.iter().cloned().collect();
         if dirty_keys.is_empty() {
             self.writeback_halted.store(false, Ordering::Relaxed);
-            self.sync_gauges().await;
             return Ok(());
         }
 
@@ -350,7 +376,6 @@ impl CacheLayer {
             if let Some(m) = &self.metrics {
                 m.record_cache_flush(false, flushed_bytes, elapsed);
             }
-            self.sync_gauges().await;
             return Err(StorageError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "writeback flush failed",
@@ -361,8 +386,23 @@ impl CacheLayer {
         if let Some(m) = &self.metrics {
             m.record_cache_flush(true, flushed_bytes, elapsed);
         }
-        self.sync_gauges().await;
         Ok(())
+    }
+
+    /// Publishes cache gauge metrics on a fixed interval so hot paths never scan state.
+    pub fn spawn_gauge_task(self: Arc<Self>) {
+        if self.metrics.is_none() {
+            return;
+        }
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            self.sync_gauges().await;
+            loop {
+                ticker.tick().await;
+                self.sync_gauges().await;
+            }
+        });
     }
 
     pub fn spawn_flush_task(self: Arc<Self>) {
