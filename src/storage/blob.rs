@@ -9,7 +9,6 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 
 pub(crate) const IO_BUFFER_SIZE: usize = 256 * 1024;
-pub(crate) const FLAT_WRITE_BUFFER_SIZE: usize = 8 * 1024;
 pub(crate) const SMALL_OBJECT_THRESHOLD: u64 = 256 * 1024;
 
 pub struct BlobStorage {
@@ -306,13 +305,13 @@ impl BlobStorage {
         };
 
         let file = fs::File::create(&write_path).await?;
-        let mut writer = BufWriter::with_capacity(FLAT_WRITE_BUFFER_SIZE, file);
+        let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
         let mut hasher = Md5::new();
         let mut checksum_hasher = checksum
             .as_ref()
             .map(|(algo, _)| ChecksumHasher::new(*algo));
         let mut size: u64 = 0;
-        let mut buf = [0u8; FLAT_WRITE_BUFFER_SIZE];
+        let mut buf = vec![0u8; IO_BUFFER_SIZE];
 
         loop {
             let n = body.read(&mut buf).await?;
