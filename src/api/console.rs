@@ -1266,6 +1266,66 @@ pub struct SetPublicRequest {
     list: bool,
 }
 
+pub async fn get_cors(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:GetBucketCors").await {
+        return resp;
+    }
+
+    match state.storage.get_bucket_cors(&bucket).await {
+        Ok(rules) => {
+            let enabled = crate::api::cors::cors_has_console_permissive(&rules);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"enabled": enabled})),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetCorsRequest {
+    enabled: bool,
+}
+
+pub async fn set_cors(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<SetCorsRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:PutBucketCors").await {
+        return resp;
+    }
+
+    let result = if body.enabled {
+        state
+            .storage
+            .put_bucket_cors(&bucket, crate::api::cors::console_permissive_cors_rules())
+            .await
+    } else {
+        state.storage.delete_bucket_cors(&bucket).await
+    };
+
+    match result {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn set_public(
     State(state): State<AppState>,
     Extension(session): Extension<ConsoleSession>,
@@ -1863,6 +1923,8 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .route("/buckets/{bucket}/versioning", put(set_versioning))
         .route("/buckets/{bucket}/public", get(get_public))
         .route("/buckets/{bucket}/public", put(set_public))
+        .route("/buckets/{bucket}/cors", get(get_cors))
+        .route("/buckets/{bucket}/cors", put(set_cors))
         .route("/buckets/{bucket}/versions", get(list_versions))
         .route(
             "/buckets/{bucket}/versions/{version_id}/objects/{*key}",

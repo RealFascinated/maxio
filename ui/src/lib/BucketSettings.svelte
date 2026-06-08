@@ -5,7 +5,7 @@
   import { Switch } from '$lib/components/ui/switch'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { bucketKeys, settingsKeys } from '$lib/api/keys'
-  import { getPublicAccess, getVersioning, setPublicAccess, setVersioning } from '$lib/api/settings'
+  import { getCors, getPublicAccess, getVersioning, setCors, setPublicAccess, setVersioning } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
 
@@ -30,10 +30,15 @@
     queryKey: settingsKeys.publicAccess(bucket),
     queryFn: () => getPublicAccess(bucket),
   }))
+  const corsQuery = createQuery(() => ({
+    queryKey: settingsKeys.cors(bucket),
+    queryFn: () => getCors(bucket),
+  }))
 
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
   const publicRead = $derived(!!publicQuery.data?.read)
   const publicList = $derived(!!publicQuery.data?.list)
+  const corsEnabled = $derived(!!corsQuery.data?.enabled)
 
   const versioningMutation = createMutation(() => ({
     mutationFn: (enabled: boolean) => setVersioning(bucket, enabled),
@@ -49,6 +54,14 @@
     onSuccess: (_data, next) => {
       queryClient.invalidateQueries({ queryKey: settingsKeys.publicAccess(bucket) })
       toast.success(next.read !== publicRead ? (next.read ? 'Public read enabled' : 'Public read disabled') : (next.list ? 'Public listing enabled' : 'Public listing disabled'))
+    },
+  }))
+
+  const corsMutation = createMutation(() => ({
+    mutationFn: (enabled: boolean) => setCors(bucket, enabled),
+    onSuccess: (_data, enabled) => {
+      queryClient.invalidateQueries({ queryKey: settingsKeys.cors(bucket) })
+      toast.success(enabled ? 'Cross-origin read enabled' : 'Cross-origin read disabled')
     },
   }))
 
@@ -101,6 +114,30 @@
     }
   }
 
+  async function toggleCors() {
+    const newState = !corsEnabled
+    if (newState) {
+      pendingConfirmation = {
+        title: 'Enable cross-origin read?',
+        description: 'Browsers on any website can fetch objects from this bucket via JavaScript. Use with public read if you want anonymous cross-site access.',
+        confirmLabel: 'Enable cross-origin read',
+        action: () => applyCors(newState),
+      }
+      return
+    }
+    await applyCors(newState)
+  }
+
+  async function applyCors(newState: boolean) {
+    try {
+      await corsMutation.mutateAsync(newState)
+      pendingConfirmation = null
+    } catch (err) {
+      console.error('toggleCors failed:', err)
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update CORS')
+    }
+  }
+
   async function togglePublicList() {
     const newState = !publicList
     if (newState) {
@@ -117,7 +154,7 @@
 </script>
 
 <div class="flex flex-col gap-6 max-w-2xl">
-  {#if versioningQuery.isError || publicQuery.isError}
+  {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError}
     <Callout type="danger">Failed to load bucket settings</Callout>
   {/if}
 
@@ -178,6 +215,29 @@
 
     <div class="flex items-center justify-between">
       <div class="flex flex-col gap-0.5">
+        <span class="text-sm font-medium">Cross-origin read</span>
+        <span class="text-sm text-muted-foreground">
+          {#if corsQuery.isPending}
+            Loading...
+          {:else if corsEnabled}
+            Browsers on other sites can fetch objects from this bucket via JavaScript.
+          {:else}
+            Cross-origin browser requests are blocked without CORS headers.
+          {/if}
+        </span>
+      </div>
+      {#if !corsQuery.isPending}
+        <Switch
+          checked={corsEnabled}
+          onclick={toggleCors}
+          disabled={corsMutation.isPending}
+          aria-label="Toggle cross-origin read"
+        />
+      {/if}
+    </div>
+
+    <div class="flex items-center justify-between">
+      <div class="flex flex-col gap-0.5">
         <span class="text-sm font-medium">Public listing</span>
         <span class="text-sm text-muted-foreground">
           {#if publicQuery.isPending}
@@ -208,7 +268,7 @@
     description={pendingConfirmation.description}
     confirmLabel={pendingConfirmation.confirmLabel}
     confirmVariant={pendingConfirmation.destructive ? 'destructive' : 'highlighted'}
-    loading={versioningMutation.isPending || publicMutation.isPending}
+    loading={versioningMutation.isPending || publicMutation.isPending || corsMutation.isPending}
     onClose={() => (pendingConfirmation = null)}
     onConfirm={pendingConfirmation.action}
   />

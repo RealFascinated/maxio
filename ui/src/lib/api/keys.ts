@@ -24,6 +24,7 @@ export const settingsKeys = {
   all: ['settings'] as const,
   versioning: (bucket: string) => [...settingsKeys.all, 'versioning', bucket] as const,
   publicAccess: (bucket: string) => [...settingsKeys.all, 'public', bucket] as const,
+  cors: (bucket: string) => [...settingsKeys.all, 'cors', bucket] as const,
 }
 
 export const userKeys = {

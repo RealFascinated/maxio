@@ -24,3 +24,14 @@ export async function setPublicAccess(bucket: string, read: boolean, list: boole
     body: JSON.stringify({ read, list }),
   })
 }
+
+export async function getCors(bucket: string): Promise<EnabledResponse> {
+  return apiFetch<EnabledResponse>(`/api/buckets/${encodeURIComponent(bucket)}/cors`)
+}
+
+export async function setCors(bucket: string, enabled: boolean): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/cors`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}

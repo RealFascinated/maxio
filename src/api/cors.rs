@@ -3,6 +3,21 @@ use http::{HeaderMap, HeaderValue, Method, StatusCode};
 
 use crate::{server::AppState, storage::CorsRule};
 
+/// CORS rules applied when "cross-origin read" is enabled in the console.
+pub fn console_permissive_cors_rules() -> Vec<CorsRule> {
+    vec![CorsRule {
+        allowed_origins: vec!["*".to_string()],
+        allowed_methods: vec!["GET".to_string(), "HEAD".to_string()],
+        allowed_headers: vec!["*".to_string()],
+        expose_headers: vec![],
+        max_age_seconds: Some(3600),
+    }]
+}
+
+pub fn cors_has_console_permissive(rules: &[CorsRule]) -> bool {
+    rules == console_permissive_cors_rules().as_slice()
+}
+
 /// Extract bucket name from the request path.
 /// Returns None for /api/*, /ui/*, and root /.
 fn extract_bucket_from_path(path: &str) -> Option<&str> {
@@ -216,5 +231,14 @@ mod tests {
     fn test_find_matching_rule_no_rules() {
         let rules: Vec<CorsRule> = vec![];
         assert!(find_matching_rule(&rules, "http://example.com", "GET").is_none());
+    }
+
+    #[test]
+    fn test_console_permissive_cors_detection() {
+        assert!(!cors_has_console_permissive(&[]));
+        assert!(cors_has_console_permissive(&console_permissive_cors_rules()));
+        let mut other = console_permissive_cors_rules();
+        other[0].allowed_methods.push("PUT".to_string());
+        assert!(!cors_has_console_permissive(&other));
     }
 }

@@ -81,7 +81,7 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorsRule {
     pub allowed_origins: Vec<String>,
     pub allowed_methods: Vec<String>,
