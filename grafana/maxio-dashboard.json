@@ -18,7 +18,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Operational dashboard for MaxIO S3-compatible object storage \u2014 health at a glance, drill-down by subsystem.",
+  "description": "Operational dashboard for MaxIO S3-compatible object storage — health at a glance, drill-down by subsystem.",
   "editable": true,
   "elements": {
     "panel-1": {
@@ -57,7 +57,7 @@
         "description": "Time since the MaxIO process started.",
         "id": 1,
         "links": [],
-        "title": "Uptime",
+        "title": "⬆️ Uptime",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -65,14 +65,18 @@
             "fieldConfig": {
               "defaults": {
                 "color": {
-                  "mode": "palette-classic"
+                  "mode": "thresholds"
                 },
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
+                      "color": "transparent",
                       "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 60
                     }
                   ]
                 },
@@ -81,9 +85,9 @@
               "overrides": []
             },
             "options": {
-              "colorMode": "value",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -138,7 +142,7 @@
         "description": "Request rate broken down by HTTP status code.",
         "id": 10,
         "links": [],
-        "title": "Requests by Status",
+        "title": "📊 Requests by Status",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -203,7 +207,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "green",
+                        "fixedColor": "#5cb85c",
                         "mode": "fixed"
                       }
                     }
@@ -218,7 +222,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "blue",
+                        "fixedColor": "#5bc0de",
                         "mode": "fixed"
                       }
                     }
@@ -233,7 +237,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "yellow",
+                        "fixedColor": "#f0ad4e",
                         "mode": "fixed"
                       }
                     }
@@ -248,7 +252,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "red",
+                        "fixedColor": "#d9534f",
                         "mode": "fixed"
                       }
                     }
@@ -359,7 +363,7 @@
         "description": "End-to-end HTTP latency percentiles.",
         "id": 11,
         "links": [],
-        "title": "HTTP Latency",
+        "title": "⏱️ HTTP Latency (p50 / p95 / p99)",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -432,7 +436,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "green",
+                        "fixedColor": "#5cb85c",
                         "mode": "fixed"
                       }
                     }
@@ -447,7 +451,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "yellow",
+                        "fixedColor": "#f0ad4e",
                         "mode": "fixed"
                       }
                     }
@@ -462,7 +466,7 @@
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "red",
+                        "fixedColor": "#d9534f",
                         "mode": "fixed"
                       }
                     }
@@ -531,7 +535,7 @@
         "description": "Top 10 API routes by request rate.",
         "id": 12,
         "links": [],
-        "title": "Top Routes",
+        "title": "🔀 Top Routes",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -550,7 +554,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 15,
+                  "fillOpacity": 10,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -559,7 +563,7 @@
                   },
                   "insertNulls": false,
                   "lineInterpolation": "smooth",
-                  "lineWidth": 1,
+                  "lineWidth": 2,
                   "pointSize": 5,
                   "scaleDistribution": {
                     "type": "linear"
@@ -599,7 +603,7 @@
                   "max"
                 ],
                 "displayMode": "table",
-                "placement": "right",
+                "placement": "bottom",
                 "showLegend": true
               },
               "tooltip": {
@@ -649,7 +653,7 @@
         "description": "Aggregate HTTP request throughput across all routes.",
         "id": 2,
         "links": [],
-        "title": "Request Rate",
+        "title": "⚡ Request Rate",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -657,13 +661,13 @@
             "fieldConfig": {
               "defaults": {
                 "color": {
-                  "mode": "palette-classic"
+                  "mode": "thresholds"
                 },
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
+                      "color": "transparent",
                       "value": 0
                     }
                   ]
@@ -673,9 +677,9 @@
               "overrides": []
             },
             "options": {
-              "colorMode": "value",
+              "colorMode": "background",
               "graphMode": "area",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -730,7 +734,7 @@
         "description": "Filesystem storage operations per second.",
         "id": 20,
         "links": [],
-        "title": "Storage Op Rate",
+        "title": "📥 Storage Op Rate",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -749,7 +753,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 20,
+                  "fillOpacity": 15,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -768,7 +772,7 @@
                   "spanNulls": false,
                   "stacking": {
                     "group": "A",
-                    "mode": "normal"
+                    "mode": "none"
                   },
                   "thresholdsStyle": {
                     "mode": "off"
@@ -890,7 +894,7 @@
         "description": "Storage operation latency by type.",
         "id": 21,
         "links": [],
-        "title": "Storage Op Latency",
+        "title": "⏳ Storage Op Latency",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -1005,10 +1009,10 @@
             "transformations": []
           }
         },
-        "description": "Whether an object read cache directory is configured.",
+        "description": "Whether the on-disk object read cache is configured.",
         "id": 29,
         "links": [],
-        "title": "Cache",
+        "title": "💿 Disk Cache",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -1097,9 +1101,9 @@
                     "group": "victoriametrics-metrics-datasource",
                     "kind": "DataQuery",
                     "spec": {
-                      "expr": "100 * sum by (cache) (rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) / clamp_min(sum by (cache) (rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) + sum by (cache) (rate(maxio_cache_misses_total{job=~\"$job\"}[$__rate_interval])), 1e-9)",
+                      "expr": "100 * sum(rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) / clamp_min(sum(rate(maxio_cache_hits_total{job=~\"$job\"}[$__rate_interval])) + sum(rate(maxio_cache_misses_total{job=~\"$job\"}[$__rate_interval])), 1e-9)",
                       "instant": false,
-                      "legendFormat": "{{cache}} hit rate",
+                      "legendFormat": "overall",
                       "range": true
                     },
                     "version": "v0"
@@ -1112,10 +1116,10 @@
             "transformations": []
           }
         },
-        "description": "Read-cache effectiveness \u2014 hits divided by hits + misses.",
+        "description": "Aggregate hit rate across all caches (hits / hits + misses).",
         "id": 3,
         "links": [],
-        "title": "Cache Hit Rate",
+        "title": "🎯 Cache Hit Rate",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -1136,11 +1140,11 @@
                     },
                     {
                       "color": "yellow",
-                      "value": 50
+                      "value": 70
                     },
                     {
                       "color": "green",
-                      "value": 80
+                      "value": 90
                     }
                   ]
                 },
@@ -1150,8 +1154,8 @@
             },
             "options": {
               "colorMode": "background",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -1206,7 +1210,7 @@
         "description": "Cache bytes used vs configured maximum.",
         "id": 30,
         "links": [],
-        "title": "Cache Utilization",
+        "title": "📊 Disk Utilization",
         "vizConfig": {
           "group": "gauge",
           "kind": "VizConfig",
@@ -1329,7 +1333,7 @@
         "description": "Current cache size vs configured cap.",
         "id": 31,
         "links": [],
-        "title": "Cache Size",
+        "title": "📏 Disk Cache Size",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -1407,10 +1411,10 @@
             "transformations": []
           }
         },
-        "description": "Number of objects in the LRU cache.",
+        "description": "Entry count per in-memory and disk cache.",
         "id": 32,
         "links": [],
-        "title": "Cache Entries",
+        "title": "🔢 Cache Entries (Stats)",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -1491,7 +1495,7 @@
         "description": "Objects with unflushed writes awaiting writeback.",
         "id": 33,
         "links": [],
-        "title": "Dirty Objects",
+        "title": "🔁 Dirty Objects",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -1577,10 +1581,10 @@
             "transformations": []
           }
         },
-        "description": "Whether an object read cache directory is configured.",
+        "description": "Whether the on-disk object read cache is configured.",
         "id": 34,
         "links": [],
-        "title": "Cache",
+        "title": "💿 Disk Cache Status",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -1705,10 +1709,10 @@
             "transformations": []
           }
         },
-        "description": "Cache hit and miss rates over time.",
+        "description": "Request rate for cache hits and misses, broken out by cache.",
         "id": 35,
         "links": [],
-        "title": "Cache Hits vs Misses",
+        "title": "🎯 All Caches — Hits vs Misses",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -1727,7 +1731,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 25,
+                  "fillOpacity": 15,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -1761,40 +1765,9 @@
                     }
                   ]
                 },
-                "unit": "ops"
+                "unit": "reqps"
               },
-              "overrides": [
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "hits"
-                  },
-                  "properties": [
-                    {
-                      "id": "color",
-                      "value": {
-                        "fixedColor": "green",
-                        "mode": "fixed"
-                      }
-                    }
-                  ]
-                },
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "misses"
-                  },
-                  "properties": [
-                    {
-                      "id": "color",
-                      "value": {
-                        "fixedColor": "orange",
-                        "mode": "fixed"
-                      }
-                    }
-                  ]
-                }
-              ]
+              "overrides": []
             },
             "options": {
               "annotations": {
@@ -1878,7 +1851,7 @@
         "description": "Dirty bytes pending flush and flush throughput.",
         "id": 36,
         "links": [],
-        "title": "Cache I/O",
+        "title": "📤 Disk Writeback I/O",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -1897,7 +1870,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 20,
+                  "fillOpacity": 15,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -1931,22 +1904,9 @@
                     }
                   ]
                 },
-                "unit": "Bps"
+                "unit": "bytes"
               },
-              "overrides": [
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "dirty bytes"
-                  },
-                  "properties": [
-                    {
-                      "id": "unit",
-                      "value": "bytes"
-                    }
-                  ]
-                }
-              ]
+              "overrides": []
             },
             "options": {
               "annotations": {
@@ -2006,10 +1966,10 @@
             "transformations": []
           }
         },
-        "description": "LRU evictions of clean cached objects.",
+        "description": "Evictions and invalidations per cache over time.",
         "id": 37,
         "links": [],
-        "title": "Evictions",
+        "title": "🗑️ Cache Evictions",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -2027,17 +1987,17 @@
                   "axisPlacement": "auto",
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
-                  "drawStyle": "bars",
-                  "fillOpacity": 80,
-                  "gradientMode": "none",
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
                     "tooltip": false,
                     "viz": false
                   },
                   "insertNulls": false,
-                  "lineInterpolation": "linear",
-                  "lineWidth": 1,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
                   "pointSize": 5,
                   "scaleDistribution": {
                     "type": "linear"
@@ -2062,7 +2022,7 @@
                     }
                   ]
                 },
-                "unit": "ops"
+                "unit": "short"
               },
               "overrides": []
             },
@@ -2072,8 +2032,11 @@
                 "multiLane": false
               },
               "legend": {
-                "calcs": [],
-                "displayMode": "list",
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
                 "placement": "bottom",
                 "showLegend": true
               },
@@ -2124,7 +2087,7 @@
         "description": "Writeback flush runs by outcome.",
         "id": 38,
         "links": [],
-        "title": "Flush Rate",
+        "title": "🔄 Disk Flush Rate",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -2143,7 +2106,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 20,
+                  "fillOpacity": 15,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -2162,7 +2125,7 @@
                   "spanNulls": false,
                   "stacking": {
                     "group": "A",
-                    "mode": "normal"
+                    "mode": "none"
                   },
                   "thresholdsStyle": {
                     "mode": "off"
@@ -2177,40 +2140,9 @@
                     }
                   ]
                 },
-                "unit": "ops"
+                "unit": "short"
               },
-              "overrides": [
-                {
-                  "matcher": {
-                    "id": "byRegexp",
-                    "options": ".*failure.*"
-                  },
-                  "properties": [
-                    {
-                      "id": "color",
-                      "value": {
-                        "fixedColor": "red",
-                        "mode": "fixed"
-                      }
-                    }
-                  ]
-                },
-                {
-                  "matcher": {
-                    "id": "byRegexp",
-                    "options": ".*success.*"
-                  },
-                  "properties": [
-                    {
-                      "id": "color",
-                      "value": {
-                        "fixedColor": "green",
-                        "mode": "fixed"
-                      }
-                    }
-                  ]
-                }
-              ]
+              "overrides": []
             },
             "options": {
               "annotations": {
@@ -2219,7 +2151,8 @@
               },
               "legend": {
                 "calcs": [
-                  "sum"
+                  "mean",
+                  "max"
                 ],
                 "displayMode": "table",
                 "placement": "bottom",
@@ -2293,7 +2226,7 @@
         "description": "Duration of cache-to-disk flush operations.",
         "id": 39,
         "links": [],
-        "title": "Flush Duration",
+        "title": "⏱️ Disk Flush Duration",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -2411,7 +2344,7 @@
         "description": "Writeback halted after repeated flush failures. Requires attention when HALTED.",
         "id": 4,
         "links": [],
-        "title": "Writeback",
+        "title": "✍️ Writeback Health",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -2518,7 +2451,7 @@
         "description": "Top 15 buckets by object count.",
         "id": 40,
         "links": [],
-        "title": "Objects per Bucket",
+        "title": "📊 Objects per Bucket",
         "vizConfig": {
           "group": "bargauge",
           "kind": "VizConfig",
@@ -2606,7 +2539,7 @@
         "description": "Top 15 buckets by stored bytes.",
         "id": 41,
         "links": [],
-        "title": "Size per Bucket",
+        "title": "💾 Size per Bucket",
         "vizConfig": {
           "group": "bargauge",
           "kind": "VizConfig",
@@ -2755,7 +2688,7 @@
         "description": "Full bucket inventory sorted by size.",
         "id": 42,
         "links": [],
-        "title": "Bucket Inventory",
+        "title": "📋 Bucket Inventory",
         "vizConfig": {
           "group": "table",
           "kind": "VizConfig",
@@ -2902,7 +2835,7 @@
         "description": "Sum of object counts across all buckets.",
         "id": 5,
         "links": [],
-        "title": "Total Objects",
+        "title": "📦 Total Objects",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -2910,13 +2843,13 @@
             "fieldConfig": {
               "defaults": {
                 "color": {
-                  "mode": "palette-classic"
+                  "mode": "thresholds"
                 },
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
+                      "color": "transparent",
                       "value": 0
                     }
                   ]
@@ -2926,9 +2859,9 @@
               "overrides": []
             },
             "options": {
-              "colorMode": "value",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -2983,7 +2916,7 @@
         "description": "Process CPU as a fraction of total machine capacity.",
         "id": 50,
         "links": [],
-        "title": "CPU Usage",
+        "title": "🔧 CPU Usage",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -3038,7 +2971,23 @@
                 },
                 "unit": "percentunit"
               },
-              "overrides": []
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cpu"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#5bc0de",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                }
+              ]
             },
             "options": {
               "annotations": {
@@ -3122,7 +3071,7 @@
         "description": "Resident and virtual memory usage.",
         "id": 51,
         "links": [],
-        "title": "Memory",
+        "title": "💾 Memory",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -3240,7 +3189,7 @@
         "description": "Postgres metadata operations per second.",
         "id": 52,
         "links": [],
-        "title": "Metadata Op Rate",
+        "title": "🗄️ Metadata Op Rate",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -3259,7 +3208,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 20,
+                  "fillOpacity": 15,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -3278,7 +3227,7 @@
                   "spanNulls": false,
                   "stacking": {
                     "group": "A",
-                    "mode": "normal"
+                    "mode": "none"
                   },
                   "thresholdsStyle": {
                     "mode": "off"
@@ -3400,7 +3349,7 @@
         "description": "Metadata operation latency by type.",
         "id": 53,
         "links": [],
-        "title": "Metadata Op Latency",
+        "title": "⌛ Metadata Op Latency",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -3482,87 +3431,6 @@
         }
       }
     },
-    "panel-6": {
-      "kind": "Panel",
-      "spec": {
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "hidden": false,
-                  "query": {
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "group": "victoriametrics-metrics-datasource",
-                    "kind": "DataQuery",
-                    "spec": {
-                      "expr": "sum(maxio_bucket_size_bytes{job=~\"$job\"})",
-                      "instant": true,
-                      "legendFormat": "size",
-                      "range": false
-                    },
-                    "version": "v0"
-                  },
-                  "refId": "A"
-                }
-              }
-            ],
-            "queryOptions": {},
-            "transformations": []
-          }
-        },
-        "description": "Total bytes stored on disk across all buckets.",
-        "id": 6,
-        "links": [],
-        "title": "Total Stored",
-        "vizConfig": {
-          "group": "stat",
-          "kind": "VizConfig",
-          "spec": {
-            "fieldConfig": {
-              "defaults": {
-                "color": {
-                  "mode": "palette-classic"
-                },
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": 0
-                    }
-                  ]
-                },
-                "unit": "bytes"
-              },
-              "overrides": []
-            },
-            "options": {
-              "colorMode": "value",
-              "graphMode": "area",
-              "justifyMode": "auto",
-              "orientation": "auto",
-              "percentChangeColorMode": "standard",
-              "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
-                "fields": "",
-                "values": false
-              },
-              "showPercentChange": false,
-              "textMode": "auto",
-              "wideLayout": true
-            }
-          },
-          "version": "13.0.2"
-        }
-      }
-    },
     "panel-54": {
       "kind": "Panel",
       "spec": {
@@ -3596,10 +3464,10 @@
             "transformations": []
           }
         },
-        "description": "5xx server error rate \u2014 should stay near zero.",
+        "description": "5xx server error rate — should stay near zero.",
         "id": 54,
         "links": [],
-        "title": "5xx Error Rate",
+        "title": "🚨 5xx Error Rate",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -3618,11 +3486,11 @@
                     },
                     {
                       "color": "yellow",
-                      "value": 0.1
+                      "value": 0.01
                     },
                     {
                       "color": "red",
-                      "value": 1
+                      "value": 0.1
                     }
                   ]
                 },
@@ -3632,8 +3500,8 @@
             },
             "options": {
               "colorMode": "background",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -3688,7 +3556,7 @@
         "description": "Current HTTP p95 latency.",
         "id": 55,
         "links": [],
-        "title": "HTTP p95 Latency",
+        "title": "⏱️ p95 Latency",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -3721,8 +3589,8 @@
             },
             "options": {
               "colorMode": "background",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -3777,7 +3645,7 @@
         "description": "Number of buckets with stored data.",
         "id": 56,
         "links": [],
-        "title": "Buckets",
+        "title": "🪣 Buckets",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -3785,13 +3653,13 @@
             "fieldConfig": {
               "defaults": {
                 "color": {
-                  "mode": "palette-classic"
+                  "mode": "thresholds"
                 },
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
+                      "color": "transparent",
                       "value": 0
                     }
                   ]
@@ -3801,9 +3669,9 @@
               "overrides": []
             },
             "options": {
-              "colorMode": "value",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -3858,7 +3726,7 @@
         "description": "Current process CPU utilization.",
         "id": 57,
         "links": [],
-        "title": "CPU",
+        "title": "🖥️ CPU Usage",
         "vizConfig": {
           "group": "stat",
           "kind": "VizConfig",
@@ -3891,8 +3759,8 @@
             },
             "options": {
               "colorMode": "background",
-              "graphMode": "area",
-              "justifyMode": "auto",
+              "graphMode": "none",
+              "justifyMode": "center",
               "orientation": "auto",
               "percentChangeColorMode": "standard",
               "reduceOptions": {
@@ -3968,7 +3836,7 @@
         "description": "4xx client errors and 5xx server errors over time.",
         "id": 58,
         "links": [],
-        "title": "Client & Server Errors",
+        "title": "🚨 Client & Server Errors",
         "vizConfig": {
           "group": "timeseries",
           "kind": "VizConfig",
@@ -3987,7 +3855,7 @@
                   "barAlignment": 0,
                   "barWidthFactor": 0.6,
                   "drawStyle": "line",
-                  "fillOpacity": 25,
+                  "fillOpacity": 20,
                   "gradientMode": "opacity",
                   "hideFrom": {
                     "legend": false,
@@ -4006,7 +3874,7 @@
                   "spanNulls": false,
                   "stacking": {
                     "group": "A",
-                    "mode": "normal"
+                    "mode": "none"
                   },
                   "thresholdsStyle": {
                     "mode": "off"
@@ -4026,14 +3894,14 @@
               "overrides": [
                 {
                   "matcher": {
-                    "id": "byName",
-                    "options": "4xx"
+                    "id": "byRegexp",
+                    "options": "^4.*"
                   },
                   "properties": [
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "yellow",
+                        "fixedColor": "#f0ad4e",
                         "mode": "fixed"
                       }
                     }
@@ -4041,14 +3909,14 @@
                 },
                 {
                   "matcher": {
-                    "id": "byName",
-                    "options": "5xx"
+                    "id": "byRegexp",
+                    "options": "^5.*"
                   },
                   "properties": [
                     {
                       "id": "color",
                       "value": {
-                        "fixedColor": "red",
+                        "fixedColor": "#d9534f",
                         "mode": "fixed"
                       }
                     }
@@ -4071,7 +3939,1557 @@
                 "showLegend": true
               },
               "tooltip": {
-                "hideZeros": true,
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-6": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "sum(maxio_bucket_size_bytes{job=~\"$job\"})",
+                      "instant": true,
+                      "legendFormat": "size",
+                      "range": false
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Total bytes stored on disk across all buckets.",
+        "id": 6,
+        "links": [],
+        "title": "🗄️ Total Stored",
+        "vizConfig": {
+          "group": "stat",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "bytes"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "percentChangeColorMode": "standard",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showPercentChange": false,
+              "textMode": "auto",
+              "wideLayout": true
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-60": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Object Disk Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Bucket Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Object Read Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Signing Key Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "D"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "IAM Access Key Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "E"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "IAM User Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "F"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "IAM Policies Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "G"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Hit rate per cache over the selected time range.",
+        "id": 60,
+        "links": [],
+        "title": "📈 Cache Hit Rates",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-61": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Object Disk hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"object_disk\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Object Disk misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Hit and miss rates for the on-disk object read cache.",
+        "id": 61,
+        "links": [],
+        "title": "📊 Disk Cache — Hits vs Misses",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "reqps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-62": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Bucket hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Bucket misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Object Read hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Object Read misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "D"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Postgres metadata caches: bucket and object read paths.",
+        "id": 62,
+        "links": [],
+        "title": "📊 Metadata Caches — Hits vs Misses",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "reqps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-63": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"bucket\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Bucket Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"object_read\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Object Read Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Hit rate for bucket and object read metadata caches.",
+        "id": 63,
+        "links": [],
+        "title": "📈 Metadata Caches — Hit Rate",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-64": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "maxio_cache_entries{job=~\"$job\", cache=\"bucket\"}",
+                      "instant": false,
+                      "legendFormat": "Bucket Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "maxio_cache_entries{job=~\"$job\", cache=\"object_read\"}",
+                      "instant": false,
+                      "legendFormat": "Object Read Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Number of entries in bucket and object read metadata caches.",
+        "id": 64,
+        "links": [],
+        "title": "🗂️ Metadata Caches — Entries",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 10,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-65": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Signing Key hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "Signing Key misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "IAM Access Key hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "IAM Access Key misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "D"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "IAM User hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "E"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "IAM User misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "F"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "IAM Policies hits",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "G"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "IAM Policies misses",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "H"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Signing key and IAM lookup caches on authenticated requests.",
+        "id": 65,
+        "links": [],
+        "title": "📊 Auth Caches — Hits vs Misses",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "reqps"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-66": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"signing_key\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "Signing Key Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_access_key\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "IAM Access Key Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_user\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "IAM User Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "100 * rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval]) / clamp_min(rate(maxio_cache_hits_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval]) + rate(maxio_cache_misses_total{job=~\"$job\", cache=\"iam_policies\"}[$__rate_interval]), 1e-9)",
+                      "instant": false,
+                      "legendFormat": "IAM Policies Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "D"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Hit rate for signing key and IAM caches.",
+        "id": 66,
+        "links": [],
+        "title": "📈 Auth Caches — Hit Rate",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 15,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            }
+          },
+          "version": "13.0.2"
+        }
+      }
+    },
+    "panel-67": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "maxio_cache_entries{job=~\"$job\", cache=\"signing_key\"}",
+                      "instant": false,
+                      "legendFormat": "Signing Key Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "maxio_cache_entries{job=~\"$job\", cache=\"iam_access_key\"}",
+                      "instant": false,
+                      "legendFormat": "IAM Access Key Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "maxio_cache_entries{job=~\"$job\", cache=\"iam_user\"}",
+                      "instant": false,
+                      "legendFormat": "IAM User Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "group": "victoriametrics-metrics-datasource",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "expr": "maxio_cache_entries{job=~\"$job\", cache=\"iam_policies\"}",
+                      "instant": false,
+                      "legendFormat": "IAM Policies Cache",
+                      "range": true
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "D"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Number of entries in signing key and IAM caches.",
+        "id": 67,
+        "links": [],
+        "title": "🗂️ Auth Caches — Entries",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 10,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "mean",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
                 "mode": "multi",
                 "sort": "desc"
               }
@@ -4253,7 +5671,7 @@
                 ]
               }
             },
-            "title": "Overview"
+            "title": "🏠 Overview"
           }
         },
         {
@@ -4297,8 +5715,8 @@
                         "kind": "ElementReference",
                         "name": "panel-58"
                       },
-                      "height": 7,
-                      "width": 8,
+                      "height": 8,
+                      "width": 12,
                       "x": 0,
                       "y": 8
                     }
@@ -4310,16 +5728,16 @@
                         "kind": "ElementReference",
                         "name": "panel-12"
                       },
-                      "height": 7,
-                      "width": 16,
-                      "x": 8,
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
                       "y": 8
                     }
                   }
                 ]
               }
             },
-            "title": "HTTP Traffic"
+            "title": "🌐 HTTP Traffic"
           }
         },
         {
@@ -4355,11 +5773,37 @@
                       "x": 12,
                       "y": 0
                     }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-52"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-53"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 8
+                    }
                   }
                 ]
               }
             },
-            "title": "Storage Operations"
+            "title": "⚙️ Storage & Metadata"
           }
         },
         {
@@ -4375,7 +5819,7 @@
                     "spec": {
                       "element": {
                         "kind": "ElementReference",
-                        "name": "panel-52"
+                        "name": "panel-60"
                       },
                       "height": 8,
                       "width": 12,
@@ -4388,18 +5832,44 @@
                     "spec": {
                       "element": {
                         "kind": "ElementReference",
-                        "name": "panel-53"
+                        "name": "panel-35"
                       },
                       "height": 8,
                       "width": 12,
                       "x": 12,
                       "y": 0
                     }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-32"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-37"
+                      },
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 8
+                    }
                   }
                 ]
               }
             },
-            "title": "Metadata Operations"
+            "title": "🔄 Cache Health"
           }
         },
         {
@@ -4417,22 +5887,9 @@
                         "kind": "ElementReference",
                         "name": "panel-34"
                       },
-                      "height": 6,
-                      "width": 4,
+                      "height": 4,
+                      "width": 6,
                       "x": 0,
-                      "y": 0
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-30"
-                      },
-                      "height": 6,
-                      "width": 5,
-                      "x": 4,
                       "y": 0
                     }
                   },
@@ -4443,22 +5900,9 @@
                         "kind": "ElementReference",
                         "name": "panel-31"
                       },
-                      "height": 6,
-                      "width": 5,
-                      "x": 9,
-                      "y": 0
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-32"
-                      },
-                      "height": 6,
-                      "width": 5,
-                      "x": 14,
+                      "height": 4,
+                      "width": 6,
+                      "x": 6,
                       "y": 0
                     }
                   },
@@ -4469,9 +5913,9 @@
                         "kind": "ElementReference",
                         "name": "panel-33"
                       },
-                      "height": 6,
-                      "width": 5,
-                      "x": 19,
+                      "height": 4,
+                      "width": 6,
+                      "x": 12,
                       "y": 0
                     }
                   },
@@ -4480,12 +5924,12 @@
                     "spec": {
                       "element": {
                         "kind": "ElementReference",
-                        "name": "panel-35"
+                        "name": "panel-61"
                       },
                       "height": 8,
                       "width": 12,
                       "x": 0,
-                      "y": 6
+                      "y": 4
                     }
                   },
                   {
@@ -4498,20 +5942,7 @@
                       "height": 8,
                       "width": 12,
                       "x": 12,
-                      "y": 6
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-37"
-                      },
-                      "height": 7,
-                      "width": 8,
-                      "x": 0,
-                      "y": 14
+                      "y": 4
                     }
                   },
                   {
@@ -4521,10 +5952,10 @@
                         "kind": "ElementReference",
                         "name": "panel-38"
                       },
-                      "height": 7,
-                      "width": 8,
-                      "x": 8,
-                      "y": 14
+                      "height": 8,
+                      "width": 12,
+                      "x": 0,
+                      "y": 12
                     }
                   },
                   {
@@ -4534,16 +5965,122 @@
                         "kind": "ElementReference",
                         "name": "panel-39"
                       },
-                      "height": 7,
-                      "width": 8,
-                      "x": 16,
-                      "y": 14
+                      "height": 8,
+                      "width": 12,
+                      "x": 12,
+                      "y": 12
                     }
                   }
                 ]
               }
             },
-            "title": "Object Cache"
+            "title": "💿 Disk Cache Details"
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-62"
+                      },
+                      "height": 8,
+                      "width": 8,
+                      "x": 0,
+                      "y": 0
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-63"
+                      },
+                      "height": 8,
+                      "width": 8,
+                      "x": 8,
+                      "y": 0
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-64"
+                      },
+                      "height": 8,
+                      "width": 8,
+                      "x": 16,
+                      "y": 0
+                    }
+                  }
+                ]
+              }
+            },
+            "title": "🗃️ Metadata Caches"
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-65"
+                      },
+                      "height": 8,
+                      "width": 8,
+                      "x": 0,
+                      "y": 0
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-66"
+                      },
+                      "height": 8,
+                      "width": 8,
+                      "x": 8,
+                      "y": 0
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-67"
+                      },
+                      "height": 8,
+                      "width": 8,
+                      "x": 16,
+                      "y": 0
+                    }
+                  }
+                ]
+              }
+            },
+            "title": "🔐 Auth & IAM Caches"
           }
         },
         {
@@ -4561,7 +6098,7 @@
                         "kind": "ElementReference",
                         "name": "panel-40"
                       },
-                      "height": 8,
+                      "height": 9,
                       "width": 12,
                       "x": 0,
                       "y": 0
@@ -4574,7 +6111,7 @@
                         "kind": "ElementReference",
                         "name": "panel-41"
                       },
-                      "height": 8,
+                      "height": 9,
                       "width": 12,
                       "x": 12,
                       "y": 0
@@ -4587,22 +6124,22 @@
                         "kind": "ElementReference",
                         "name": "panel-42"
                       },
-                      "height": 8,
+                      "height": 10,
                       "width": 24,
                       "x": 0,
-                      "y": 8
+                      "y": 9
                     }
                   }
                 ]
               }
             },
-            "title": "Buckets"
+            "title": "🪣 Buckets"
           }
         },
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "collapse": false,
+            "collapse": true,
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -4614,7 +6151,7 @@
                         "kind": "ElementReference",
                         "name": "panel-50"
                       },
-                      "height": 7,
+                      "height": 8,
                       "width": 12,
                       "x": 0,
                       "y": 0
@@ -4627,7 +6164,7 @@
                         "kind": "ElementReference",
                         "name": "panel-51"
                       },
-                      "height": 7,
+                      "height": 8,
                       "width": 12,
                       "x": 12,
                       "y": 0
@@ -4636,7 +6173,7 @@
                 ]
               }
             },
-            "title": "Process"
+            "title": "🖥️ Process"
           }
         }
       ]
@@ -4678,7 +6215,7 @@
     "timezone": "browser",
     "to": "now"
   },
-  "title": "MaxIO \u2014 Object Storage",
+  "title": "MaxIO — Object Storage",
   "variables": [
     {
       "kind": "DatasourceVariable",
