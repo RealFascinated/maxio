@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade, fly } from "svelte/transition";
   import { createMutation, createQuery } from "@tanstack/svelte-query";
   import Login from "$lib/Login.svelte";
   import BucketList from "$lib/BucketList.svelte";
@@ -15,8 +16,10 @@
     nextThemeMode,
     type ThemeMode,
   } from "$lib/app/sidebar/theme";
+  import { base } from "$app/paths";
   import ArrowLeft from "lucide-svelte/icons/arrow-left";
   import ChevronRight from "lucide-svelte/icons/chevron-right";
+  import Menu from "lucide-svelte/icons/menu";
   import { Sonner } from "$lib/components/ui/sonner";
   import { checkAuth, logout, type AuthCheckResponse } from "$lib/api/auth";
   import { authKeys } from "$lib/api/keys";
@@ -46,6 +49,7 @@
   let themeMode = $state<ThemeMode>("system");
   let isDark = $state(true);
   let pendingPrefix = $state<string | null>(null);
+  let mobileMenuOpen = $state(false);
 
   $effect(() => {
     if (objectBrowserRef && pendingPrefix) {
@@ -65,8 +69,30 @@
     buildSidebarNavItems(
       { currentView, selectedBucket, isRootUser },
       { goHome, goUsers, goMetrics },
-    ),
+    ).map((item) => ({
+      ...item,
+      onSelect: () => {
+        item.onSelect();
+        mobileMenuOpen = false;
+      },
+    })),
   );
+
+  function closeMobileMenu() {
+    mobileMenuOpen = false;
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape" && mobileMenuOpen) {
+      mobileMenuOpen = false;
+    }
+  }
+
+  $effect(() => {
+    if (!mobileMenuOpen) return;
+    document.body.classList.add("overflow-hidden");
+    return () => document.body.classList.remove("overflow-hidden");
+  });
 
   function toggleSidebarCollapsed() {
     collapsed = !collapsed;
@@ -238,14 +264,43 @@
   }
 </script>
 
+<svelte:window onkeydown={handleWindowKeydown} />
+
 {#if authQuery.isPending && authenticatedOverride === null}
   <!-- loading -->
 {:else if !(authenticatedOverride ?? authQuery.isSuccess)}
   <Login onLogin={handleLogin} />
 {:else}
   <div class="relative flex h-screen bg-background">
+    {#if mobileMenuOpen}
+      <button
+        type="button"
+        class="fixed inset-0 z-40 cursor-default bg-black/60 lg:hidden"
+        aria-label="Close menu"
+        onclick={closeMobileMenu}
+        transition:fade={{ duration: 200 }}
+      ></button>
+      <div
+        class="fixed inset-y-0 left-0 z-50 lg:hidden"
+        transition:fly={{ x: -224, duration: 200 }}
+      >
+        <AppSidebar
+          collapsed={false}
+          variant="drawer"
+          navItems={sidebarNavItems}
+          {themeMode}
+          onToggleCollapsed={toggleSidebarCollapsed}
+          onThemeChange={applyTheme}
+          onCycleTheme={cycleTheme}
+          onLogout={handleLogout}
+        />
+      </div>
+    {/if}
+
     <AppSidebar
       {collapsed}
+      variant="inline"
+      class="hidden shrink-0 lg:flex"
       navItems={sidebarNavItems}
       {themeMode}
       onToggleCollapsed={toggleSidebarCollapsed}
@@ -254,7 +309,24 @@
       onLogout={handleLogout}
     />
 
-    <main class="flex flex-1 flex-col overflow-hidden">
+    <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <header
+        class="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur-sm lg:hidden"
+        style="border-color: var(--cool-sidebar-border);"
+      >
+        <button
+          type="button"
+          onclick={() => (mobileMenuOpen = true)}
+          class="-m-2.5 rounded-sm p-2.5 text-neutral-600 transition-colors hover:text-coollabs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:text-warning dark:hover:text-warning dark:focus-visible:ring-warning"
+          aria-label="Open menu"
+          aria-expanded={mobileMenuOpen}
+        >
+          <Menu class="size-5" />
+        </button>
+        <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
+        <span class="text-xl font-bold tracking-tight text-foreground">MaxIO</span>
+      </header>
+
       {#if selectedBucket}
         <div class="flex h-14 shrink-0 items-center gap-2 px-6">
           <button
