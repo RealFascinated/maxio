@@ -10,6 +10,7 @@ use crate::api::cors::cors_middleware;
 use crate::api::iam::iam_handler;
 use crate::api::router::s3_router;
 use crate::auth::middleware::auth_middleware;
+use crate::auth::signing_key_cache::SigningKeyCache;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::embedded::ui_handler;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub metrics: Arc<MetricsRegistry>,
     pub stats: Arc<BucketStatsCache>,
     pub cache: Option<Arc<CacheLayer>>,
+    pub signing_key_cache: Arc<SigningKeyCache>,
 }
 
 pub fn build_router(state: AppState) -> Router {

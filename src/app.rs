@@ -4,7 +4,8 @@ use std::time::Duration;
 use crate::api::console::LoginRateLimiter;
 use crate::config::Config;
 use crate::db;
-use crate::iam::{IamStore, PgIamStore};
+use crate::auth::signing_key_cache::SigningKeyCache;
+use crate::iam::{CachingIamStore, IamStore, PgIamStore};
 use crate::metrics::MetricsRegistry;
 use crate::server::AppState;
 use crate::stats::BucketStatsCache;
@@ -50,7 +51,13 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
 
     crate::storage::provision_default_buckets(storage.as_ref(), &config.default_buckets).await;
 
-    let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
+    let signing_key_cache = Arc::new(SigningKeyCache::new());
+    let pg_iam = Arc::new(PgIamStore::new(pool.clone()));
+    let user_store: Arc<dyn IamStore> = Arc::new(CachingIamStore::new(
+        pg_iam,
+        Duration::from_secs(5 * 60),
+        Arc::clone(&signing_key_cache),
+    ));
     let stats = BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
 
     Ok(AppState {
@@ -62,5 +69,6 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         metrics,
         stats,
         cache: cache_handle,
+        signing_key_cache,
     })
 }

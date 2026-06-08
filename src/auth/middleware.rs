@@ -80,13 +80,19 @@ pub async fn auth_middleware(
     let path = request.uri().path().to_string();
     let (secret_key, principal) = resolve_credentials(&state, &parsed.access_key).await?;
 
-    let valid = signature_v4::verify_signature(
+    let signing_key = state.signing_key_cache.get_or_derive(
+        &parsed.access_key,
+        &parsed.date,
+        &parsed.region,
+        &secret_key,
+    );
+    let valid = signature_v4::verify_with_signing_key(
         &method,
         &path,
         &query,
         request.headers(),
         &parsed,
-        &secret_key,
+        &signing_key,
     );
 
     if !valid {
@@ -208,14 +214,20 @@ async fn handle_presigned(
     let path = request.uri().path().to_string();
     let (secret_key, principal) = resolve_credentials(state, &parsed.access_key).await?;
 
-    let valid = signature_v4::verify_presigned_signature(
+    let signing_key = state.signing_key_cache.get_or_derive(
+        &parsed.access_key,
+        &parsed.date,
+        &parsed.region,
+        &secret_key,
+    );
+    let valid = signature_v4::verify_presigned_with_signing_key(
         method,
         &path,
         query,
         request.headers(),
         &parsed,
         &timestamp,
-        &secret_key,
+        &signing_key,
     );
 
     if !valid {

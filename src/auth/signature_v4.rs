@@ -59,39 +59,6 @@ pub fn parse_authorization_header(header: &str) -> Result<ParsedAuth, &'static s
     })
 }
 
-pub fn verify_signature(
-    method: &str,
-    uri: &str,
-    query_string: &str,
-    headers: &HeaderMap,
-    parsed: &ParsedAuth,
-    secret_key: &str,
-) -> bool {
-    let canonical_request = build_canonical_request(method, uri, query_string, headers, parsed);
-
-    tracing::debug!("Canonical request:\n{}", canonical_request);
-
-    let timestamp = headers
-        .get("x-amz-date")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let string_to_sign = build_string_to_sign(&canonical_request, timestamp, parsed);
-
-    tracing::debug!("String to sign:\n{}", string_to_sign);
-
-    let signing_key = derive_signing_key(secret_key, &parsed.date, &parsed.region);
-
-    let mut mac = HmacSha256::new_from_slice(&signing_key).unwrap();
-    mac.update(string_to_sign.as_bytes());
-    let computed = hex::encode(mac.finalize().into_bytes());
-
-    tracing::debug!("Computed signature: {}", computed);
-    tracing::debug!("Provided signature: {}", parsed.signature);
-
-    constant_time_eq(computed.as_bytes(), parsed.signature.as_bytes())
-}
-
 /// Parse presigned URL query parameters into auth components.
 /// Returns (ParsedAuth, timestamp, expires_seconds).
 pub fn parse_presigned_query(query: &str) -> Result<(ParsedAuth, String, u64), &'static str> {
@@ -151,51 +118,6 @@ pub fn parse_presigned_query(query: &str) -> Result<(ParsedAuth, String, u64), &
     };
 
     Ok((parsed, timestamp, expires_secs))
-}
-
-/// Verify a presigned URL signature.
-pub fn verify_presigned_signature(
-    method: &str,
-    uri: &str,
-    query_string: &str,
-    headers: &HeaderMap,
-    parsed: &ParsedAuth,
-    timestamp: &str,
-    secret_key: &str,
-) -> bool {
-    // Build canonical query string excluding X-Amz-Signature
-    let filtered_qs: String = query_string
-        .split('&')
-        .filter(|pair| !pair.starts_with("X-Amz-Signature="))
-        .collect::<Vec<_>>()
-        .join("&");
-
-    let canonical_uri = canonical_uri(uri);
-    let canonical_qs = canonical_query_string(&filtered_qs);
-    let canonical_hdrs = canonical_headers(headers, &parsed.signed_headers);
-    let signed_headers = parsed.signed_headers.join(";");
-
-    let canonical_request = format!(
-        "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
-        method, canonical_uri, canonical_qs, canonical_hdrs, signed_headers
-    );
-
-    tracing::debug!("Presigned canonical request:\n{}", canonical_request);
-
-    let string_to_sign = build_string_to_sign(&canonical_request, timestamp, parsed);
-
-    tracing::debug!("Presigned string to sign:\n{}", string_to_sign);
-
-    let signing_key = derive_signing_key(secret_key, &parsed.date, &parsed.region);
-
-    let mut mac = HmacSha256::new_from_slice(&signing_key).unwrap();
-    mac.update(string_to_sign.as_bytes());
-    let computed = hex::encode(mac.finalize().into_bytes());
-
-    tracing::debug!("Computed signature: {}", computed);
-    tracing::debug!("Provided signature: {}", parsed.signature);
-
-    constant_time_eq(computed.as_bytes(), parsed.signature.as_bytes())
 }
 
 fn build_canonical_request(
@@ -326,6 +248,59 @@ pub fn derive_signing_key(secret_key: &str, date: &str, region: &str) -> Vec<u8>
     let mut mac = HmacSha256::new_from_slice(&date_region_service_key).unwrap();
     mac.update(b"aws4_request");
     mac.finalize().into_bytes().to_vec()
+}
+
+/// Verify a standard SigV4 request using an already-derived signing key.
+pub fn verify_with_signing_key(
+    method: &str,
+    uri: &str,
+    query_string: &str,
+    headers: &HeaderMap,
+    parsed: &ParsedAuth,
+    signing_key: &[u8],
+) -> bool {
+    let canonical_request = build_canonical_request(method, uri, query_string, headers, parsed);
+    let timestamp = headers
+        .get("x-amz-date")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let string_to_sign = build_string_to_sign(&canonical_request, timestamp, parsed);
+    let mut mac = HmacSha256::new_from_slice(signing_key).unwrap();
+    mac.update(string_to_sign.as_bytes());
+    let computed = hex::encode(mac.finalize().into_bytes());
+    constant_time_eq(computed.as_bytes(), parsed.signature.as_bytes())
+}
+
+/// Verify a presigned URL using an already-derived signing key.
+pub fn verify_presigned_with_signing_key(
+    method: &str,
+    uri: &str,
+    query_string: &str,
+    headers: &HeaderMap,
+    parsed: &ParsedAuth,
+    timestamp: &str,
+    signing_key: &[u8],
+) -> bool {
+    let filtered_qs: String = query_string
+        .split('&')
+        .filter(|pair| !pair.starts_with("X-Amz-Signature="))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let canonical_uri = canonical_uri(uri);
+    let canonical_qs = canonical_query_string(&filtered_qs);
+    let canonical_hdrs = canonical_headers(headers, &parsed.signed_headers);
+    let signed_headers = parsed.signed_headers.join(";");
+
+    let canonical_request = format!(
+        "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
+        method, canonical_uri, canonical_qs, canonical_hdrs, signed_headers
+    );
+    let string_to_sign = build_string_to_sign(&canonical_request, timestamp, parsed);
+    let mut mac = HmacSha256::new_from_slice(signing_key).unwrap();
+    mac.update(string_to_sign.as_bytes());
+    let computed = hex::encode(mac.finalize().into_bytes());
+    constant_time_eq(computed.as_bytes(), parsed.signature.as_bytes())
 }
 
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {

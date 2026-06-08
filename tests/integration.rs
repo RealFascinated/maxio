@@ -107,6 +107,7 @@ async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> AppSt
         metrics,
         stats,
         cache: None,
+        signing_key_cache: Arc::new(maxio::auth::signing_key_cache::SigningKeyCache::new()),
     }
 }
 
