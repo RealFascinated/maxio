@@ -1,10 +1,10 @@
 <script lang="ts">
   import { base } from '$app/paths'
   import LogOut from 'lucide-svelte/icons/log-out'
-  import SidebarNavItem from '$lib/app/sidebar/SidebarNavItem.svelte'
-  import SidebarThemeControl from '$lib/app/sidebar/SidebarThemeControl.svelte'
-  import type { SidebarNavEntry } from '$lib/app/sidebar/navigation'
-  import type { ThemeMode } from '$lib/app/sidebar/theme'
+  import SidebarNavItem from '$lib/components/app/sidebar/SidebarNavItem.svelte'
+  import SidebarThemeControl from '$lib/components/app/sidebar/SidebarThemeControl.svelte'
+  import type { SidebarNavEntry } from '$lib/components/app/sidebar/navigation'
+  import type { ThemeMode } from '$lib/components/app/sidebar/theme'
 
   interface Props {
     collapsed: boolean

@@ -2,20 +2,20 @@
   import { onMount } from "svelte";
   import { fade, fly } from "svelte/transition";
   import { createMutation, createQuery } from "@tanstack/svelte-query";
-  import Login from "$lib/Login.svelte";
-  import BucketList from "$lib/BucketList.svelte";
-  import ObjectBrowser from "$lib/ObjectBrowser.svelte";
-  import BucketSettings from "$lib/BucketSettings.svelte";
-  import UserList from "$lib/UserList.svelte";
-  import Metrics from "$lib/Metrics.svelte";
-  import AppSidebar from "$lib/app/sidebar/AppSidebar.svelte";
-  import { buildSidebarNavItems } from "$lib/app/sidebar/navigation";
+  import Login from "$lib/components/Login.svelte";
+  import BucketList from "$lib/components/BucketList.svelte";
+  import ObjectBrowser from "$lib/components/ObjectBrowser.svelte";
+  import BucketSettings from "$lib/components/BucketSettings.svelte";
+  import UserList from "$lib/components/UserList.svelte";
+  import Metrics from "$lib/components/Metrics.svelte";
+  import AppSidebar from "$lib/components/app/sidebar/AppSidebar.svelte";
+  import { buildSidebarNavItems } from "$lib/components/app/sidebar/navigation";
   import {
     applyThemeToDocument,
     isThemeMode,
     nextThemeMode,
     type ThemeMode,
-  } from "$lib/app/sidebar/theme";
+  } from "$lib/components/app/sidebar/theme";
   import { base } from "$app/paths";
   import ArrowLeft from "lucide-svelte/icons/arrow-left";
   import ChevronRight from "lucide-svelte/icons/chevron-right";

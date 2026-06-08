@@ -33,7 +33,8 @@
   function arcPath(startAngle: number, endAngle: number): string {
     const start = polar(startAngle)
     const end = polar(endAngle)
-    const large = endAngle - startAngle > 180 ? 1 : 0
+    // Sweep clockwise along the bottom arc as angles decrease (200° → -20°).
+    const large = startAngle - endAngle > 180 ? 1 : 0
     return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${large} 1 ${end.x} ${end.y}`
   }
 
@@ -79,13 +80,13 @@
       stroke-width={stroke}
       stroke-linecap="round"
     />
-    {#each segmentArcs as arc (arc.d)}
+    {#each segmentArcs as arc, i (i)}
       <path
         d={arc.d}
         fill="none"
         class={arc.class}
         stroke-width={stroke}
-        stroke-linecap="round"
+        stroke-linecap="butt"
       />
     {/each}
   </svg>

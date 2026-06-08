@@ -2,7 +2,7 @@
   import Sun from 'lucide-svelte/icons/sun'
   import Moon from 'lucide-svelte/icons/moon'
   import Monitor from 'lucide-svelte/icons/monitor'
-  import type { ThemeMode } from '$lib/app/sidebar/theme'
+  import type { ThemeMode } from '$lib/components/app/sidebar/theme'
 
   interface ThemeOption {
     mode: ThemeMode
