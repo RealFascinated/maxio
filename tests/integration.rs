@@ -2742,6 +2742,52 @@ async fn test_console_list_objects_search() {
 }
 
 #[tokio::test]
+async fn test_console_list_objects_omits_current_folder_marker() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/marker-bucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/marker-bucket/nested/", base_url),
+        vec![],
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/marker-bucket/nested/file.txt", base_url),
+        b"x".to_vec(),
+    )
+    .await;
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/marker-bucket/objects?prefix=nested/",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let prefixes: Vec<String> = body["prefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(!prefixes.contains(&"nested/".to_string()));
+    let keys: Vec<String> = body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(keys, vec!["nested/file.txt".to_string()]);
+}
+
+#[tokio::test]
 async fn test_console_delete_object_missing_bucket_returns_404() {
     let base_url = start_server().await;
     let session = console_login(&base_url).await;

@@ -768,12 +768,16 @@ pub async fn list_objects(
     let mut prefix_set = BTreeSet::new();
     for obj in &page.objects {
         if obj.key.ends_with('/') {
-            prefix_set.insert(obj.key.clone());
+            if obj.key != prefix {
+                prefix_set.insert(obj.key.clone());
+            }
         } else {
             let suffix = &obj.key[prefix.len()..];
             if let Some(pos) = suffix.find(delimiter.as_str()) {
                 let common = format!("{}{}", prefix, &suffix[..pos + delimiter.len()]);
-                prefix_set.insert(common);
+                if common != prefix {
+                    prefix_set.insert(common);
+                }
             } else {
                 files.push(console_list_file_json(obj));
             }

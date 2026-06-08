@@ -148,7 +148,7 @@
     const result: string[] = []
     for (const page of objectsQuery.data?.pages ?? []) {
       for (const p of page.prefixes) {
-        if (!seen.has(p)) {
+        if (p !== prefix && !seen.has(p)) {
           seen.add(p)
           result.push(p)
         }
