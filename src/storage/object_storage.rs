@@ -98,6 +98,7 @@ impl ObjectStorage {
         Ok(PutResult {
             size: written.size,
             etag: object_meta.etag.clone(),
+            last_modified: object_meta.last_modified.clone(),
             version_id: object_meta.version_id.take(),
             checksum_algorithm: written.checksum_algorithm,
             checksum_value: written.checksum_value,
@@ -167,6 +168,7 @@ impl ObjectStorage {
             return Ok(PutResult {
                 size: 0,
                 etag,
+                last_modified: Self::now_ts(),
                 version_id: None,
                 checksum_algorithm: None,
                 checksum_value: None,
@@ -703,6 +705,19 @@ impl Storage for ObjectStorage {
         .await;
         self.record("head_object", t.elapsed());
         result
+    }
+
+    async fn open_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        meta: &ObjectMeta,
+        offset: u64,
+        length: u64,
+    ) -> Result<ByteStream, StorageError> {
+        self.blobs
+            .open_object_range(bucket, key, meta, offset, length)
+            .await
     }
 
     async fn get_object_tagging(

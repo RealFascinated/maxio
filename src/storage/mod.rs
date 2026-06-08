@@ -60,6 +60,7 @@ impl ChecksumAlgorithm {
 pub struct PutResult {
     pub size: u64,
     pub etag: String,
+    pub last_modified: String,
     pub version_id: Option<String>,
     pub checksum_algorithm: Option<ChecksumAlgorithm>,
     pub checksum_value: Option<String>,

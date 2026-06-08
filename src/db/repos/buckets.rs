@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::db::schema::{bucket_acl_grants, bucket_cors_rules, bucket_policies, buckets, objects};
 use crate::db::{CachedBucketEntry, DbContext};
 use crate::iam::Acl;
@@ -148,46 +150,68 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
         .await
         .map_err(db_err)?;
 
+    if rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Batch-load policies and ACL grants in two queries instead of 4N per bucket.
+    let ids: Vec<Uuid> = rows.iter().map(|(id, ..)| *id).collect();
+
+    let policy_rows: Vec<(Uuid, String)> = bucket_policies::table
+        .filter(bucket_policies::bucket_id.eq_any(&ids))
+        .select((bucket_policies::bucket_id, bucket_policies::document))
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
+    let mut policies: HashMap<Uuid, String> = policy_rows.into_iter().collect();
+
+    type BucketAclRow = (Uuid, String, Option<String>, Option<String>, Option<String>, String);
+    let raw_acl_rows: Vec<BucketAclRow> = bucket_acl_grants::table
+        .filter(bucket_acl_grants::bucket_id.eq_any(&ids))
+        .select((
+            bucket_acl_grants::bucket_id,
+            bucket_acl_grants::grantee_type,
+            bucket_acl_grants::grantee_id,
+            bucket_acl_grants::grantee_uri,
+            bucket_acl_grants::grantee_display_name,
+            bucket_acl_grants::permission,
+        ))
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
+    let mut acl_by_bucket: HashMap<Uuid, Vec<AclGrantRow>> = HashMap::new();
+    for (bucket_id, gt, gid, guri, gdn, perm) in raw_acl_rows {
+        acl_by_bucket
+            .entry(bucket_id)
+            .or_default()
+            .push((gt, gid, guri, gdn, perm));
+    }
+
     let mut result = Vec::with_capacity(rows.len());
     for (id, name, created_at, versioning, owner_id, owner_display_name) in rows {
-        result.push(
-            load_bucket_meta_parts(
-                &mut conn,
-                id,
-                name,
-                created_at,
-                versioning,
-                owner_id,
-                owner_display_name,
-            )
-            .await?,
-        );
+        let policy = policies.remove(&id);
+        let acl = match acl_by_bucket.remove(&id) {
+            Some(grants) if !grants.is_empty() => {
+                Some(grants_to_acl(&owner_id, &owner_display_name, &grants)?)
+            }
+            _ => None,
+        };
+        result.push(BucketMeta {
+            name,
+            created_at: format_ts(created_at),
+            versioning,
+            cors_rules: None,
+            owner_id,
+            owner_display_name,
+            acl,
+            policy,
+            public_read: false,
+            public_list: false,
+        });
     }
     Ok(result)
 }
 
-pub async fn get_bucket_meta(ctx: &DbContext, name: &str) -> Result<BucketMeta, StorageError> {
-    validate_bucket_name(name)?;
-    let mut conn = get_conn(ctx.pool()).await?;
-    let row: (Uuid, String, chrono::DateTime<Utc>, bool, String, String) = buckets::table
-        .filter(buckets::name.eq(name))
-        .select((
-            buckets::id,
-            buckets::name,
-            buckets::created_at,
-            buckets::versioning,
-            buckets::owner_id,
-            buckets::owner_display_name,
-        ))
-        .first(&mut conn)
-        .await
-        .map_err(|e| match e {
-            diesel::result::Error::NotFound => StorageError::NotFound(name.to_string()),
-            other => db_err(other),
-        })?;
-
-    load_bucket_meta_parts(&mut conn, row.0, row.1, row.2, row.3, row.4, row.5).await
-}
 
 pub async fn put_bucket_policy(
     ctx: &DbContext,
@@ -217,16 +241,14 @@ pub async fn get_bucket_policy(
     ctx: &DbContext,
     bucket: &str,
 ) -> Result<Option<String>, StorageError> {
+    validate_bucket_name(bucket)?;
+    if let Some(entry) = ctx.bucket_cache().get(bucket) {
+        return Ok(entry.policy);
+    }
     let mut conn = get_conn(ctx.pool()).await?;
-    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket).await?;
-
-    bucket_policies::table
-        .filter(bucket_policies::bucket_id.eq(bucket_id))
-        .select(bucket_policies::document)
-        .first::<String>(&mut conn)
-        .await
-        .optional()
-        .map_err(db_err)
+    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+    ctx.bucket_cache().insert(bucket, entry.clone());
+    Ok(entry.policy)
 }
 
 pub async fn delete_bucket_policy(ctx: &DbContext, bucket: &str) -> Result<(), StorageError> {
@@ -249,10 +271,18 @@ pub async fn put_bucket_acl(ctx: &DbContext, bucket: &str, acl: Acl) -> Result<(
 }
 
 pub async fn get_bucket_acl(ctx: &DbContext, bucket: &str) -> Result<Acl, StorageError> {
-    let meta = get_bucket_meta(ctx, bucket).await?;
-    Ok(meta
+    validate_bucket_name(bucket)?;
+    if let Some(entry) = ctx.bucket_cache().get(bucket) {
+        return Ok(entry
+            .acl
+            .unwrap_or_else(|| Acl::private(&entry.owner_id, &entry.owner_display_name)));
+    }
+    let mut conn = get_conn(ctx.pool()).await?;
+    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+    ctx.bucket_cache().insert(bucket, entry.clone());
+    Ok(entry
         .acl
-        .unwrap_or_else(|| Acl::private(&meta.owner_id, &meta.owner_display_name)))
+        .unwrap_or_else(|| Acl::private(&entry.owner_id, &entry.owner_display_name)))
 }
 
 pub async fn put_bucket_cors(
@@ -450,47 +480,6 @@ fn cors_rows_into_rules(rows: Vec<CorsRuleRow>) -> Vec<CorsRule> {
         .collect()
 }
 
-async fn load_bucket_meta_parts(
-    conn: &mut diesel_async::AsyncPgConnection,
-    bucket_id: Uuid,
-    name: String,
-    created_at: chrono::DateTime<Utc>,
-    versioning: bool,
-    owner_id: String,
-    owner_display_name: String,
-) -> Result<BucketMeta, StorageError> {
-    let (policy, acl) =
-        load_bucket_auth_parts(conn, bucket_id, &owner_id, &owner_display_name).await?;
-
-    let cors_rows: Vec<CorsRuleRow> = bucket_cors_rules::table
-        .filter(bucket_cors_rules::bucket_id.eq(bucket_id))
-        .select((
-            bucket_cors_rules::allowed_origins,
-            bucket_cors_rules::allowed_methods,
-            bucket_cors_rules::allowed_headers,
-            bucket_cors_rules::expose_headers,
-            bucket_cors_rules::max_age_seconds,
-        ))
-        .load(conn)
-        .await
-        .map_err(db_err)?;
-
-    let rules = cors_rows_into_rules(cors_rows);
-    let cors_rules = if rules.is_empty() { None } else { Some(rules) };
-
-    Ok(BucketMeta {
-        name,
-        created_at: format_ts(created_at),
-        versioning,
-        cors_rules,
-        owner_id,
-        owner_display_name,
-        acl,
-        policy,
-        public_read: false,
-        public_list: false,
-    })
-}
 
 async fn replace_cors_rules(
     conn: &mut diesel_async::AsyncPgConnection,

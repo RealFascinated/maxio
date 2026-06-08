@@ -62,6 +62,16 @@ pub trait Storage: Send + Sync {
         length: u64,
     ) -> Result<(ByteStream, ObjectMeta), StorageError>;
     async fn head_object(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError>;
+    /// Open a byte-range stream using a pre-fetched `ObjectMeta`, skipping the DB lookup
+    /// that `get_object_range` would perform. Use when the caller already holds the metadata.
+    async fn open_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        meta: &ObjectMeta,
+        offset: u64,
+        length: u64,
+    ) -> Result<ByteStream, StorageError>;
     async fn get_object_tagging(
         &self,
         bucket: &str,

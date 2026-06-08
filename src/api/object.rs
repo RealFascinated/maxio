@@ -343,16 +343,9 @@ async fn copy_object(
             _ => S3Error::internal(e),
         })?;
 
-    // Get destination metadata for LastModified
-    let dst_meta = state
-        .storage
-        .head_object(&bucket, &key)
-        .await
-        .map_err(S3Error::internal)?;
-
     let xml = to_xml(&CopyObjectResult {
         etag: result.etag,
-        last_modified: dst_meta.last_modified,
+        last_modified: result.last_modified,
     })
     .map_err(S3Error::internal)?;
 
@@ -573,9 +566,9 @@ pub async fn get_object(
         let length = part_sizes[idx];
         let total_parts = part_sizes.len();
 
-        let (reader, _) = state
+        let reader = state
             .storage
-            .get_object_range(&bucket, &key, offset, length)
+            .open_range(&bucket, &key, &meta, offset, length)
             .await
             .map_err(|e| match e {
                 StorageError::NotFound(_) => S3Error::no_such_key(&key),
@@ -623,9 +616,9 @@ pub async fn get_object(
         match parse_range(range_str, meta.size) {
             Ok(Some((start, end))) => {
                 let length = end - start + 1;
-                let (reader, _) = state
+                let reader = state
                     .storage
-                    .get_object_range(&bucket, &key, start, length)
+                    .open_range(&bucket, &key, &meta, start, length)
                     .await
                     .map_err(|e| match e {
                         StorageError::NotFound(_) => S3Error::no_such_key(&key),
