@@ -446,18 +446,3 @@ async fn list_attached_user_policies(
         members
     ))
 }
-
-pub async fn cli_add_user(
-    store: &dyn crate::iam::IamStore,
-    username: &str,
-    access_key: Option<&str>,
-    secret_key: Option<&str>,
-) -> Result<(), String> {
-    if let (Some(ak), Some(sk)) = (access_key, secret_key) {
-        store.add_user_with_keys(username, ak, sk).await?;
-    } else {
-        let user = store.create_user(username).await?;
-        let _ = store.create_access_key(&user.username).await?;
-    }
-    Ok(())
-}
