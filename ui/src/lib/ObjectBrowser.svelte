@@ -21,6 +21,7 @@
   import X from 'lucide-svelte/icons/x'
   import VersionHistory from './VersionHistory.svelte'
   import FilePreview from './FilePreview.svelte'
+  import { formatBytes } from '$lib/format-bytes'
   import { isPreviewable } from '$lib/preview'
   import { toast } from '$lib/toast'
   import { objectKeys, settingsKeys } from '$lib/api/keys'
@@ -205,13 +206,6 @@
       return folderPrefix.slice(prefix.length)
     }
     return displayName(folderPrefix)
-  }
-
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
   }
 
   function formatDate(iso: string): string {
@@ -403,7 +397,7 @@
               </span>
             </Table.Cell>
             <Table.Cell class="truncate text-muted-foreground">{file.contentType || '—'}</Table.Cell>
-            <Table.Cell class="text-right text-muted-foreground">{formatSize(file.size)}</Table.Cell>
+            <Table.Cell class="text-right text-muted-foreground">{formatBytes(file.size)}</Table.Cell>
             <Table.Cell class="text-muted-foreground">{formatDate(file.lastModified)}</Table.Cell>
             <Table.Cell class="w-24 text-right">
               <span class="flex items-center justify-end gap-4">

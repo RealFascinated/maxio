@@ -18,6 +18,7 @@
   import { createBucket as createBucketApi, deleteBucket as deleteBucketApi, listBuckets } from '$lib/api/buckets'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
+  import { formatBytes } from '$lib/format-bytes'
 
   interface Props {
     onSelect: (bucket: string) => void
@@ -50,13 +51,6 @@
     return allBuckets.filter((bucket) => bucket.name.toLowerCase().includes(q))
   })
 
-  function formatSize(bytes: number): string {
-    if (bytes === 0) return '0 B'
-    const units = ['B', 'KB', 'MB', 'GB', 'TB']
-    const i = Math.floor(Math.log(bytes) / Math.log(1024))
-    const value = bytes / Math.pow(1024, i)
-    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
-  }
 
   const createBucketMutation = createMutation(() => ({
     mutationFn: createBucketApi,
@@ -201,7 +195,7 @@
             </Table.Cell>
             <Table.Cell class="text-muted-foreground tabular-nums">
               {#if bucket.sizeBytes !== null}
-                {formatSize(bucket.sizeBytes)}
+                {formatBytes(bucket.sizeBytes)}
               {:else}
                 <span class="opacity-40">—</span>
               {/if}

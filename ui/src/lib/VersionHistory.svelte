@@ -12,6 +12,7 @@
   import { deleteVersion as deleteVersionApi, listVersions } from '$lib/api/versions'
   import { ApiError, encodeObjectKey } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
+  import { formatBytes } from '$lib/format-bytes'
 
   interface Props {
     bucket: string
@@ -58,14 +59,6 @@
       `/api/buckets/${encodeURIComponent(bucket)}/versions/${encodeURIComponent(versionId)}/download/${encodeObjectKey(objectKey)}`,
       '_blank'
     )
-  }
-
-  function formatSize(bytes: number): string {
-    if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
   }
 
   function formatDate(iso: string): string {
@@ -121,7 +114,7 @@
             </Table.Cell>
             <Table.Cell class="text-muted-foreground text-xs">{formatDate(version.lastModified)}</Table.Cell>
             <Table.Cell class="text-muted-foreground text-xs">
-              {version.isDeleteMarker ? '—' : formatSize(version.size)}
+              {version.isDeleteMarker ? '—' : formatBytes(version.size)}
             </Table.Cell>
             <Table.Cell>
               {#if version.isDeleteMarker}
