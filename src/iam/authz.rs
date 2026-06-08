@@ -1,7 +1,7 @@
 use crate::error::S3Error;
 use crate::iam::Acl;
 use crate::iam::acl::{acl_allows, action_to_acl_permission};
-use crate::iam::policy::{AuthDecision, evaluate, parse_policy_json};
+use crate::iam::policy::{AuthDecision, PolicyDocument, evaluate, parse_policy_json};
 use crate::iam::principal::Principal;
 use crate::server::AppState;
 
@@ -128,35 +128,59 @@ pub async fn filter_buckets_by_access(
     if principal.is_root {
         return buckets;
     }
+
+    // Load identity policies once for the whole list rather than once per authorize() call.
+    let identity_policies: Vec<PolicyDocument> = if principal.is_anonymous {
+        vec![]
+    } else if let Some(user) = state.user_store.get_user(&principal.username).await {
+        state.user_store.effective_policies(&user).await
+    } else {
+        vec![]
+    };
+
     let mut out = Vec::new();
     for b in buckets {
-        let allowed = authorize(
-            state,
+        let bucket_policy = b.policy.as_deref().and_then(|j| parse_policy_json(j).ok());
+        let arn = bucket_arn(&b.name);
+
+        let allowed = bucket_allowed_by_policy_or_acl(
             principal,
-            "s3:ListBucket",
-            &bucket_arn(&b.name),
-            b.policy.as_deref(),
+            &arn,
+            &identity_policies,
+            bucket_policy.as_ref(),
             b.acl.as_ref(),
-            None,
-        )
-        .await
-        .is_ok()
-            || authorize(
-                state,
-                principal,
-                "s3:GetBucketLocation",
-                &bucket_arn(&b.name),
-                b.policy.as_deref(),
-                b.acl.as_ref(),
-                None,
-            )
-            .await
-            .is_ok();
+        );
         if allowed {
             out.push(b);
         }
     }
     out
+}
+
+/// Returns true if the principal is allowed `s3:ListBucket` or `s3:GetBucketLocation`
+/// on a bucket, using pre-loaded identity policies.
+fn bucket_allowed_by_policy_or_acl(
+    principal: &Principal,
+    arn: &str,
+    identity_policies: &[PolicyDocument],
+    bucket_policy: Option<&crate::iam::policy::PolicyDocument>,
+    bucket_acl: Option<&Acl>,
+) -> bool {
+    for action in ["s3:ListBucket", "s3:GetBucketLocation"] {
+        match evaluate(principal, action, arn, identity_policies, bucket_policy) {
+            AuthDecision::Allow => return true,
+            AuthDecision::Deny => continue,
+            AuthDecision::NoMatch => {}
+        }
+        if let Some(acl) = bucket_acl {
+            if let Some(perm) = action_to_acl_permission(action) {
+                if acl_allows(acl, principal, perm) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

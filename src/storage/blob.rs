@@ -761,6 +761,43 @@ impl BlobStorage {
         Ok(())
     }
 
+    /// Unlink many version blob files with bounded concurrency.
+    pub async fn unlink_version_blobs_batch(
+        &self,
+        bucket: &str,
+        pairs: &[(String, String)],
+        concurrency: usize,
+    ) -> Result<(), StorageError> {
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let sem = Arc::new(Semaphore::new(concurrency.max(1)));
+        let mut handles = Vec::with_capacity(pairs.len());
+        for (key, version_id) in pairs {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StorageError::Io(std::io::Error::other(e)))?;
+            let ver_data = self.version_data_path(bucket, key, version_id);
+            let ver_dir = self.versions_dir(bucket, key);
+            handles.push(tokio::spawn(async move {
+                let _permit = permit;
+                let _ = fs::remove_file(ver_data).await;
+                let _ = fs::remove_dir(ver_dir).await;
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .map_err(|e| StorageError::Io(std::io::Error::other(e)))?;
+        }
+        Ok(())
+    }
+
     pub async fn open_version(
         &self,
         bucket: &str,

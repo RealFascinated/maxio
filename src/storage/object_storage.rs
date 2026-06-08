@@ -306,11 +306,17 @@ impl ObjectStorage {
                     .collect();
 
                 let mut current_keys = HashSet::new();
+                let unlink_pairs: Vec<(String, String)> = deleted
+                    .iter()
+                    .map(|(k, v, _)| (k.clone(), v.clone()))
+                    .collect();
+                self.blobs
+                    .unlink_version_blobs_batch(bucket, &unlink_pairs, DELETE_BLOB_CONCURRENCY)
+                    .await?;
                 for (key, vid, was_current) in &deleted {
                     if *was_current {
                         current_keys.insert(key.clone());
                     }
-                    self.blobs.unlink_version_blobs(bucket, key, vid).await?;
                     results.insert(
                         (key.clone(), Some(vid.clone())),
                         Ok(DeleteResult {
@@ -456,12 +462,19 @@ impl ObjectStorage {
             return Err(StorageError::UploadNotFound(upload_id.to_string()));
         }
 
-        let all_parts = self.meta.list_parts(upload_id).await?;
+        // list_parts returns rows already ordered by part_number; build a map for O(1) lookup.
+        let all_parts: HashMap<u32, PartMeta> = self
+            .meta
+            .list_parts(upload_id)
+            .await?
+            .into_iter()
+            .map(|p| (p.part_number, p))
+            .collect();
+
         let mut selected = Vec::with_capacity(parts.len());
         for (idx, (part_number, requested_etag)) in parts.iter().enumerate() {
             let meta = all_parts
-                .iter()
-                .find(|p| p.part_number == *part_number)
+                .get(part_number)
                 .cloned()
                 .ok_or_else(|| StorageError::InvalidKey(format!("missing part {}", part_number)))?;
             if meta.etag != *requested_etag {
@@ -855,6 +868,14 @@ impl Storage for ObjectStorage {
         result
     }
 
+    async fn get_multipart_upload(
+        &self,
+        upload_id: &str,
+    ) -> Result<MultipartUploadMeta, StorageError> {
+        validate_upload_id(upload_id)?;
+        self.meta.get_multipart_upload(upload_id).await
+    }
+
     async fn abort_multipart_upload(
         &self,
         bucket: &str,
@@ -884,8 +905,7 @@ impl Storage for ObjectStorage {
             return Err(StorageError::UploadNotFound(upload_id.to_string()));
         }
 
-        let mut parts = self.meta.list_parts(upload_id).await?;
-        parts.sort_by_key(|p| p.part_number);
+        let parts = self.meta.list_parts(upload_id).await?;
         let filtered: Vec<PartMeta> = parts
             .into_iter()
             .filter(|p| part_number_marker.is_none_or(|m| p.part_number > m))

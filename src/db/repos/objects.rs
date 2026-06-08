@@ -21,6 +21,17 @@ fn object_has_side_tables(meta: &ObjectMeta) -> bool {
         || (meta.checksum_algorithm.is_some() && meta.checksum_value.is_some())
 }
 
+/// Upsert an object row using a caller-supplied connection and bucket_id.
+/// Used by version pointer updates that already hold an open connection.
+pub(super) async fn upsert_object_conn(
+    conn: &mut diesel_async::AsyncPgConnection,
+    bucket_id: Uuid,
+    meta: &ObjectMeta,
+) -> Result<(), StorageError> {
+    let last_modified = parse_ts(&meta.last_modified)?;
+    do_upsert_object(conn, bucket_id, meta, last_modified).await
+}
+
 pub async fn upsert_object(
     ctx: &DbContext,
     bucket_name: &str,
@@ -36,7 +47,15 @@ pub async fn upsert_object(
         resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
     };
     let last_modified = parse_ts(&meta.last_modified)?;
+    do_upsert_object(&mut conn, bucket_id, meta, last_modified).await
+}
 
+async fn do_upsert_object(
+    conn: &mut diesel_async::AsyncPgConnection,
+    bucket_id: Uuid,
+    meta: &ObjectMeta,
+    last_modified: chrono::DateTime<chrono::Utc>,
+) -> Result<(), StorageError> {
     let values = (
         objects::id.eq(Uuid::new_v4()),
         objects::bucket_id.eq(bucket_id),
@@ -71,7 +90,7 @@ pub async fn upsert_object(
             .on_conflict((objects::bucket_id, objects::key))
             .do_update()
             .set(update)
-            .execute(&mut conn)
+            .execute(conn)
             .await
             .map_err(db_err)?;
         return Ok(());
@@ -83,19 +102,19 @@ pub async fn upsert_object(
         .do_update()
         .set(update)
         .returning(objects::id)
-        .get_result(&mut conn)
+        .get_result(conn)
         .await
         .map_err(db_err)?;
 
     if meta.tags.as_ref().is_some_and(|t| !t.is_empty()) {
-        replace_object_tags(&mut conn, object_id, meta.tags.as_ref()).await?;
+        replace_object_tags(conn, object_id, meta.tags.as_ref()).await?;
     }
     if meta.acl.is_some() {
-        replace_object_acl(&mut conn, object_id, meta.acl.as_ref()).await?;
+        replace_object_acl(conn, object_id, meta.acl.as_ref()).await?;
     }
     if meta.checksum_algorithm.is_some() && meta.checksum_value.is_some() {
         replace_object_checksum(
-            &mut conn,
+            conn,
             object_id,
             meta.checksum_algorithm,
             meta.checksum_value.as_deref(),
@@ -223,10 +242,36 @@ pub async fn get_object_acl(
     bucket_name: &str,
     key: &str,
 ) -> Result<Acl, StorageError> {
-    let meta = get_object_meta(ctx, bucket_name, key).await?;
-    Ok(meta
-        .acl
-        .unwrap_or_else(|| Acl::private(&meta.owner_id, &meta.owner_display_name)))
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+
+    let (object_id, owner_id, owner_display_name): (Uuid, String, String) = objects::table
+        .filter(objects::bucket_id.eq(bucket_id))
+        .filter(objects::key.eq(key))
+        .select((objects::id, objects::owner_id, objects::owner_display_name))
+        .first::<(Uuid, String, String)>(&mut conn)
+        .await
+        .optional()
+        .map_err(db_err)?
+        .ok_or_else(|| StorageError::NotFound(key.to_string()))?;
+
+    let acl_rows: Vec<AclGrantRow> = object_acl_grants::table
+        .filter(object_acl_grants::object_id.eq(object_id))
+        .select((
+            object_acl_grants::grantee_type,
+            object_acl_grants::grantee_id,
+            object_acl_grants::grantee_uri,
+            object_acl_grants::grantee_display_name,
+            object_acl_grants::permission,
+        ))
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
+
+    if acl_rows.is_empty() {
+        return Ok(Acl::private(&owner_id, &owner_display_name));
+    }
+    grants_to_acl(&owner_id, &owner_display_name, &acl_rows)
 }
 
 pub async fn put_object_tags(
@@ -256,8 +301,27 @@ pub async fn get_object_tags(
     bucket_name: &str,
     key: &str,
 ) -> Result<HashMap<String, String>, StorageError> {
-    let meta = get_object_meta(ctx, bucket_name, key).await?;
-    Ok(meta.tags.unwrap_or_default())
+    let mut conn = get_conn(ctx.pool()).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+
+    let object_id = objects::table
+        .filter(objects::bucket_id.eq(bucket_id))
+        .filter(objects::key.eq(key))
+        .select(objects::id)
+        .first::<Uuid>(&mut conn)
+        .await
+        .optional()
+        .map_err(db_err)?
+        .ok_or_else(|| StorageError::NotFound(key.to_string()))?;
+
+    let tags: Vec<(String, String)> = object_tags::table
+        .filter(object_tags::object_id.eq(object_id))
+        .select((object_tags::tag_key, object_tags::tag_value))
+        .load(&mut conn)
+        .await
+        .map_err(db_err)?;
+
+    Ok(tags.into_iter().collect())
 }
 
 pub async fn delete_object_tags(

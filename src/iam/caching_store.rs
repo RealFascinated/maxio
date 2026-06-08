@@ -9,21 +9,36 @@ use crate::iam::iam_store::IamStore;
 use crate::iam::policy::PolicyDocument;
 use crate::iam::types::*;
 
-struct Entry {
-    user: IamUser,
+struct KeyEntry {
+    user: Arc<IamUser>,
     key: AccessKey,
     expires_at: Instant,
 }
 
-/// Caches `lookup_by_access_key` results with a configurable TTL to avoid a
-/// Postgres round-trip on every authenticated S3 request.
+struct UserEntry {
+    user: Arc<IamUser>,
+    expires_at: Instant,
+}
+
+struct PoliciesEntry {
+    policies: Arc<Vec<PolicyDocument>>,
+    expires_at: Instant,
+}
+
+/// Caches `lookup_by_access_key`, `get_user`, and `effective_policies` results with a
+/// configurable TTL to avoid Postgres round-trips on every authenticated S3 request.
+///
+/// Policy mutations (`put_user_policy`, `delete_user_policy`, `attach_user_policy`,
+/// `detach_user_policy`) invalidate the per-user policy cache entry immediately.
 ///
 /// Key eviction also clears the companion `SigningKeyCache` so that a deactivated
 /// or deleted key stops working within one TTL window.
 pub struct CachingIamStore {
     inner: Arc<dyn IamStore>,
     ttl: Duration,
-    cache: RwLock<HashMap<String, Entry>>,
+    key_cache: RwLock<HashMap<String, KeyEntry>>,
+    user_cache: RwLock<HashMap<String, UserEntry>>,
+    policies_cache: RwLock<HashMap<String, PoliciesEntry>>,
     signing_keys: Arc<SigningKeyCache>,
 }
 
@@ -36,16 +51,24 @@ impl CachingIamStore {
         Self {
             inner,
             ttl,
-            cache: RwLock::new(HashMap::new()),
+            key_cache: RwLock::new(HashMap::new()),
+            user_cache: RwLock::new(HashMap::new()),
+            policies_cache: RwLock::new(HashMap::new()),
             signing_keys,
         }
     }
 
-    fn evict(&self, access_key_id: &str) {
-        if let Ok(mut cache) = self.cache.write() {
+    fn evict_key(&self, access_key_id: &str) {
+        if let Ok(mut cache) = self.key_cache.write() {
             cache.remove(access_key_id);
         }
         self.signing_keys.evict(access_key_id);
+    }
+
+    fn evict_user_policies(&self, username: &str) {
+        if let Ok(mut cache) = self.policies_cache.write() {
+            cache.remove(username);
+        }
     }
 }
 
@@ -53,22 +76,33 @@ impl CachingIamStore {
 impl IamStore for CachingIamStore {
     async fn lookup_by_access_key(&self, access_key_id: &str) -> Option<(IamUser, AccessKey)> {
         {
-            let cache = self.cache.read().ok()?;
+            let cache = self.key_cache.read().ok()?;
             if let Some(entry) = cache.get(access_key_id) {
                 if entry.expires_at > Instant::now() {
-                    return Some((entry.user.clone(), entry.key.clone()));
+                    return Some(((*entry.user).clone(), entry.key.clone()));
                 }
             }
         }
 
         let (user, key) = self.inner.lookup_by_access_key(access_key_id).await?;
         let expires_at = Instant::now() + self.ttl;
-        if let Ok(mut cache) = self.cache.write() {
+        let user_arc = Arc::new(user.clone());
+
+        if let Ok(mut cache) = self.key_cache.write() {
             cache.insert(
                 access_key_id.to_string(),
-                Entry {
-                    user: user.clone(),
+                KeyEntry {
+                    user: Arc::clone(&user_arc),
                     key: key.clone(),
+                    expires_at,
+                },
+            );
+        }
+        if let Ok(mut cache) = self.user_cache.write() {
+            cache.insert(
+                user.username.clone(),
+                UserEntry {
+                    user: user_arc,
                     expires_at,
                 },
             );
@@ -87,7 +121,28 @@ impl IamStore for CachingIamStore {
     }
 
     async fn get_user(&self, username: &str) -> Option<IamUser> {
-        self.inner.get_user(username).await
+        {
+            if let Ok(cache) = self.user_cache.read() {
+                if let Some(entry) = cache.get(username) {
+                    if entry.expires_at > Instant::now() {
+                        return Some((*entry.user).clone());
+                    }
+                }
+            }
+        }
+
+        let user = self.inner.get_user(username).await?;
+        let expires_at = Instant::now() + self.ttl;
+        if let Ok(mut cache) = self.user_cache.write() {
+            cache.insert(
+                username.to_string(),
+                UserEntry {
+                    user: Arc::new(user.clone()),
+                    expires_at,
+                },
+            );
+        }
+        Some(user)
     }
 
     async fn list_users(&self) -> Vec<IamUser> {
@@ -95,7 +150,28 @@ impl IamStore for CachingIamStore {
     }
 
     async fn effective_policies(&self, user: &IamUser) -> Vec<PolicyDocument> {
-        self.inner.effective_policies(user).await
+        {
+            if let Ok(cache) = self.policies_cache.read() {
+                if let Some(entry) = cache.get(&user.username) {
+                    if entry.expires_at > Instant::now() {
+                        return (*entry.policies).clone();
+                    }
+                }
+            }
+        }
+
+        let policies = self.inner.effective_policies(user).await;
+        let expires_at = Instant::now() + self.ttl;
+        if let Ok(mut cache) = self.policies_cache.write() {
+            cache.insert(
+                user.username.clone(),
+                PoliciesEntry {
+                    policies: Arc::new(policies.clone()),
+                    expires_at,
+                },
+            );
+        }
+        policies
     }
 
     async fn get_managed_policy(&self, name: &str) -> Option<ManagedPolicy> {
@@ -121,7 +197,7 @@ impl IamStore for CachingIamStore {
     async fn delete_access_key(&self, username: &str, access_key_id: &str) -> Result<(), String> {
         let result = self.inner.delete_access_key(username, access_key_id).await;
         if result.is_ok() {
-            self.evict(access_key_id);
+            self.evict_key(access_key_id);
         }
         result
     }
@@ -137,7 +213,7 @@ impl IamStore for CachingIamStore {
             .update_access_key_status(username, access_key_id, status)
             .await;
         if result.is_ok() {
-            self.evict(access_key_id);
+            self.evict_key(access_key_id);
         }
         result
     }
@@ -148,21 +224,38 @@ impl IamStore for CachingIamStore {
         policy_name: &str,
         document: PolicyDocumentRaw,
     ) -> Result<(), String> {
-        self.inner
+        let result = self
+            .inner
             .put_user_policy(username, policy_name, document)
-            .await
+            .await;
+        if result.is_ok() {
+            self.evict_user_policies(username);
+        }
+        result
     }
 
     async fn delete_user_policy(&self, username: &str, policy_name: &str) -> Result<(), String> {
-        self.inner.delete_user_policy(username, policy_name).await
+        let result = self.inner.delete_user_policy(username, policy_name).await;
+        if result.is_ok() {
+            self.evict_user_policies(username);
+        }
+        result
     }
 
     async fn attach_user_policy(&self, username: &str, policy_arn: &str) -> Result<(), String> {
-        self.inner.attach_user_policy(username, policy_arn).await
+        let result = self.inner.attach_user_policy(username, policy_arn).await;
+        if result.is_ok() {
+            self.evict_user_policies(username);
+        }
+        result
     }
 
     async fn detach_user_policy(&self, username: &str, policy_arn: &str) -> Result<(), String> {
-        self.inner.detach_user_policy(username, policy_arn).await
+        let result = self.inner.detach_user_policy(username, policy_arn).await;
+        if result.is_ok() {
+            self.evict_user_policies(username);
+        }
+        result
     }
 
     async fn create_managed_policy(

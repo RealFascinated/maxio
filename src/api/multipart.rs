@@ -160,15 +160,14 @@ pub async fn list_parts(
         .get("uploadId")
         .ok_or_else(|| S3Error::invalid_argument("missing uploadId"))?;
 
-    let uploads = state
+    let upload = state
         .storage
-        .list_multipart_uploads(&bucket, None)
+        .get_multipart_upload(upload_id)
         .await
         .map_err(map_storage_err)?;
-    let upload = uploads
-        .into_iter()
-        .find(|u| u.upload_id == *upload_id)
-        .ok_or_else(|| S3Error::no_such_upload(upload_id))?;
+    if upload.bucket != bucket {
+        return Err(S3Error::no_such_upload(upload_id));
+    }
 
     let (parts, _) = state
         .storage

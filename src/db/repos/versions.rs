@@ -8,6 +8,7 @@ use crate::db::schema::{
 use crate::storage::{ObjectMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
+use diesel::sql_types::{Array, Bool, Text, Uuid as SqlUuid};
 use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
@@ -16,6 +17,16 @@ use super::{
     get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
     resolve_bucket_id,
 };
+
+#[derive(diesel::QueryableByName)]
+struct DeletedVersionRow {
+    #[diesel(sql_type = Text)]
+    key: String,
+    #[diesel(sql_type = Text)]
+    version_id: String,
+    #[diesel(sql_type = Bool)]
+    is_current: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct VersionsPage {
@@ -92,15 +103,21 @@ pub async fn insert_version(
         .await
         .map_err(db_err)?;
 
-    replace_version_tags(&mut conn, row_id, meta.tags.as_ref()).await?;
-    replace_version_acl(&mut conn, row_id, meta.acl.as_ref()).await?;
-    replace_version_checksum(
-        &mut conn,
-        row_id,
-        meta.checksum_algorithm,
-        meta.checksum_value.as_deref(),
-    )
-    .await?;
+    if meta.tags.as_ref().is_some_and(|t| !t.is_empty()) {
+        replace_version_tags(&mut conn, row_id, meta.tags.as_ref()).await?;
+    }
+    if meta.acl.is_some() {
+        replace_version_acl(&mut conn, row_id, meta.acl.as_ref()).await?;
+    }
+    if meta.checksum_algorithm.is_some() && meta.checksum_value.is_some() {
+        replace_version_checksum(
+            &mut conn,
+            row_id,
+            meta.checksum_algorithm,
+            meta.checksum_value.as_deref(),
+        )
+        .await?;
+    }
 
     Ok(row_id)
 }
@@ -270,6 +287,7 @@ pub async fn list_object_versions_page(
             .filter(objects::bucket_id.eq(bucket_id))
             .filter(objects::version_id.is_null())
             .order(objects::key.asc())
+            .limit(fetch_limit)
             .into_boxed();
         if !prefix.is_empty() {
             let pattern = format!("{}%", escape_like(prefix));
@@ -317,8 +335,8 @@ fn version_sort_key(a: &ObjectMeta, b: &ObjectMeta) -> std::cmp::Ordering {
     })
 }
 
-/// Delete explicit object versions in one transaction. Returns affected (key, version_id) pairs
-/// whose rows were current before deletion.
+/// Delete explicit object versions in one round-trip using unnest. Returns affected
+/// (key, version_id, was_current) triples for rows that existed.
 pub async fn delete_object_versions_batch(
     ctx: &DbContext,
     bucket_name: &str,
@@ -330,28 +348,26 @@ pub async fn delete_object_versions_batch(
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
 
-    let mut deleted = Vec::with_capacity(pairs.len());
-    for (key, version_id) in pairs {
-        let row: Option<(String, String, bool)> = diesel::delete(
-            object_versions::table
-                .filter(object_versions::bucket_id.eq(bucket_id))
-                .filter(object_versions::key.eq(key))
-                .filter(object_versions::version_id.eq(version_id)),
-        )
-        .returning((
-            object_versions::key,
-            object_versions::version_id,
-            object_versions::is_current,
-        ))
-        .get_result(&mut conn)
-        .await
-        .optional()
-        .map_err(db_err)?;
-        if let Some(entry) = row {
-            deleted.push(entry);
-        }
-    }
-    Ok(deleted)
+    let keys: Vec<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
+    let vids: Vec<String> = pairs.iter().map(|(_, v)| v.clone()).collect();
+
+    let rows: Vec<DeletedVersionRow> = diesel::sql_query(
+        "DELETE FROM object_versions \
+         WHERE bucket_id = $1 \
+           AND (key, version_id) IN (SELECT * FROM unnest($2::text[], $3::text[])) \
+         RETURNING key, version_id, is_current",
+    )
+    .bind::<SqlUuid, _>(bucket_id)
+    .bind::<Array<Text>, _>(keys)
+    .bind::<Array<Text>, _>(vids)
+    .load(&mut conn)
+    .await
+    .map_err(db_err)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.key, r.version_id, r.is_current))
+        .collect())
 }
 
 pub async fn update_current_after_delete(
@@ -394,7 +410,7 @@ pub async fn update_current_after_delete(
 
     if let Some(row) = latest {
         let meta = version_row_into_meta(&mut conn, row.clone()).await?;
-        super::upsert_object(ctx, bucket_name, &meta, None).await?;
+        super::objects::upsert_object_conn(&mut conn, bucket_id, &meta).await?;
         diesel::update(object_versions::table.filter(object_versions::id.eq(row.id)))
             .set(object_versions::is_current.eq(true))
             .execute(&mut conn)

@@ -441,10 +441,11 @@ impl MetadataStore for PgMetadataStore {
     }
 
     async fn list_parts(&self, upload_id: &str) -> Result<Vec<PartMeta>, StorageError> {
-        meta_op!(self, "list_parts", {
-            let (_, parts) = repos::list_parts(&self.ctx, upload_id).await?;
-            Ok(parts)
-        })
+        meta_op!(
+            self,
+            "list_parts",
+            repos::list_parts(&self.ctx, upload_id).await
+        )
     }
 
     async fn list_multipart_uploads(

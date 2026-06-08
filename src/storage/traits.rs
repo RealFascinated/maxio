@@ -110,6 +110,10 @@ pub trait Storage: Send + Sync {
     ) -> Result<crate::iam::Acl, StorageError>;
 
     // Multipart
+    async fn get_multipart_upload(
+        &self,
+        upload_id: &str,
+    ) -> Result<MultipartUploadMeta, StorageError>;
     async fn create_multipart_upload(
         &self,
         bucket: &str,

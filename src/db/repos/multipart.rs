@@ -146,11 +146,7 @@ pub async fn upsert_part(
     Ok(())
 }
 
-pub async fn list_parts(
-    ctx: &DbContext,
-    upload_id: &str,
-) -> Result<(MultipartUploadMeta, Vec<PartMeta>), StorageError> {
-    let meta = get_multipart_upload(ctx, upload_id).await?;
+pub async fn list_parts(ctx: &DbContext, upload_id: &str) -> Result<Vec<PartMeta>, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
 
     let rows: Vec<PartRow> = multipart_parts::table
@@ -168,7 +164,7 @@ pub async fn list_parts(
         .await
         .map_err(db_err)?;
 
-    let parts = rows
+    Ok(rows
         .into_iter()
         .map(
             |(part_number, etag, size, last_modified, algo, value)| PartMeta {
@@ -180,9 +176,7 @@ pub async fn list_parts(
                 checksum_value: value,
             },
         )
-        .collect();
-
-    Ok((meta, parts))
+        .collect())
 }
 
 pub async fn list_multipart_uploads(
