@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use crate::iam::Acl;
+use crate::storage::CorsRule;
 use uuid::Uuid;
 
-/// Cached bucket metadata for hot paths (PutObject, auth, bucket id resolution).
+/// Cached bucket metadata for hot paths (PutObject, auth, bucket id resolution, CORS).
 #[derive(Debug, Clone)]
 pub struct CachedBucketEntry {
     pub id: Uuid,
@@ -13,6 +14,7 @@ pub struct CachedBucketEntry {
     pub owner_display_name: String,
     pub policy: Option<String>,
     pub acl: Option<Acl>,
+    pub cors_rules: Vec<CorsRule>,
 }
 
 /// In-memory bucket name → metadata cache to avoid repeated Postgres lookups.
@@ -65,6 +67,14 @@ impl BucketCache {
             }
         }
     }
+
+    pub fn set_cors(&self, name: &str, rules: Vec<CorsRule>) {
+        if let Ok(mut map) = self.map.write() {
+            if let Some(entry) = map.get_mut(name) {
+                entry.cors_rules = rules;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +89,7 @@ mod tests {
             owner_display_name: "Owner".into(),
             policy: None,
             acl: None,
+            cors_rules: vec![],
         }
     }
 

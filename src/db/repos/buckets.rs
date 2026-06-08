@@ -81,6 +81,7 @@ pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, S
             owner_display_name: meta.owner_display_name.clone(),
             policy: meta.policy.clone(),
             acl: meta.acl.clone(),
+            cors_rules: meta.cors_rules.clone().unwrap_or_default(),
         },
     );
     Ok(true)
@@ -261,15 +262,23 @@ pub async fn put_bucket_cors(
 ) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket).await?;
-    replace_cors_rules(&mut conn, bucket_id, &rules).await
+    replace_cors_rules(&mut conn, bucket_id, &rules).await?;
+    ctx.bucket_cache().set_cors(bucket, rules);
+    Ok(())
 }
 
 pub async fn get_bucket_cors(
     ctx: &DbContext,
     bucket: &str,
 ) -> Result<Option<Vec<CorsRule>>, StorageError> {
-    let meta = get_bucket_meta(ctx, bucket).await?;
-    Ok(meta.cors_rules)
+    validate_bucket_name(bucket)?;
+    if let Some(entry) = ctx.bucket_cache().get(bucket) {
+        return Ok(Some(entry.cors_rules));
+    }
+    let mut conn = get_conn(ctx.pool()).await?;
+    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+    ctx.bucket_cache().insert(bucket, entry.clone());
+    Ok(Some(entry.cors_rules))
 }
 
 pub async fn delete_bucket_cors(ctx: &DbContext, bucket: &str) -> Result<(), StorageError> {
@@ -279,6 +288,7 @@ pub async fn delete_bucket_cors(ctx: &DbContext, bucket: &str) -> Result<(), Sto
         .execute(&mut conn)
         .await
         .map_err(db_err)?;
+    ctx.bucket_cache().set_cors(bucket, vec![]);
     Ok(())
 }
 
@@ -336,6 +346,20 @@ pub(crate) async fn load_bucket_cache_entry(
 
     let (policy, acl) = load_bucket_auth_parts(conn, row.0, &row.2, &row.3).await?;
 
+    let cors_rows: Vec<CorsRuleRow> = bucket_cors_rules::table
+        .filter(bucket_cors_rules::bucket_id.eq(row.0))
+        .select((
+            bucket_cors_rules::allowed_origins,
+            bucket_cors_rules::allowed_methods,
+            bucket_cors_rules::allowed_headers,
+            bucket_cors_rules::expose_headers,
+            bucket_cors_rules::max_age_seconds,
+        ))
+        .load(conn)
+        .await
+        .map_err(db_err)?;
+    let cors_rules = cors_rows_into_rules(cors_rows);
+
     Ok(CachedBucketEntry {
         id: row.0,
         versioning: row.1,
@@ -343,6 +367,7 @@ pub(crate) async fn load_bucket_cache_entry(
         owner_display_name: row.3,
         policy,
         acl,
+        cors_rules,
     })
 }
 
@@ -413,6 +438,18 @@ async fn load_bucket_auth_parts(
     Ok((policy, acl))
 }
 
+fn cors_rows_into_rules(rows: Vec<CorsRuleRow>) -> Vec<CorsRule> {
+    rows.into_iter()
+        .map(|(origins, methods, headers, expose, max_age)| CorsRule {
+            allowed_origins: origins,
+            allowed_methods: methods,
+            allowed_headers: headers,
+            expose_headers: expose,
+            max_age_seconds: max_age.map(|v| v as u32),
+        })
+        .collect()
+}
+
 async fn load_bucket_meta_parts(
     conn: &mut diesel_async::AsyncPgConnection,
     bucket_id: Uuid,
@@ -438,32 +475,8 @@ async fn load_bucket_meta_parts(
         .await
         .map_err(db_err)?;
 
-    let cors_rules = if cors_rows.is_empty() {
-        None
-    } else {
-        Some(
-            cors_rows
-                .into_iter()
-                .map(
-                    |(
-                        allowed_origins,
-                        allowed_methods,
-                        allowed_headers,
-                        expose_headers,
-                        max_age,
-                    )| {
-                        CorsRule {
-                            allowed_origins,
-                            allowed_methods,
-                            allowed_headers,
-                            expose_headers,
-                            max_age_seconds: max_age.map(|v| v as u32),
-                        }
-                    },
-                )
-                .collect(),
-        )
-    };
+    let rules = cors_rows_into_rules(cors_rows);
+    let cors_rules = if rules.is_empty() { None } else { Some(rules) };
 
     Ok(BucketMeta {
         name,
