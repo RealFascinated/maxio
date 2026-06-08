@@ -1034,7 +1034,10 @@ mod read_path_tests {
             .unwrap();
         assert_eq!(buf, payload);
         let cached = tokio::fs::read(&cache_path).await.unwrap();
-        assert_eq!(cached, payload, "stale cache file should be replaced from data");
+        assert_eq!(
+            cached, payload,
+            "stale cache file should be replaced from data"
+        );
     }
 
     #[tokio::test]
