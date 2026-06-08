@@ -4,6 +4,12 @@
   import { Callout } from '$lib/components/ui/callout'
   import { Badge } from '$lib/components/ui/badge'
   import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
+  import Cpu from 'lucide-svelte/icons/cpu'
+  import Database from 'lucide-svelte/icons/database'
+  import HardDrive from 'lucide-svelte/icons/hard-drive'
+  import Package from 'lucide-svelte/icons/package'
+  import Server from 'lucide-svelte/icons/server'
+  import Table2 from 'lucide-svelte/icons/table-2'
   import { metricsKeys } from '$lib/api/keys'
   import { fetchMetrics } from '$lib/api/metrics'
 
@@ -65,7 +71,37 @@
     {@const data = metricsQuery.data}
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <h2 class="mb-3 text-lg font-bold dark:text-white">Server</h2>
+      <div class="mb-3 flex items-center gap-2">
+        <Database class="size-5 text-coollabs dark:text-warning" />
+        <h2 class="text-lg font-bold dark:text-white">Storage</h2>
+      </div>
+      <dl class="grid gap-4 sm:grid-cols-3">
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Buckets</dt>
+          <dd class="text-lg font-semibold dark:text-white">
+            {data.storageTotals.bucketCount.toLocaleString()}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Objects</dt>
+          <dd class="text-lg font-semibold dark:text-white">
+            {data.storageTotals.objectCount.toLocaleString()}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Total size</dt>
+          <dd class="text-lg font-semibold dark:text-white">
+            {formatBytes(data.storageTotals.sizeBytes)}
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
+      <div class="mb-3 flex items-center gap-2">
+        <Server class="size-5 text-coollabs dark:text-warning" />
+        <h2 class="text-lg font-bold dark:text-white">Server</h2>
+      </div>
       <dl class="grid gap-3 sm:grid-cols-2">
         <div>
           <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Uptime</dt>
@@ -75,15 +111,16 @@
     </section>
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <div class="mb-3 flex items-center gap-2">
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <HardDrive class="size-5 shrink-0 text-coollabs dark:text-warning" />
         <h2 class="text-lg font-bold dark:text-white">Cache</h2>
         {#if data.cache.enabled}
-          <Badge variant="secondary">Enabled</Badge>
+          <Badge variant="success" label="Enabled" />
         {:else}
-          <Badge variant="outline">Disabled</Badge>
+          <span class="text-xs font-bold text-muted-foreground">Disabled</span>
         {/if}
         {#if data.cache.writebackHalted}
-          <Badge variant="destructive">Writeback halted</Badge>
+          <Badge variant="error" label="Writeback halted" />
         {/if}
       </div>
       <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -132,7 +169,10 @@
     </section>
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <h2 class="mb-3 text-lg font-bold dark:text-white">Storage operations</h2>
+      <div class="mb-3 flex items-center gap-2">
+        <Package class="size-5 text-coollabs dark:text-warning" />
+        <h2 class="text-lg font-bold dark:text-white">Storage operations</h2>
+      </div>
       {#if data.storageOps.length === 0}
         <p class="text-sm text-neutral-500">No storage operations recorded yet.</p>
       {:else}
@@ -160,7 +200,10 @@
     </section>
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <h2 class="mb-3 text-lg font-bold dark:text-white">Metadata operations</h2>
+      <div class="mb-3 flex items-center gap-2">
+        <Table2 class="size-5 text-coollabs dark:text-warning" />
+        <h2 class="text-lg font-bold dark:text-white">Metadata operations</h2>
+      </div>
       {#if data.metadataOps.length === 0}
         <p class="text-sm text-neutral-500">No metadata operations recorded yet.</p>
       {:else}
@@ -189,7 +232,10 @@
 
     {#if data.process}
       <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-        <h2 class="mb-3 text-lg font-bold dark:text-white">Process</h2>
+        <div class="mb-3 flex items-center gap-2">
+          <Cpu class="size-5 text-coollabs dark:text-warning" />
+          <h2 class="text-lg font-bold dark:text-white">Process</h2>
+        </div>
         <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div>
             <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Resident memory</dt>

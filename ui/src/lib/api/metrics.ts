@@ -33,8 +33,15 @@ export interface ProcessSnapshot {
   maxFds: number
 }
 
+export interface StorageTotalsSnapshot {
+  bucketCount: number
+  objectCount: number
+  sizeBytes: number
+}
+
 export interface MetricsSnapshot {
   uptimeSeconds: number
+  storageTotals: StorageTotalsSnapshot
   cache: CacheSnapshot
   storageOps: StorageOpSnapshot[]
   metadataOps: MetadataOpSnapshot[]

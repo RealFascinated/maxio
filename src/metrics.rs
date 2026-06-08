@@ -11,8 +11,27 @@ use crate::stats::BucketStatsCache;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StorageTotalsSnapshot {
+    pub bucket_count: usize,
+    pub object_count: i64,
+    pub size_bytes: i64,
+}
+
+impl StorageTotalsSnapshot {
+    pub fn from_bucket_stats(stats: &[crate::stats::BucketStat]) -> Self {
+        Self {
+            bucket_count: stats.len(),
+            object_count: stats.iter().map(|s| s.object_count).sum(),
+            size_bytes: stats.iter().map(|s| s.size_bytes).sum(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MetricsSnapshot {
     pub uptime_seconds: f64,
+    pub storage_totals: StorageTotalsSnapshot,
     pub cache: CacheSnapshot,
     pub storage_ops: Vec<StorageOpSnapshot>,
     pub metadata_ops: Vec<MetadataOpSnapshot>,
@@ -397,6 +416,11 @@ impl MetricsRegistry {
 
         MetricsSnapshot {
             uptime_seconds,
+            storage_totals: StorageTotalsSnapshot {
+                bucket_count: 0,
+                object_count: 0,
+                size_bytes: 0,
+            },
             cache,
             storage_ops,
             metadata_ops,
