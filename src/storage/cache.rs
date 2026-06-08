@@ -215,10 +215,12 @@ impl CacheLayer {
     }
 
     pub async fn remove_entry(&self, bucket: &str, key: &str) {
-        let mut lru = self.lru.lock().await;
         let entry_key = (bucket.to_string(), key.to_string());
-        if let Some((_, size)) = lru.entries.remove(&entry_key) {
-            lru.total_size = lru.total_size.saturating_sub(size);
+        {
+            let mut lru = self.lru.lock().await;
+            if let Some((_, size)) = lru.entries.remove(&entry_key) {
+                lru.total_size = lru.total_size.saturating_sub(size);
+            }
         }
         self.dirty.lock().await.remove(&entry_key);
         self.sync_gauges().await;
