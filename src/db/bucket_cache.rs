@@ -17,7 +17,7 @@ pub struct CachedBucketEntry {
     pub cors_rules: Vec<CorsRule>,
 }
 
-/// In-memory bucket name → metadata cache to avoid repeated Postgres lookups.
+/// In-memory bucket → metadata cache to avoid repeated Postgres lookups.
 #[derive(Debug, Default)]
 pub struct BucketCache {
     map: RwLock<HashMap<String, CachedBucketEntry>>,

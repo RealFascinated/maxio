@@ -117,15 +117,20 @@ pub async fn check_object_access(
         return Ok(ctx);
     }
 
+    let arn = crate::iam::authz::object_arn(bucket, key);
+
+    // Fast path: if the bucket policy/ACL already grants access, skip the per-object
+    // ACL lookup. This avoids a DB query on every public-read bucket request.
+    if check_access(state, principal, action, &arn, &ctx, None)
+        .await
+        .is_ok()
+    {
+        return Ok(ctx);
+    }
+
+    // Bucket-level check denied — the object ACL may still grant access (e.g. an
+    // object with public-read inside a private bucket).
     let object_acl = state.storage.get_object_acl(bucket, key).await.ok();
-    check_access(
-        state,
-        principal,
-        action,
-        &crate::iam::authz::object_arn(bucket, key),
-        &ctx,
-        object_acl.as_ref(),
-    )
-    .await?;
+    check_access(state, principal, action, &arn, &ctx, object_acl.as_ref()).await?;
     Ok(ctx)
 }
