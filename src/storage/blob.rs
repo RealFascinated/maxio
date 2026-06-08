@@ -204,9 +204,6 @@ impl BlobStorage {
                 let _ = fs::remove_file(&cache_path).await;
                 cache.remove_entry(bucket, key).await;
             }
-            if cache.writeback() && cache.is_dirty(bucket, key).await {
-                return Err(StorageError::NotFound(key.to_string()));
-            }
         }
 
         let data_path = self.object_path(bucket, key);
@@ -444,11 +441,22 @@ impl BlobStorage {
 
         if writeback {
             let bucket_dir = self.buckets_dir.join(bucket);
-            tokio::spawn(remove_array_object_background(
-                obj_path,
-                bucket_dir,
-                cleanup_parents,
-            ));
+            tokio::spawn(async move {
+                let _ = remove_file_if_exists(&obj_path).await;
+                if cleanup_parents {
+                    let mut dir = obj_path.parent().map(|p| p.to_path_buf());
+                    while let Some(d) = dir {
+                        if d == bucket_dir {
+                            break;
+                        }
+                        match fs::remove_dir(&d).await {
+                            Ok(()) => {}
+                            Err(_) => break,
+                        }
+                        dir = d.parent().map(|p| p.to_path_buf());
+                    }
+                }
+            });
             return Ok(());
         }
 
@@ -497,11 +505,9 @@ impl BlobStorage {
                     let _ = remove_file_if_exists(&cache_path).await;
                 }
                 if writeback {
-                    tokio::spawn(remove_array_object_background(
-                        obj_path,
-                        buckets_dir.join(&bucket_name),
-                        false,
-                    ));
+                    tokio::spawn(async move {
+                        let _ = remove_file_if_exists(&obj_path).await;
+                    });
                 } else {
                     let _ = remove_file_if_exists(&obj_path).await;
                 }
@@ -894,46 +900,6 @@ async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(StorageError::Io(e)),
-    }
-}
-
-async fn remove_array_object_background(
-    obj_path: PathBuf,
-    bucket_dir: PathBuf,
-    cleanup_parents: bool,
-) {
-    let log_path = obj_path.display().to_string();
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        let result = (|| {
-            if let Err(e) = std::fs::remove_file(&obj_path) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    return Err(e);
-                }
-            }
-            if cleanup_parents {
-                let mut dir = obj_path.parent().map(|p| p.to_path_buf());
-                while let Some(d) = dir {
-                    if d == bucket_dir {
-                        break;
-                    }
-                    match std::fs::remove_dir(&d) {
-                        Ok(()) => {}
-                        Err(_) => break,
-                    }
-                    dir = d.parent().map(|p| p.to_path_buf());
-                }
-            }
-            Ok(())
-        })();
-        let _ = tx.send(result);
-    });
-    if let Ok(Err(e)) = rx.await {
-        tracing::warn!(
-            path = %log_path,
-            error = %e,
-            "background array object delete failed"
-        );
     }
 }
 

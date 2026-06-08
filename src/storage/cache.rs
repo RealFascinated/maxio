@@ -10,9 +10,6 @@ use tokio::sync::Mutex;
 
 type ObjectKey = (String, String);
 
-/// Max time to wait for a single cache→array copy before trying another dirty object.
-const FLUSH_COPY_TIMEOUT: Duration = Duration::from_secs(120);
-
 pub struct CacheLayer {
     buckets_dir: PathBuf,
     data_buckets_dir: PathBuf,
@@ -21,8 +18,6 @@ pub struct CacheLayer {
     flush_interval: Duration,
     lru: Mutex<LruState>,
     dirty: Mutex<HashSet<ObjectKey>>,
-    /// Last object whose flush failed; skipped on the next attempt when alternatives exist.
-    flush_skip: Mutex<Option<ObjectKey>>,
     writeback_halted: AtomicBool,
     metrics: Option<Arc<MetricsRegistry>>,
 }
@@ -53,7 +48,6 @@ impl CacheLayer {
                 total_size: 0,
             }),
             dirty: Mutex::new(HashSet::new()),
-            flush_skip: Mutex::new(None),
             writeback_halted: AtomicBool::new(false),
             metrics: None,
         };
@@ -81,22 +75,7 @@ impl CacheLayer {
         lru.total_size = lru.entries.values().map(|(_, size)| *size).sum();
         drop(lru);
         self.dirty.lock().await.retain(|(b, _)| b != bucket);
-        *self.flush_skip.lock().await = None;
         self.sync_gauges().await;
-    }
-
-    async fn pick_dirty_key(&self) -> Option<ObjectKey> {
-        let dirty = self.dirty.lock().await;
-        if dirty.is_empty() {
-            return None;
-        }
-        let skip = self.flush_skip.lock().await.clone();
-        if let Some(ref skip_key) = skip {
-            if let Some(key) = dirty.iter().find(|k| *k != skip_key) {
-                return Some(key.clone());
-            }
-        }
-        dirty.iter().next().cloned()
     }
 
     pub fn object_path(&self, bucket: &str, key: &str) -> PathBuf {
@@ -177,18 +156,12 @@ impl CacheLayer {
         Some((bucket, key))
     }
 
-    pub async fn is_dirty(&self, bucket: &str, key: &str) -> bool {
-        self.dirty
-            .lock()
-            .await
-            .contains(&(bucket.to_string(), key.to_string()))
-    }
-
     pub async fn record_read_hit(&self, bucket: &str, key: &str, size: u64) {
         if let Some(m) = &self.metrics {
             m.record_cache_hit();
         }
         self.record_access_inner(bucket, key, size).await;
+        self.sync_gauges().await;
     }
 
     async fn record_access_inner(&self, bucket: &str, key: &str, size: u64) {
@@ -303,86 +276,92 @@ impl CacheLayer {
         Ok(cache_path)
     }
 
-    /// Flush one dirty object to the data directory.
-    ///
-    /// Returns `Ok(true)` when an entry was processed, `Ok(false)` when the dirty set is empty.
-    /// Copies run on a dedicated thread so large array writes do not starve the Tokio blocking
-    /// pool used by request-path I/O.
-    pub async fn flush_one_dirty(&self) -> Result<bool, StorageError> {
+    pub async fn flush_dirty(&self) -> Result<(), StorageError> {
         if !self.writeback {
-            return Ok(false);
+            return Ok(());
         }
-
-        let Some((bucket, key)) = self.pick_dirty_key().await else {
-            self.writeback_halted.store(false, Ordering::Relaxed);
-            *self.flush_skip.lock().await = None;
-            self.sync_gauges().await;
-            return Ok(false);
-        };
 
         let start = Instant::now();
-        let cache_path = self.object_path(&bucket, &key);
-        let data_path = super::blob::object_path_in(&self.data_buckets_dir, &bucket, &key);
-
-        if !fs::try_exists(&cache_path).await.unwrap_or(false) {
-            self.dirty
-                .lock()
-                .await
-                .remove(&(bucket.clone(), key.clone()));
+        let dirty_keys: Vec<ObjectKey> = self.dirty.lock().await.iter().cloned().collect();
+        if dirty_keys.is_empty() {
+            self.writeback_halted.store(false, Ordering::Relaxed);
             self.sync_gauges().await;
-            return Ok(true);
+            return Ok(());
         }
 
-        let size = fs::metadata(&cache_path)
-            .await
-            .map_err(StorageError::Io)?
-            .len();
-
-        if fs::try_exists(&data_path).await.unwrap_or(false) {
-            let data_size = fs::metadata(&data_path)
+        let mut had_failure = false;
+        let mut flushed_bytes = 0u64;
+        for (bucket, key) in dirty_keys {
+            let cache_path = self.object_path(&bucket, &key);
+            let data_path = super::blob::object_path_in(&self.data_buckets_dir, &bucket, &key);
+            if !fs::try_exists(&cache_path).await.unwrap_or(false) {
+                self.dirty
+                    .lock()
+                    .await
+                    .remove(&(bucket.clone(), key.clone()));
+                continue;
+            }
+            let size = fs::metadata(&cache_path)
                 .await
                 .map_err(StorageError::Io)?
                 .len();
-            if data_size == size {
-                self.writeback_halted.store(false, Ordering::Relaxed);
-                *self.flush_skip.lock().await = None;
-                self.mark_clean(&bucket, &key, size).await;
-                return Ok(true);
+            if fs::try_exists(&data_path).await.unwrap_or(false) {
+                let data_size = fs::metadata(&data_path)
+                    .await
+                    .map_err(StorageError::Io)?
+                    .len();
+                if data_size == size {
+                    self.mark_clean(&bucket, &key, size).await;
+                    continue;
+                }
+            }
+            if let Some(parent) = data_path.parent() {
+                if let Err(e) = fs::create_dir_all(parent).await {
+                    tracing::error!(
+                        bucket,
+                        key,
+                        error = %e,
+                        "writeback flush: failed to create data dir"
+                    );
+                    had_failure = true;
+                    continue;
+                }
+            }
+            match fs::copy(&cache_path, &data_path).await {
+                Ok(_) => {
+                    flushed_bytes += size;
+                    self.mark_clean(&bucket, &key, size).await;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        bucket,
+                        key,
+                        error = %e,
+                        "writeback flush: failed to copy object to data dir"
+                    );
+                    had_failure = true;
+                }
             }
         }
 
-        match copy_on_flush_thread(cache_path.clone(), data_path.clone()).await {
-            Ok(_) => {
-                self.writeback_halted.store(false, Ordering::Relaxed);
-                *self.flush_skip.lock().await = None;
-                self.mark_clean(&bucket, &key, size).await;
-                if let Some(m) = &self.metrics {
-                    m.record_cache_flush(true, size, start.elapsed());
-                }
-                Ok(true)
+        let elapsed = start.elapsed();
+        if had_failure {
+            self.writeback_halted.store(true, Ordering::Relaxed);
+            if let Some(m) = &self.metrics {
+                m.record_cache_flush(false, flushed_bytes, elapsed);
             }
-            Err(e) => {
-                tracing::error!(
-                    bucket,
-                    key,
-                    cache = %cache_path.display(),
-                    data = %data_path.display(),
-                    error = %e,
-                    "writeback flush: failed to copy object to data dir"
-                );
-                self.writeback_halted.store(true, Ordering::Relaxed);
-                *self.flush_skip.lock().await = Some((bucket, key));
-                if let Some(m) = &self.metrics {
-                    m.record_cache_flush(false, 0, start.elapsed());
-                }
-                self.sync_gauges().await;
-                Err(StorageError::Io(e))
-            }
+            self.sync_gauges().await;
+            return Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "writeback flush failed",
+            )));
         }
-    }
 
-    pub async fn flush_dirty(&self) -> Result<(), StorageError> {
-        while self.flush_one_dirty().await? {}
+        self.writeback_halted.store(false, Ordering::Relaxed);
+        if let Some(m) = &self.metrics {
+            m.record_cache_flush(true, flushed_bytes, elapsed);
+        }
+        self.sync_gauges().await;
         Ok(())
     }
 
@@ -390,56 +369,17 @@ impl CacheLayer {
         if !self.writeback {
             return;
         }
-        let idle_interval = self.flush_interval;
+        let interval = self.flush_interval;
         tokio::spawn(async move {
-            let mut idle_ticker = tokio::time::interval(idle_interval);
-            idle_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                match self.flush_one_dirty().await {
-                    Ok(true) => {
-                        // Yield between objects so request-path array I/O is not starved.
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                    Ok(false) => {
-                        idle_ticker.tick().await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("cache writeback flush: {}", e);
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
+                ticker.tick().await;
+                if let Err(e) = self.flush_dirty().await {
+                    tracing::warn!("cache writeback flush: {}", e);
                 }
             }
         });
-    }
-}
-
-async fn copy_on_flush_thread(
-    cache_path: PathBuf,
-    data_path: PathBuf,
-) -> Result<u64, std::io::Error> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        let result = (|| {
-            if let Some(parent) = data_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(&cache_path, &data_path)
-        })();
-        let _ = tx.send(result);
-    });
-    match tokio::time::timeout(FLUSH_COPY_TIMEOUT, rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "flush copy thread dropped",
-        )),
-        Err(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            format!(
-                "flush copy timed out after {}s",
-                FLUSH_COPY_TIMEOUT.as_secs()
-            ),
-        )),
     }
 }
 
@@ -487,44 +427,5 @@ mod tests {
 
         let data = tokio::fs::read(&data_path).await.unwrap();
         assert_eq!(data, b"cached payload");
-    }
-
-    #[tokio::test]
-    async fn flush_skips_copy_when_data_already_matches() {
-        let cache_root = TempDir::new().unwrap();
-        let data_root = TempDir::new().unwrap();
-        let data_buckets = data_root.path().join("buckets");
-        let data_path = data_buckets.join("bucket-a").join("obj.txt");
-        let cache_path = cache_root
-            .path()
-            .join("buckets")
-            .join("bucket-a")
-            .join("obj.txt");
-        tokio::fs::create_dir_all(cache_path.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::create_dir_all(data_path.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::write(&cache_path, b"same bytes").await.unwrap();
-        tokio::fs::write(&data_path, b"same bytes").await.unwrap();
-
-        let layer = CacheLayer::new(
-            cache_root.path().to_str().unwrap(),
-            data_buckets,
-            1024 * 1024,
-            true,
-            Duration::from_secs(30),
-        )
-        .await
-        .unwrap();
-        layer.mark_dirty("bucket-a", "obj.txt", 10).await;
-
-        layer.flush_one_dirty().await.unwrap();
-
-        assert!(
-            !layer.is_dirty("bucket-a", "obj.txt").await,
-            "matching data file should clear dirty without copying"
-        );
     }
 }
