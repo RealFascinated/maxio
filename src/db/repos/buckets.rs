@@ -165,7 +165,14 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
         .map_err(db_err)?;
     let mut policies: HashMap<Uuid, String> = policy_rows.into_iter().collect();
 
-    type BucketAclRow = (Uuid, String, Option<String>, Option<String>, Option<String>, String);
+    type BucketAclRow = (
+        Uuid,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    );
     let raw_acl_rows: Vec<BucketAclRow> = bucket_acl_grants::table
         .filter(bucket_acl_grants::bucket_id.eq_any(&ids))
         .select((
@@ -211,7 +218,6 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
     }
     Ok(result)
 }
-
 
 pub async fn put_bucket_policy(
     ctx: &DbContext,
@@ -479,7 +485,6 @@ fn cors_rows_into_rules(rows: Vec<CorsRuleRow>) -> Vec<CorsRule> {
         })
         .collect()
 }
-
 
 async fn replace_cors_rules(
     conn: &mut diesel_async::AsyncPgConnection,
