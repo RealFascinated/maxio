@@ -2692,7 +2692,7 @@
                       "name": "${datasource}"
                     },
                     "spec": {
-                      "expr": "rate(process_cpu_seconds_total{job=~\"$job\"}[$__rate_interval])",
+                      "expr": "maxio_process_cpu_usage_ratio{job=~\"$job\"}",
                       "legendFormat": "cpu",
                       "range": true,
                       "instant": false

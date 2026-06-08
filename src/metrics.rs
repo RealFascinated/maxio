@@ -90,6 +90,7 @@ pub struct MetricsRegistry {
     cache_writeback_halted: prometheus::Gauge,
     cache_enabled: prometheus::Gauge,
     uptime: prometheus::Gauge,
+    process_cpu_usage: prometheus::Gauge,
     start_time: Instant,
     last_process_cpu: Mutex<Option<(f64, Instant)>>,
 }
@@ -142,6 +143,12 @@ impl MetricsRegistry {
 
         let uptime = prometheus::Gauge::new("maxio_uptime_seconds", "Server uptime in seconds")?;
         registry.register(Box::new(uptime.clone()))?;
+
+        let process_cpu_usage = prometheus::Gauge::new(
+            "maxio_process_cpu_usage_ratio",
+            "Process CPU usage as a fraction of total machine capacity (0-1)",
+        )?;
+        registry.register(Box::new(process_cpu_usage.clone()))?;
 
         let cache_hits =
             prometheus::Counter::new("maxio_cache_hits_total", "Object read cache hits")?;
@@ -244,6 +251,7 @@ impl MetricsRegistry {
             cache_writeback_halted,
             cache_enabled,
             uptime,
+            process_cpu_usage,
             start_time: Instant::now(),
             last_process_cpu: Mutex::new(None),
         })
@@ -326,6 +334,11 @@ impl MetricsRegistry {
 
     pub fn update_uptime(&self) {
         self.uptime.set(self.start_time.elapsed().as_secs_f64());
+        if let Some(raw) = read_raw_process_metrics() {
+            let ratio =
+                self.compute_process_cpu_usage_ratio(raw.cpu_seconds_total, self.uptime.get());
+            self.process_cpu_usage.set(ratio);
+        }
     }
 
     pub fn snapshot(&self) -> MetricsSnapshot {
@@ -373,11 +386,11 @@ impl MetricsRegistry {
         };
 
         let uptime_seconds = self.uptime.get();
+        let cpu_usage_percent = self.process_cpu_usage.get() * 100.0;
         let process = read_raw_process_metrics().map(|raw| ProcessSnapshot {
             resident_memory_bytes: raw.resident_memory_bytes,
             virtual_memory_bytes: raw.virtual_memory_bytes,
-            cpu_usage_percent: self
-                .process_cpu_usage_percent(raw.cpu_seconds_total, uptime_seconds),
+            cpu_usage_percent,
             open_fds: raw.open_fds,
             max_fds: raw.max_fds,
         });
@@ -391,33 +404,34 @@ impl MetricsRegistry {
         }
     }
 
-    fn process_cpu_usage_percent(&self, cpu_seconds_total: f64, uptime_seconds: f64) -> f64 {
+    fn compute_process_cpu_usage_ratio(&self, cpu_seconds_total: f64, uptime_seconds: f64) -> f64 {
         let now = Instant::now();
         let mut last = self.last_process_cpu.lock().unwrap();
 
-        let percent = match *last {
+        let raw_ratio = match *last {
             Some((prev_cpu, prev_at)) => {
                 let elapsed = prev_at.elapsed().as_secs_f64();
                 if elapsed > 0.0 {
-                    ((cpu_seconds_total - prev_cpu) / elapsed) * 100.0
+                    (cpu_seconds_total - prev_cpu) / elapsed
                 } else if uptime_seconds > 0.0 {
-                    (cpu_seconds_total / uptime_seconds) * 100.0
+                    cpu_seconds_total / uptime_seconds
                 } else {
                     0.0
                 }
             }
-            None if uptime_seconds > 0.0 => (cpu_seconds_total / uptime_seconds) * 100.0,
+            None if uptime_seconds > 0.0 => cpu_seconds_total / uptime_seconds,
             None => 0.0,
         };
 
         *last = Some((cpu_seconds_total, now));
-        percent.max(0.0)
+        (raw_ratio / cpu_cores()).max(0.0)
     }
 
     /// Encode all metrics to Prometheus text format. Bucket stats are read
     /// from the cache and written as transient gauges at scrape time so that
     /// deleted buckets never leave stale label sets in the output.
     pub fn gather_text(&self, stats: &BucketStatsCache) -> String {
+        self.update_uptime();
         let encoder = TextEncoder::new();
         let mut all_families = self.registry.gather();
 
@@ -452,6 +466,12 @@ impl MetricsRegistry {
         let _ = encoder.encode(&all_families, &mut buf);
         String::from_utf8(buf).unwrap_or_default()
     }
+}
+
+fn cpu_cores() -> f64 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as f64)
+        .unwrap_or(1.0)
 }
 
 fn read_raw_process_metrics() -> Option<RawProcessMetrics> {
