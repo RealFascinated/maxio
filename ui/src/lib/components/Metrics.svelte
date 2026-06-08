@@ -17,7 +17,7 @@
   import { fetchMetrics, type CacheSnapshot } from '$lib/api/metrics'
   import { formatBytes, formatThroughput } from '$lib/format-bytes'
   import { cn } from '$lib/utils.js'
-  import { formatDuration, formatIops, formatMetricName, formatUptime, hitRate } from '$lib/format'
+  import { formatDuration, formatIops, formatLatency, formatMetricName, formatUptime, hitRate } from '$lib/format'
 
   const metricsQuery = createQuery(() => ({
     queryKey: metricsKeys.snapshot(),
@@ -28,13 +28,6 @@
   let peakThroughput = $state(0)
   let peakIops = $state(0)
   let showCaches = $state(false)
-
-  function formatLatencyMicros(seconds: number | null | undefined): string {
-    if (seconds == null) return '0'
-    const micros = seconds * 1_000_000
-    if (micros < 1) return '<1'
-    return Math.round(micros).toLocaleString()
-  }
 
   function isObjectDiskCache(cache: CacheSnapshot): boolean {
     return cache.id === 'object_disk'
@@ -85,6 +78,8 @@
     {@const totalThroughput = formatThroughput(totalThroughputBps)}
     {@const opsTotal =
       data.opsTotals.readIops + data.opsTotals.writeIops + data.opsTotals.metaIops}
+    {@const readLatency = formatLatency(data.latency.readSeconds)}
+    {@const writeLatency = formatLatency(data.latency.writeSeconds)}
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
       <div class="mb-3 flex items-center gap-2">
@@ -174,9 +169,11 @@
                   <span class="text-sm font-medium text-neutral-500">Read</span>
                 </div>
                 <p class="text-3xl font-bold tabular-nums dark:text-white">
-                  {formatLatencyMicros(data.latency.readSeconds)}
+                  {readLatency.value}
                 </p>
-                <p class="text-sm text-neutral-500">μs</p>
+                {#if readLatency.unit}
+                  <p class="text-sm text-neutral-500">{readLatency.unit}</p>
+                {/if}
               </div>
               <div class="text-center">
                 <div class="mb-1 flex items-center justify-center gap-2">
@@ -184,9 +181,11 @@
                   <span class="text-sm font-medium text-neutral-500">Write</span>
                 </div>
                 <p class="text-3xl font-bold tabular-nums dark:text-white">
-                  {formatLatencyMicros(data.latency.writeSeconds)}
+                  {writeLatency.value}
                 </p>
-                <p class="text-sm text-neutral-500">μs</p>
+                {#if writeLatency.unit}
+                  <p class="text-sm text-neutral-500">{writeLatency.unit}</p>
+                {/if}
               </div>
             </div>
             <p class="mt-auto pt-4 text-center text-xs text-neutral-500">

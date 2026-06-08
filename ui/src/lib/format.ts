@@ -27,6 +27,23 @@ export function formatDuration(seconds: number): string {
   return `${mins}m ${secs.toFixed(0)}s`
 }
 
+export function formatLatency(seconds: number | null | undefined): { value: string; unit: string } {
+  if (seconds == null || seconds <= 0) return { value: '0', unit: 'μs' }
+  if (seconds < 0.001) {
+    const micros = seconds * 1_000_000
+    if (micros < 1) return { value: '<1', unit: 'μs' }
+    return { value: Math.round(micros).toLocaleString(), unit: 'μs' }
+  }
+  if (seconds < 1) {
+    const ms = seconds * 1_000
+    return { value: parseFloat(ms.toFixed(1)).toLocaleString(), unit: 'ms' }
+  }
+  if (seconds < 60) {
+    return { value: parseFloat(seconds.toFixed(2)).toLocaleString(), unit: 's' }
+  }
+  return { value: formatDuration(seconds), unit: '' }
+}
+
 export function formatIops(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString()
 }
