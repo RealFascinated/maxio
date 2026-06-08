@@ -346,8 +346,8 @@
             <Table.Cell class="truncate text-muted-foreground">{file.contentType || '—'}</Table.Cell>
             <Table.Cell class="text-right text-muted-foreground">{formatSize(file.size)}</Table.Cell>
             <Table.Cell class="text-muted-foreground">{formatDate(file.lastModified)}</Table.Cell>
-            <Table.Cell class="w-24">
-              <span class="flex items-center gap-4">
+            <Table.Cell class="w-24 text-right">
+              <span class="flex items-center justify-end gap-4">
                 {#if isPreviewable(file.contentType)}
                   <button
                     class="text-muted-foreground hover:text-foreground transition-colors"
