@@ -24,7 +24,7 @@
       "kind": "Panel",
       "spec": {
         "id": 1,
-        "title": "Uptime",
+        "title": "\u23f1\ufe0f Uptime",
         "description": "",
         "links": [],
         "data": {
@@ -103,7 +103,7 @@
       "kind": "Panel",
       "spec": {
         "id": 2,
-        "title": "HTTP Throughput",
+        "title": "\ud83c\udf10 HTTP Throughput",
         "description": "",
         "links": [],
         "data": {
@@ -182,7 +182,7 @@
       "kind": "Panel",
       "spec": {
         "id": 3,
-        "title": "Cache Hit Rate",
+        "title": "\ud83c\udfaf Cache Hit Rate",
         "description": "",
         "links": [],
         "data": {
@@ -250,7 +250,7 @@
               "overrides": []
             },
             "options": {
-              "colorMode": "value",
+              "colorMode": "background",
               "graphMode": "area",
               "justifyMode": "auto",
               "orientation": "auto",
@@ -271,7 +271,7 @@
       "kind": "Panel",
       "spec": {
         "id": 4,
-        "title": "Writeback Status",
+        "title": "\ud83d\udcbe Writeback Status",
         "description": "",
         "links": [],
         "data": {
@@ -375,7 +375,7 @@
       "kind": "Panel",
       "spec": {
         "id": 5,
-        "title": "Total Objects",
+        "title": "\ud83d\udce6 Total Objects",
         "description": "",
         "links": [],
         "data": {
@@ -454,7 +454,7 @@
       "kind": "Panel",
       "spec": {
         "id": 6,
-        "title": "Total Stored",
+        "title": "\ud83d\uddc4\ufe0f Total Stored",
         "description": "",
         "links": [],
         "data": {
@@ -533,7 +533,7 @@
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "HTTP Request Rate by Status",
+        "title": "\ud83d\udcca Request Rate by Status",
         "description": "",
         "links": [],
         "data": {
@@ -645,7 +645,7 @@
       "kind": "Panel",
       "spec": {
         "id": 11,
-        "title": "HTTP Latency",
+        "title": "\u23f3 HTTP Latency (p50/p95/p99)",
         "description": "",
         "links": [],
         "data": {
@@ -799,7 +799,7 @@
       "kind": "Panel",
       "spec": {
         "id": 12,
-        "title": "Top Routes by Request Rate",
+        "title": "\ud83d\udd25 Top Routes",
         "description": "",
         "links": [],
         "data": {
@@ -911,7 +911,7 @@
       "kind": "Panel",
       "spec": {
         "id": 20,
-        "title": "Storage Operation Rate",
+        "title": "\ud83d\udcbf Storage Op Rate",
         "description": "",
         "links": [],
         "data": {
@@ -1023,7 +1023,7 @@
       "kind": "Panel",
       "spec": {
         "id": 21,
-        "title": "Storage Operation Latency",
+        "title": "\ud83d\udc22 Storage Op Latency",
         "description": "",
         "links": [],
         "data": {
@@ -1177,7 +1177,7 @@
       "kind": "Panel",
       "spec": {
         "id": 30,
-        "title": "Cache Utilization",
+        "title": "\ud83d\udcc8 Cache Utilization",
         "description": "",
         "links": [],
         "data": {
@@ -1267,7 +1267,7 @@
       "kind": "Panel",
       "spec": {
         "id": 31,
-        "title": "Cache Size",
+        "title": "\ud83e\uddf1 Cache Size",
         "description": "",
         "links": [],
         "data": {
@@ -1367,7 +1367,7 @@
       "kind": "Panel",
       "spec": {
         "id": 32,
-        "title": "Cache Entries",
+        "title": "\ud83d\udd22 Cache Entries",
         "description": "",
         "links": [],
         "data": {
@@ -1446,7 +1446,7 @@
       "kind": "Panel",
       "spec": {
         "id": 33,
-        "title": "Dirty Objects",
+        "title": "\ud83d\udfe0 Dirty Objects",
         "description": "",
         "links": [],
         "data": {
@@ -1533,7 +1533,7 @@
       "kind": "Panel",
       "spec": {
         "id": 34,
-        "title": "Cache",
+        "title": "\u2705 Cache Status",
         "description": "",
         "links": [],
         "data": {
@@ -1637,7 +1637,7 @@
       "kind": "Panel",
       "spec": {
         "id": 35,
-        "title": "Cache Hits / Misses",
+        "title": "\u2705 Hits vs \u274c Misses",
         "description": "",
         "links": [],
         "data": {
@@ -1801,7 +1801,7 @@
       "kind": "Panel",
       "spec": {
         "id": 36,
-        "title": "Cache I/O Throughput",
+        "title": "\ud83d\udd04 Cache I/O Throughput",
         "description": "",
         "links": [],
         "data": {
@@ -1947,7 +1947,7 @@
       "kind": "Panel",
       "spec": {
         "id": 37,
-        "title": "Cache Evictions",
+        "title": "\ud83d\uddd1\ufe0f Evictions",
         "description": "",
         "links": [],
         "data": {
@@ -2056,7 +2056,7 @@
       "kind": "Panel",
       "spec": {
         "id": 38,
-        "title": "Writeback Flush Rate",
+        "title": "\ud83d\udebf Flush Rate",
         "description": "",
         "links": [],
         "data": {
@@ -2198,7 +2198,7 @@
       "kind": "Panel",
       "spec": {
         "id": 39,
-        "title": "Writeback Flush Duration",
+        "title": "\u23f1\ufe0f Flush Duration",
         "description": "",
         "links": [],
         "data": {
@@ -2331,7 +2331,7 @@
       "kind": "Panel",
       "spec": {
         "id": 40,
-        "title": "Objects per Bucket",
+        "title": "\ud83d\udce6 Objects per Bucket",
         "description": "",
         "links": [],
         "data": {
@@ -2414,7 +2414,7 @@
       "kind": "Panel",
       "spec": {
         "id": 41,
-        "title": "Size per Bucket",
+        "title": "\ud83d\udcd0 Size per Bucket",
         "description": "",
         "links": [],
         "data": {
@@ -2497,7 +2497,7 @@
       "kind": "Panel",
       "spec": {
         "id": 42,
-        "title": "Bucket Inventory",
+        "title": "\ud83d\uddc2\ufe0f Bucket Inventory",
         "description": "",
         "links": [],
         "data": {
@@ -2654,7 +2654,7 @@
                 "reducer": [
                   "sum"
                 ],
-                "show": false
+                "show": true
               },
               "showHeader": true,
               "sortBy": [
@@ -2672,7 +2672,7 @@
       "kind": "Panel",
       "spec": {
         "id": 50,
-        "title": "CPU Usage",
+        "title": "\ud83d\udda5\ufe0f CPU Usage",
         "description": "",
         "links": [],
         "data": {
@@ -2784,7 +2784,7 @@
       "kind": "Panel",
       "spec": {
         "id": 51,
-        "title": "Memory",
+        "title": "\ud83e\udde0 Memory (RSS / Virtual)",
         "description": "",
         "links": [],
         "data": {
@@ -2917,7 +2917,7 @@
       "kind": "Panel",
       "spec": {
         "id": 52,
-        "title": "Metadata Operation Rate",
+        "title": "\ud83d\uddc3\ufe0f Metadata Op Rate",
         "description": "",
         "links": [],
         "data": {
@@ -3029,7 +3029,7 @@
       "kind": "Panel",
       "spec": {
         "id": 53,
-        "title": "Metadata Operation Latency",
+        "title": "\ud83d\udc0c Metadata Op Latency",
         "description": "",
         "links": [],
         "data": {
@@ -3178,6 +3178,110 @@
           }
         }
       }
+    },
+    "panel-29": {
+      "kind": "Panel",
+      "spec": {
+        "id": 29,
+        "title": "\u2705 Cache Status",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "refId": "A",
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "victoriametrics-metrics-datasource",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "expr": "maxio_cache_enabled{job=~\"$job\"}",
+                      "legendFormat": "enabled",
+                      "range": false,
+                      "instant": true
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "13.0.2",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "mappings": [
+                  {
+                    "options": {
+                      "0": {
+                        "color": "text",
+                        "index": 0,
+                        "text": "Disabled"
+                      }
+                    },
+                    "type": "value"
+                  },
+                  {
+                    "options": {
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "Enabled"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                },
+                "unit": "none"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto"
+            }
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -3187,7 +3291,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Overview",
+            "title": "\ud83d\udd2d Overview",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3237,20 +3341,7 @@
                     "spec": {
                       "x": 12,
                       "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-4"
-                      }
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 16,
-                      "y": 0,
-                      "width": 4,
+                      "width": 3,
                       "height": 4,
                       "element": {
                         "kind": "ElementReference",
@@ -3261,13 +3352,39 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 20,
+                      "x": 15,
                       "y": 0,
-                      "width": 4,
+                      "width": 3,
                       "height": 4,
                       "element": {
                         "kind": "ElementReference",
                         "name": "panel-6"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 3,
+                      "height": 4,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-4"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 21,
+                      "y": 0,
+                      "width": 3,
+                      "height": 4,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-29"
                       }
                     }
                   }
@@ -3279,7 +3396,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "HTTP",
+            "title": "\ud83c\udf10 HTTP",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3332,7 +3449,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Storage Operations",
+            "title": "\ud83d\udcbf Storage Operations",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3372,7 +3489,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Metadata Operations",
+            "title": "\ud83d\uddc3\ufe0f Metadata Operations",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3412,7 +3529,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Object Cache",
+            "title": "\u26a1 Object Cache",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3423,7 +3540,20 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 6,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-16"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 4,
+                      "y": 0,
+                      "width": 5,
                       "height": 6,
                       "element": {
                         "kind": "ElementReference",
@@ -3434,9 +3564,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 6,
+                      "x": 9,
                       "y": 0,
-                      "width": 6,
+                      "width": 5,
                       "height": 6,
                       "element": {
                         "kind": "ElementReference",
@@ -3447,9 +3577,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 12,
+                      "x": 14,
                       "y": 0,
-                      "width": 4,
+                      "width": 5,
                       "height": 6,
                       "element": {
                         "kind": "ElementReference",
@@ -3460,26 +3590,13 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 16,
+                      "x": 19,
                       "y": 0,
-                      "width": 4,
+                      "width": 5,
                       "height": 6,
                       "element": {
                         "kind": "ElementReference",
                         "name": "panel-15"
-                      }
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 20,
-                      "y": 0,
-                      "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-16"
                       }
                     }
                   },
@@ -3556,8 +3673,8 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Buckets",
-            "collapse": false,
+            "title": "\ud83e\udea3 Buckets",
+            "collapse": true,
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -3609,8 +3726,8 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Process",
-            "collapse": false,
+            "title": "\ud83d\udda5\ufe0f Process",
+            "collapse": true,
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -3666,7 +3783,7 @@
     "object-storage"
   ],
   "timeSettings": {
-    "autoRefresh": "30s",
+    "autoRefresh": "1m",
     "autoRefreshIntervals": [
       "5s",
       "10s",
@@ -3685,7 +3802,7 @@
     "timezone": "browser",
     "to": "now"
   },
-  "title": "MaxIO",
+  "title": "\ud83d\uddc4\ufe0f MaxIO \u2014 Object Storage",
   "variables": [
     {
       "kind": "DatasourceVariable",
@@ -3740,5 +3857,6 @@
         "sort": "alphabeticalAsc"
       }
     }
-  ]
+  ],
+  "description": "MaxIO object storage gateway \u2014 HTTP, cache, storage ops, and bucket metrics."
 }
