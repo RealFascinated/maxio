@@ -20,7 +20,7 @@ fn report_progress(label: &str, done: usize, total: usize, final_line: bool) {
 }
 
 fn should_report_progress(done: usize, total: usize) -> bool {
-    done == 1 || done == total || done % 1000 == 0
+    done == 1 || done == total || done.is_multiple_of(1000)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
