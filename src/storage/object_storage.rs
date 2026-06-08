@@ -19,6 +19,7 @@ pub struct ObjectStorage {
     blobs: BlobStorage,
     meta: Arc<dyn MetadataStore>,
     metrics: Option<Arc<MetricsRegistry>>,
+    async_meta_write: bool,
 }
 
 impl ObjectStorage {
@@ -27,11 +28,17 @@ impl ObjectStorage {
             blobs,
             meta,
             metrics: None,
+            async_meta_write: false,
         }
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    pub fn with_async_meta_write(mut self) -> Self {
+        self.async_meta_write = true;
         self
     }
 
@@ -62,21 +69,53 @@ impl ObjectStorage {
         versioned: bool,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
-        if written.published {
-            if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {
-                let _ = BlobStorage::discard_payload(&written.final_path).await;
-                return Err(e);
-            }
-        } else {
-            self.meta
-                .upsert_object(bucket, &object_meta, put_ctx)
+        // Fast path: rename bytes into place first, then commit metadata asynchronously.
+        // Only safe when versioning is off — versioned puts need the DB write to be
+        // synchronous so that insert_version + archive_version are ordered correctly.
+        if self.async_meta_write && !versioned {
+            BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await?;
+
+            let result = PutResult {
+                size: written.size,
+                etag: object_meta.etag.clone(),
+                last_modified: object_meta.last_modified.clone(),
+                version_id: object_meta.version_id.take(),
+                checksum_algorithm: written.checksum_algorithm,
+                checksum_value: written.checksum_value,
+            };
+
+            let meta = Arc::clone(&self.meta);
+            let bucket_owned = bucket.to_string();
+            let put_ctx = put_ctx.cloned();
+            tokio::spawn(async move {
+                if let Err(e) = meta
+                    .upsert_object(&bucket_owned, &object_meta, put_ctx.as_ref())
+                    .await
+                {
+                    tracing::warn!(
+                        bucket = %bucket_owned,
+                        key = %object_meta.key,
+                        error = %e,
+                        "async metadata write failed"
+                    );
+                }
+            });
+
+            self.blobs
+                .complete_object_write(bucket, key, &written.final_path, written.size)
                 .await?;
-            if let Err(e) =
-                BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await
-            {
-                let _ = self.meta.delete_object_meta(bucket, key).await;
-                return Err(e);
-            }
+            return Ok(result);
+        }
+
+        // Sync path: commit metadata first, then rename bytes into place.
+        self.meta
+            .upsert_object(bucket, &object_meta, put_ctx)
+            .await?;
+        if let Err(e) =
+            BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await
+        {
+            let _ = self.meta.delete_object_meta(bucket, key).await;
+            return Err(e);
         }
 
         if versioned {

@@ -3,8 +3,9 @@ use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
 use base64::Engine;
 use md5::{Digest, Md5};
 use rand::RngExt;
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 
@@ -14,6 +15,8 @@ pub(crate) const SMALL_OBJECT_THRESHOLD: u64 = 256 * 1024;
 pub struct BlobStorage {
     pub(crate) buckets_dir: PathBuf,
     cache: Option<Arc<CacheLayer>>,
+    /// Directories known to already exist — avoids a `create_dir_all` syscall on repeat paths.
+    known_dirs: Mutex<HashSet<PathBuf>>,
 }
 
 pub struct WrittenPayload {
@@ -23,8 +26,6 @@ pub struct WrittenPayload {
     pub checksum_value: Option<String>,
     pub tmp_path: PathBuf,
     pub final_path: PathBuf,
-    /// Object bytes are already at `final_path` (no rename needed).
-    pub published: bool,
 }
 
 enum ChecksumHasher {
@@ -136,6 +137,7 @@ impl BlobStorage {
         Ok(Self {
             buckets_dir,
             cache: None,
+            known_dirs: Mutex::new(HashSet::new()),
         })
     }
 
@@ -285,21 +287,20 @@ impl BlobStorage {
     ) -> Result<WrittenPayload, StorageError> {
         let write_base = self.write_buckets_dir()?;
         let obj_path = object_path_in(write_base, bucket, key);
-        if let Some(parent) = obj_path.parent() {
-            fs::create_dir_all(parent).await?;
+
+        // Ensure parent directory exists. The `known_dirs` cache avoids the syscall on
+        // repeat writes to the same directory (common for flat keys and same-prefix keys).
+        let parent = obj_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        if !self.known_dirs.lock().unwrap().contains(&parent) {
+            fs::create_dir_all(&parent).await?;
+            self.known_dirs.lock().unwrap().insert(parent);
         }
 
-        let direct_write = !fs::try_exists(&obj_path).await?;
-        let write_path = if direct_write {
-            obj_path.clone()
-        } else {
-            temp_sibling_path(&obj_path)
-        };
-        let tmp_obj_guard = if direct_write {
-            None
-        } else {
-            Some(TempPathGuard::new(write_path.clone()))
-        };
+        let write_path = temp_sibling_path(&obj_path);
+        let mut tmp_guard = TempPathGuard::new(write_path.clone());
 
         let file = fs::File::create(&write_path).await?;
         let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
@@ -330,7 +331,6 @@ impl BlobStorage {
             let computed = checksum_hasher.unwrap().finalize_base64();
             if let Some(expected_val) = expected {
                 if computed != expected_val {
-                    let _ = fs::remove_file(&write_path).await;
                     return Err(StorageError::ChecksumMismatch(format!(
                         "expected {}, got {}",
                         expected_val, computed
@@ -342,9 +342,7 @@ impl BlobStorage {
             (None, None)
         };
 
-        if let Some(mut guard) = tmp_obj_guard {
-            guard.disarm();
-        }
+        tmp_guard.disarm();
 
         Ok(WrittenPayload {
             size,
@@ -353,32 +351,17 @@ impl BlobStorage {
             checksum_value,
             tmp_path: write_path,
             final_path: obj_path,
-            published: direct_write,
         })
-    }
-
-    pub async fn discard_payload(path: &Path) -> Result<(), StorageError> {
-        let _ = fs::remove_file(path).await;
-        Ok(())
     }
 
     pub async fn publish_temp_payload(
         tmp_payload: &Path,
         final_payload: &Path,
     ) -> Result<(), StorageError> {
-        if let Some(parent) = final_payload.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-
-        let payload_backup = backup_existing(final_payload).await?;
-
-        if let Err(e) = fs::rename(tmp_payload, final_payload).await {
-            restore_backup(final_payload, &payload_backup).await;
-            return Err(StorageError::Io(e));
-        }
-
-        cleanup_backup(&payload_backup).await;
-        Ok(())
+        // POSIX rename is atomic: atomically replaces any existing file at final_payload.
+        fs::rename(tmp_payload, final_payload)
+            .await
+            .map_err(StorageError::Io)
     }
 
     pub async fn open_object(
@@ -693,7 +676,6 @@ impl BlobStorage {
             checksum_value: None,
             tmp_path: tmp_obj_path,
             final_path: obj_path,
-            published: false,
         })
     }
 
@@ -906,31 +888,6 @@ impl Drop for TempPathGuard {
         if self.armed {
             let _ = std::fs::remove_file(&self.path);
         }
-    }
-}
-
-async fn backup_existing(path: &Path) -> Result<Option<PathBuf>, StorageError> {
-    if !fs::try_exists(path).await? {
-        return Ok(None);
-    }
-    if !fs::metadata(path).await?.is_file() {
-        return Ok(None);
-    }
-    let backup = temp_sibling_path(path);
-    fs::rename(path, &backup).await?;
-    Ok(Some(backup))
-}
-
-async fn restore_backup(final_path: &Path, backup: &Option<PathBuf>) {
-    if let Some(backup) = backup {
-        let _ = fs::remove_file(final_path).await;
-        let _ = fs::rename(backup, final_path).await;
-    }
-}
-
-async fn cleanup_backup(backup: &Option<PathBuf>) {
-    if let Some(backup) = backup {
-        let _ = fs::remove_file(backup).await;
     }
 }
 

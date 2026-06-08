@@ -86,6 +86,7 @@ fn test_config(data_dir: String, database_url: String, default_buckets: &str) ->
         cache_writeback: false,
         cache_flush_interval: 30,
         public_url: None,
+        async_meta_write: false,
     }
 }
 

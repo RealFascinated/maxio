@@ -87,6 +87,12 @@ pub struct Config {
     /// Public S3 base URL for presigned links (MAXIO_PUBLIC_URL), e.g. https://s3.example.com
     #[arg(long, env = "MAXIO_PUBLIC_URL")]
     pub public_url: Option<String>,
+
+    /// Return 200 after bytes are durable on disk, commit metadata to Postgres in the background.
+    /// Improves PUT throughput significantly at the cost of a narrow inconsistency window on crash.
+    /// Incompatible with bucket versioning (versioning takes the synchronous path regardless).
+    #[arg(long, env = "MAXIO_ASYNC_META_WRITE", default_value = "false")]
+    pub async_meta_write: bool,
 }
 
 #[cfg(test)]

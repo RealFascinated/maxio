@@ -46,8 +46,11 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     } else {
         blobs
     };
-    let storage: Arc<dyn Storage> =
-        Arc::new(ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics)));
+    let mut object_storage = ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics));
+    if config.async_meta_write {
+        object_storage = object_storage.with_async_meta_write();
+    }
+    let storage: Arc<dyn Storage> = Arc::new(object_storage);
 
     crate::storage::provision_default_buckets(storage.as_ref(), &config.default_buckets).await;
 

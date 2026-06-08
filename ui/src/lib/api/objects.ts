@@ -1,10 +1,12 @@
 import { apiFetch, encodeObjectKey } from './http'
+import { guessContentType } from '$lib/mime'
 
 export interface S3File {
   key: string
   size: number
   lastModified: string
   etag: string
+  contentType: string
 }
 
 export interface ObjectsResponse {
@@ -22,10 +24,12 @@ export async function listObjects(bucket: string, prefix: string, startAfter?: s
 }
 
 export async function uploadObject(bucket: string, key: string, file: File): Promise<{ ok: boolean }> {
+  const contentType = file.type || guessContentType(file.name)
   const res = await fetch(`/api/buckets/${encodeURIComponent(bucket)}/upload/${encodeObjectKey(key)}`, {
     method: 'PUT',
     body: file,
     credentials: 'same-origin',
+    headers: contentType ? { 'Content-Type': contentType } : undefined,
   })
   if (!res.ok) throw new Error(`Upload failed (${res.status})`)
   return { ok: true }
@@ -44,4 +48,8 @@ export async function createFolder(bucket: string, name: string): Promise<{ ok: 
 
 export async function presignObject(bucket: string, key: string, expires: number): Promise<{ url: string }> {
   return apiFetch<{ url: string }>(`/api/buckets/${encodeURIComponent(bucket)}/presign/${encodeObjectKey(key)}?expires=${expires}`)
+}
+
+export function downloadUrl(bucket: string, key: string): string {
+  return `/api/buckets/${encodeURIComponent(bucket)}/download/${encodeObjectKey(key)}`
 }

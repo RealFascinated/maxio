@@ -132,26 +132,32 @@ pub async fn put_object(
         }
     }
 
-    let (owner_id, owner_display_name) = if principal.is_root {
-        (
-            crate::iam::ROOT_CANONICAL_ID.to_string(),
-            crate::iam::ROOT_DISPLAY_NAME.to_string(),
+    let has_acl_header = headers.contains_key("x-amz-acl")
+        || headers
+            .keys()
+            .any(|k| k.as_str().starts_with("x-amz-grant-"));
+    if has_acl_header {
+        let (owner_id, owner_display_name) = if principal.is_root {
+            (
+                crate::iam::ROOT_CANONICAL_ID.to_string(),
+                crate::iam::ROOT_DISPLAY_NAME.to_string(),
+            )
+        } else {
+            (
+                principal.canonical_id.clone(),
+                principal.display_name.clone(),
+            )
+        };
+        super::acl::apply_put_object_acl(
+            &state,
+            &bucket,
+            &key,
+            &headers,
+            &owner_id,
+            &owner_display_name,
         )
-    } else {
-        (
-            principal.canonical_id.clone(),
-            principal.display_name.clone(),
-        )
-    };
-    super::acl::apply_put_object_acl(
-        &state,
-        &bucket,
-        &key,
-        &headers,
-        &owner_id,
-        &owner_display_name,
-    )
-    .await?;
+        .await?;
+    }
 
     let mut builder = Response::builder()
         .status(StatusCode::OK)
