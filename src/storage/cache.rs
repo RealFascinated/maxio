@@ -1,8 +1,8 @@
 use super::StorageError;
 use crate::metrics::MetricsRegistry;
 use futures::stream::{self, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,11 +12,8 @@ use tokio::sync::{Mutex, Notify};
 
 type ObjectKey = (String, String);
 
-#[derive(Serialize, Deserialize)]
-struct CacheIndex {
-    entries: Vec<(String, String, u64)>,
-    dirty: Vec<ObjectKey>,
-}
+const INDEX_MAGIC: &[u8; 4] = b"MXIO";
+const INDEX_VERSION: u8 = 1;
 
 pub struct CacheLayer {
     cache_dir: PathBuf,
@@ -31,6 +28,8 @@ pub struct CacheLayer {
     writeback_halted: AtomicBool,
     scan_complete: AtomicBool,
     scan_ready: Notify,
+    dirty_scan_complete: AtomicBool,
+    dirty_scan_ready: Notify,
     metrics: Option<Arc<MetricsRegistry>>,
 }
 
@@ -66,74 +65,72 @@ impl CacheLayer {
             writeback_halted: AtomicBool::new(false),
             scan_complete: AtomicBool::new(false),
             scan_ready: Notify::new(),
+            dirty_scan_complete: AtomicBool::new(false),
+            dirty_scan_ready: Notify::new(),
             metrics: None,
         };
-        if let Some(index) = layer.load_index().await? {
-            layer.apply_index(index).await;
+        if let Some((entries, dirty)) = layer.load_index().await? {
+            layer.apply_index(entries, dirty).await;
             layer.recalc_dirty_bytes().await;
             layer.scan_complete.store(true, Ordering::Release);
+            layer.dirty_scan_complete.store(true, Ordering::Release);
             tracing::info!(
                 entries = layer.lru.lock().await.entries.len(),
                 "cache: restored LRU index"
             );
         } else if cfg!(test) {
-            layer.scan_cache_dir().await?;
+            let found = layer.scan_lru_entries().await?;
+            layer.apply_lru_entries(found).await;
+            layer.scan_dirty_entries().await;
             layer.recalc_dirty_bytes().await;
             layer.scan_complete.store(true, Ordering::Release);
+            layer.dirty_scan_complete.store(true, Ordering::Release);
         }
         Ok(layer)
     }
 
     fn index_path(&self) -> PathBuf {
-        self.cache_dir.join(".lru-index.json")
+        self.cache_dir.join(".lru-index.bin")
     }
 
-    async fn load_index(&self) -> Result<Option<CacheIndex>, anyhow::Error> {
+    async fn load_index(
+        &self,
+    ) -> Result<Option<(Vec<(String, String, u64)>, HashSet<ObjectKey>)>, anyhow::Error> {
         let path = self.index_path();
         let data = match fs::read(&path).await {
             Ok(data) => data,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        Ok(Some(serde_json::from_slice(&data)?))
+        match decode_index(&data) {
+            Ok(index) => Ok(Some(index)),
+            Err(e) => {
+                tracing::warn!("cache: ignoring corrupt index at {}: {e}", path.display());
+                Ok(None)
+            }
+        }
     }
 
-    async fn apply_index(&self, index: CacheIndex) {
-        let now = Instant::now();
-        let total_size = index.entries.iter().map(|(_, _, size)| *size).sum();
-        let mut lru = self.lru.lock().await;
-        lru.entries = index
-            .entries
-            .into_iter()
-            .map(|(bucket, key, size)| ((bucket, key), (now, size)))
-            .collect();
-        lru.total_size = total_size;
-        drop(lru);
-        *self.dirty.lock().await = index.dirty.into_iter().collect();
+    async fn apply_index(&self, entries: Vec<(String, String, u64)>, dirty: HashSet<ObjectKey>) {
+        self.apply_lru_entries(entries).await;
+        *self.dirty.lock().await = dirty;
     }
 
     pub async fn save_index(&self) -> Result<(), anyhow::Error> {
         let lru = self.lru.lock().await;
         let dirty = self.dirty.lock().await;
-        let index = CacheIndex {
-            entries: lru
-                .entries
-                .iter()
-                .map(|((bucket, key), (_, size))| (bucket.clone(), key.clone(), *size))
-                .collect(),
-            dirty: dirty.iter().cloned().collect(),
-        };
+        let entries: Vec<(String, String, u64)> = lru
+            .entries
+            .iter()
+            .map(|((bucket, key), (_, size))| (bucket.clone(), key.clone(), *size))
+            .collect();
         drop(lru);
-        drop(dirty);
 
         let path = self.index_path();
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_vec(&index)?)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        fs::rename(&tmp, &path)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let tmp = path.with_extension("bin.tmp");
+        let data = encode_index(&entries, &dirty)?;
+        fs::write(&tmp, data).await?;
+        fs::rename(&tmp, &path).await?;
         Ok(())
     }
 
@@ -144,6 +141,13 @@ impl CacheLayer {
         self.scan_ready.notified().await;
     }
 
+    async fn wait_until_dirty_scan_complete(&self) {
+        if self.dirty_scan_complete.load(Ordering::Acquire) {
+            return;
+        }
+        self.dirty_scan_ready.notified().await;
+    }
+
     /// Walks the cache directory to rebuild LRU state. Runs in the background on startup
     /// unless a persisted index was loaded.
     pub fn spawn_scan_task(self: Arc<Self>) {
@@ -152,10 +156,12 @@ impl CacheLayer {
         }
         tokio::spawn(async move {
             let start = Instant::now();
-            match self.scan_cache_dir().await {
-                Ok(()) => {
-                    self.recalc_dirty_bytes().await;
+            match self.scan_lru_entries().await {
+                Ok(found) => {
+                    self.apply_lru_entries(found).await;
                     let entries = self.lru.lock().await.entries.len();
+                    self.scan_complete.store(true, Ordering::Release);
+                    self.scan_ready.notify_waiters();
                     tracing::info!(
                         entries,
                         elapsed_ms = start.elapsed().as_millis() as u64,
@@ -164,11 +170,35 @@ impl CacheLayer {
                     if let Err(e) = self.save_index().await {
                         tracing::warn!("cache index save after scan: {e}");
                     }
+
+                    if self.writeback {
+                        let dirty_start = Instant::now();
+                        self.scan_dirty_entries().await;
+                        self.recalc_dirty_bytes().await;
+                        let dirty_count = self.dirty.lock().await.len();
+                        self.dirty_scan_complete.store(true, Ordering::Release);
+                        self.dirty_scan_ready.notify_waiters();
+                        tracing::debug!(
+                            dirty = dirty_count,
+                            elapsed_ms = dirty_start.elapsed().as_millis() as u64,
+                            "cache: dirty scan complete"
+                        );
+                        if let Err(e) = self.save_index().await {
+                            tracing::warn!("cache index save after dirty scan: {e}");
+                        }
+                    } else {
+                        self.dirty_scan_complete.store(true, Ordering::Release);
+                        self.dirty_scan_ready.notify_waiters();
+                    }
                 }
-                Err(e) => tracing::error!("cache directory scan failed: {e}"),
+                Err(e) => {
+                    tracing::error!("cache directory scan failed: {e}");
+                    self.scan_complete.store(true, Ordering::Release);
+                    self.scan_ready.notify_waiters();
+                    self.dirty_scan_complete.store(true, Ordering::Release);
+                    self.dirty_scan_ready.notify_waiters();
+                }
             }
-            self.scan_complete.store(true, Ordering::Release);
-            self.scan_ready.notify_waiters();
         });
     }
 
@@ -203,66 +233,15 @@ impl CacheLayer {
         }
     }
 
-    async fn scan_cache_dir(&self) -> Result<(), anyhow::Error> {
-        let mut found: Vec<(String, String, u64)> = Vec::new();
-        let mut stack = vec![self.buckets_dir.clone()];
-        while let Some(dir) = stack.pop() {
-            let mut entries = match fs::read_dir(&dir).await {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                let ft = match entry.file_type().await {
-                    Ok(ft) => ft,
-                    Err(_) => continue,
-                };
-                if ft.is_dir() {
-                    if path
-                        .file_name()
-                        .is_some_and(|n| n == ".uploads" || n == ".versions")
-                    {
-                        continue;
-                    }
-                    stack.push(path);
-                    continue;
-                }
-                if !ft.is_file() {
-                    continue;
-                }
-                let size = fs::metadata(&path).await?.len();
-                if let Some((bucket, key)) = self.path_to_object_key(&path) {
-                    found.push((bucket, key, size));
-                }
-            }
-        }
+    async fn scan_lru_entries(&self) -> Result<Vec<(String, String, u64)>, anyhow::Error> {
+        let buckets_dir = self.buckets_dir.clone();
+        tokio::task::spawn_blocking(move || scan_buckets_sync(&buckets_dir))
+            .await
+            .map_err(|e| anyhow::anyhow!("cache scan task failed: {e}"))?
+            .map_err(|e| anyhow::anyhow!(e))
+    }
 
-        let dirty = if self.writeback {
-            let candidates: Vec<ObjectKey> = found
-                .iter()
-                .map(|(bucket, key, _)| (bucket.clone(), key.clone()))
-                .collect();
-            stream::iter(candidates)
-                .map(|(bucket, key)| {
-                    let data_buckets_dir = self.data_buckets_dir.clone();
-                    async move {
-                        let data_path =
-                            super::blob::object_path_in(&data_buckets_dir, &bucket, &key);
-                        if fs::try_exists(&data_path).await.unwrap_or(false) {
-                            None
-                        } else {
-                            Some((bucket, key))
-                        }
-                    }
-                })
-                .buffer_unordered(256)
-                .filter_map(|entry| async move { entry })
-                .collect()
-                .await
-        } else {
-            HashSet::new()
-        };
-
+    async fn apply_lru_entries(&self, found: Vec<(String, String, u64)>) {
         let now = Instant::now();
         let total_size: u64 = found.iter().map(|(_, _, size)| *size).sum();
         let mut lru = self.lru.lock().await;
@@ -271,29 +250,31 @@ impl CacheLayer {
             .map(|(bucket, key, size)| ((bucket, key), (now, size)))
             .collect();
         lru.total_size = total_size;
-        drop(lru);
-        *self.dirty.lock().await = dirty;
-        Ok(())
     }
 
-    fn path_to_object_key(&self, path: &Path) -> Option<(String, String)> {
-        let rel = path.strip_prefix(&self.buckets_dir).ok()?;
-        let mut components = rel.components();
-        let bucket = components
-            .next()?
-            .as_os_str()
-            .to_string_lossy()
-            .into_owned();
-        let rest: PathBuf = components.collect();
-        if rest.ends_with(".folder") {
-            let key = format!("{}/", rest.parent()?.display());
-            return Some((bucket, key));
-        }
-        let key = rest.to_string_lossy().into_owned();
-        if key.is_empty() {
-            return None;
-        }
-        Some((bucket, key))
+    async fn scan_dirty_entries(&self) {
+        let candidates: Vec<ObjectKey> = {
+            let lru = self.lru.lock().await;
+            lru.entries.keys().cloned().collect()
+        };
+        let data_buckets_dir = self.data_buckets_dir.clone();
+        let dirty: HashSet<ObjectKey> = stream::iter(candidates)
+            .map(|(bucket, key)| {
+                let data_buckets_dir = data_buckets_dir.clone();
+                async move {
+                    let data_path = super::blob::object_path_in(&data_buckets_dir, &bucket, &key);
+                    if fs::try_exists(&data_path).await.unwrap_or(false) {
+                        None
+                    } else {
+                        Some((bucket, key))
+                    }
+                }
+            })
+            .buffer_unordered(512)
+            .filter_map(|entry| async move { entry })
+            .collect()
+            .await;
+        *self.dirty.lock().await = dirty;
     }
 
     pub async fn record_read_hit(&self, bucket: &str, key: &str, size: u64) {
@@ -447,6 +428,7 @@ impl CacheLayer {
             return Ok(());
         }
         self.wait_until_scan_complete().await;
+        self.wait_until_dirty_scan_complete().await;
 
         let start = Instant::now();
         let dirty_keys: Vec<ObjectKey> = self.dirty.lock().await.iter().cloned().collect();
@@ -563,10 +545,241 @@ impl CacheLayer {
     }
 }
 
+fn path_to_object_key(buckets_dir: &Path, path: &Path) -> Option<(String, String)> {
+    let rel = path.strip_prefix(buckets_dir).ok()?;
+    let mut components = rel.components();
+    let bucket = components
+        .next()?
+        .as_os_str()
+        .to_string_lossy()
+        .into_owned();
+    let rest: PathBuf = components.collect();
+    if rest.ends_with(".folder") {
+        let key = format!("{}/", rest.parent()?.display());
+        return Some((bucket, key));
+    }
+    let key = rest.to_string_lossy().into_owned();
+    if key.is_empty() {
+        return None;
+    }
+    Some((bucket, key))
+}
+
+fn scan_buckets_sync(buckets_dir: &Path) -> io::Result<Vec<(String, String, u64)>> {
+    let bucket_dirs: Vec<PathBuf> = match std::fs::read_dir(buckets_dir) {
+        Ok(read_dir) => read_dir
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+            .map(|entry| entry.path())
+            .collect(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+
+    if bucket_dirs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        for bucket_dir in bucket_dirs {
+            let tx = tx.clone();
+            let buckets_dir = buckets_dir.to_path_buf();
+            scope.spawn(move || {
+                let mut found = Vec::new();
+                if walk_bucket_dir(&buckets_dir, &bucket_dir, &mut found).is_ok() {
+                    let _ = tx.send(found);
+                }
+            });
+        }
+        drop(tx);
+    });
+
+    let mut found = Vec::new();
+    for chunk in rx {
+        found.extend(chunk);
+    }
+    Ok(found)
+}
+
+fn walk_bucket_dir(
+    buckets_dir: &Path,
+    dir: &Path,
+    found: &mut Vec<(String, String, u64)>,
+) -> io::Result<()> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n == ".uploads" || n == ".versions")
+                {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            if !meta.is_file() {
+                continue;
+            }
+            if let Some((bucket, key)) = path_to_object_key(buckets_dir, &path) {
+                found.push((bucket, key, meta.len()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn encode_index(
+    entries: &[(String, String, u64)],
+    dirty: &HashSet<ObjectKey>,
+) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(entries.len() * 48 + dirty.len() * 32 + 32);
+    buf.extend_from_slice(INDEX_MAGIC);
+    buf.push(INDEX_VERSION);
+    buf.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+    for (bucket, key, size) in entries {
+        write_string(&mut buf, bucket.as_bytes(), u16::MAX as usize)?;
+        write_string(&mut buf, key.as_bytes(), u32::MAX as usize)?;
+        buf.extend_from_slice(&size.to_le_bytes());
+    }
+    buf.extend_from_slice(&(dirty.len() as u64).to_le_bytes());
+    for (bucket, key) in dirty {
+        write_string(&mut buf, bucket.as_bytes(), u16::MAX as usize)?;
+        write_string(&mut buf, key.as_bytes(), u32::MAX as usize)?;
+    }
+    Ok(buf)
+}
+
+fn write_string(buf: &mut Vec<u8>, value: &[u8], max_len: usize) -> io::Result<()> {
+    if value.len() > max_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index string too long",
+        ));
+    }
+    let len = value.len();
+    if max_len <= u16::MAX as usize {
+        buf.extend_from_slice(&(len as u16).to_le_bytes());
+    } else {
+        buf.extend_from_slice(&(len as u32).to_le_bytes());
+    }
+    buf.extend_from_slice(value);
+    Ok(())
+}
+
+fn decode_index(data: &[u8]) -> io::Result<(Vec<(String, String, u64)>, HashSet<ObjectKey>)> {
+    let mut offset = 0;
+    let magic = read_bytes(data, &mut offset, 4)?;
+    if magic != INDEX_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index has invalid magic",
+        ));
+    }
+    let version = read_u8(data, &mut offset)?;
+    if version != INDEX_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index has unsupported version",
+        ));
+    }
+
+    let entry_count = read_u64(data, &mut offset)? as usize;
+    let mut entries = Vec::with_capacity(entry_count);
+    for _ in 0..entry_count {
+        let bucket = read_string(data, &mut offset, u16::MAX as usize)?;
+        let key = read_string(data, &mut offset, u32::MAX as usize)?;
+        let size = read_u64(data, &mut offset)?;
+        entries.push((bucket, key, size));
+    }
+
+    let dirty_count = read_u64(data, &mut offset)? as usize;
+    let mut dirty = HashSet::with_capacity(dirty_count);
+    for _ in 0..dirty_count {
+        let bucket = read_string(data, &mut offset, u16::MAX as usize)?;
+        let key = read_string(data, &mut offset, u32::MAX as usize)?;
+        dirty.insert((bucket, key));
+    }
+
+    if offset != data.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index has trailing bytes",
+        ));
+    }
+    Ok((entries, dirty))
+}
+
+fn read_bytes<'a>(data: &'a [u8], offset: &mut usize, len: usize) -> io::Result<&'a [u8]> {
+    let end = offset
+        .checked_add(len)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "cache index overflow"))?;
+    if end > data.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index truncated",
+        ));
+    }
+    let slice = &data[*offset..end];
+    *offset = end;
+    Ok(slice)
+}
+
+fn read_u8(data: &[u8], offset: &mut usize) -> io::Result<u8> {
+    Ok(read_bytes(data, offset, 1)?[0])
+}
+
+fn read_u64(data: &[u8], offset: &mut usize) -> io::Result<u64> {
+    let bytes = read_bytes(data, offset, 8)?;
+    Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn read_string(data: &[u8], offset: &mut usize, max_len: usize) -> io::Result<String> {
+    let len = if max_len <= u16::MAX as usize {
+        let bytes = read_bytes(data, offset, 2)?;
+        u16::from_le_bytes(bytes.try_into().unwrap()) as usize
+    } else {
+        let bytes = read_bytes(data, offset, 4)?;
+        u32::from_le_bytes(bytes.try_into().unwrap()) as usize
+    };
+    if len > max_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index string length out of range",
+        ));
+    }
+    let value = read_bytes(data, offset, len)?;
+    String::from_utf8(value.to_vec()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache index string is not valid UTF-8",
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn index_roundtrip() {
+        let entries = vec![
+            ("bucket-a".into(), "path/obj.txt".into(), 42u64),
+            ("bucket-b".into(), "folder/".into(), 0u64),
+        ];
+        let mut dirty = HashSet::new();
+        dirty.insert(("bucket-a".into(), "path/obj.txt".into()));
+        let data = encode_index(&entries, &dirty).unwrap();
+        let (decoded_entries, decoded_dirty) = decode_index(&data).unwrap();
+        assert_eq!(decoded_entries, entries);
+        assert_eq!(decoded_dirty, dirty);
+    }
 
     #[tokio::test]
     async fn scan_and_flush_dirty_after_restart() {
