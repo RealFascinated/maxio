@@ -334,7 +334,7 @@ impl ObjectStorage {
             }
 
             for key in marker_keys {
-                let outcome = self.delete_object_inner(bucket, &key).await.map_err(|e| e);
+                let outcome = self.delete_object_inner(bucket, &key).await;
                 results.insert((key.clone(), None), outcome);
             }
         } else {

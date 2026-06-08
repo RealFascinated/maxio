@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -7,6 +8,20 @@ use crate::db::{DbContext, DbPool};
 use super::StorageError;
 use super::blob::{BlobStorage, object_path_in};
 use super::metadata::MetadataStore;
+
+fn report_progress(label: &str, done: usize, total: usize, final_line: bool) {
+    let mut err = io::stderr();
+    let _ = write!(err, "\r{label}: {done}/{total}");
+    if final_line {
+        let _ = writeln!(err);
+    } else {
+        let _ = err.flush();
+    }
+}
+
+fn should_report_progress(done: usize, total: usize) -> bool {
+    done == 1 || done == total || done % 1000 == 0
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrphanMetaEntry {
@@ -21,11 +36,18 @@ pub async fn scan_orphaned_meta(
     cache_dir: Option<&str>,
 ) -> Result<Vec<OrphanMetaEntry>, StorageError> {
     let ctx = DbContext::new(pool);
+    eprintln!("loading metadata from database...");
     let refs = repos::list_blob_backed_meta(&ctx).await?;
+    let total = refs.len();
+    eprintln!("checking {total} metadata row(s) on disk...");
     let cache_buckets = cache_dir.map(|dir| Path::new(dir).join("buckets"));
 
     let mut orphans = Vec::new();
-    for reference in refs {
+    for (index, reference) in refs.iter().enumerate() {
+        let done = index + 1;
+        if should_report_progress(done, total) {
+            report_progress("scanning", done, total, done == total);
+        }
         let missing = match &reference.source {
             MetaBlobSource::Current => {
                 !blob_exists(
@@ -42,9 +64,9 @@ pub async fn scan_orphaned_meta(
         };
         if missing {
             orphans.push(OrphanMetaEntry {
-                bucket: reference.bucket,
-                key: reference.key,
-                source: reference.source,
+                bucket: reference.bucket.clone(),
+                key: reference.key.clone(),
+                source: reference.source.clone(),
             });
         }
     }
@@ -55,8 +77,16 @@ pub async fn delete_orphaned_meta(
     meta: &dyn MetadataStore,
     orphans: &[OrphanMetaEntry],
 ) -> Result<u64, StorageError> {
+    let total = orphans.len();
+    if total > 0 {
+        eprintln!("deleting {total} orphaned metadata row(s)...");
+    }
     let mut removed = 0u64;
-    for entry in orphans {
+    for (index, entry) in orphans.iter().enumerate() {
+        let done = index + 1;
+        if should_report_progress(done, total) {
+            report_progress("deleting", done, total, done == total);
+        }
         match &entry.source {
             MetaBlobSource::Current => {
                 meta.delete_object_meta(&entry.bucket, &entry.key).await?;
