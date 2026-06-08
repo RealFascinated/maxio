@@ -28,7 +28,11 @@ pub struct CachingIamStore {
 }
 
 impl CachingIamStore {
-    pub fn new(inner: Arc<dyn IamStore>, ttl: Duration, signing_keys: Arc<SigningKeyCache>) -> Self {
+    pub fn new(
+        inner: Arc<dyn IamStore>,
+        ttl: Duration,
+        signing_keys: Arc<SigningKeyCache>,
+    ) -> Self {
         Self {
             inner,
             ttl,
@@ -149,27 +153,15 @@ impl IamStore for CachingIamStore {
             .await
     }
 
-    async fn delete_user_policy(
-        &self,
-        username: &str,
-        policy_name: &str,
-    ) -> Result<(), String> {
+    async fn delete_user_policy(&self, username: &str, policy_name: &str) -> Result<(), String> {
         self.inner.delete_user_policy(username, policy_name).await
     }
 
-    async fn attach_user_policy(
-        &self,
-        username: &str,
-        policy_arn: &str,
-    ) -> Result<(), String> {
+    async fn attach_user_policy(&self, username: &str, policy_arn: &str) -> Result<(), String> {
         self.inner.attach_user_policy(username, policy_arn).await
     }
 
-    async fn detach_user_policy(
-        &self,
-        username: &str,
-        policy_arn: &str,
-    ) -> Result<(), String> {
+    async fn detach_user_policy(&self, username: &str, policy_arn: &str) -> Result<(), String> {
         self.inner.detach_user_policy(username, policy_arn).await
     }
 
