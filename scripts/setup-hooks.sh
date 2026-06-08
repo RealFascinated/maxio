@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+git -C "$ROOT" config core.hooksPath .githooks
+echo "Git hooks enabled (core.hooksPath=.githooks)"

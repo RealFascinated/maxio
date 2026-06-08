@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cargo fmt --all
+
+changed=$(git diff --name-only -- '*.rs' || true)
+if [[ -n "$changed" ]]; then
+  while IFS= read -r file; do
+    git add "$file"
+  done <<<"$changed"
+  echo "Re-staged Rust files after cargo fmt."
+fi
