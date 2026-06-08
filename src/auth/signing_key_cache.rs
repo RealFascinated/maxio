@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+/// Cached entry: (date, region, derived_key).
+type CacheEntry = (String, String, Vec<u8>);
+
 /// Per-access-key signing key cache. The signing key derived from
 /// (secret_key, date, region) only changes once per day, so caching it
 /// eliminates 4 sequential HMAC-SHA256 operations on every authenticated request.
 pub struct SigningKeyCache {
     /// access_key_id → (date, region, derived_key)
-    entries: RwLock<HashMap<String, (String, String, Vec<u8>)>>,
+    entries: RwLock<HashMap<String, CacheEntry>>,
 }
 
 impl SigningKeyCache {
