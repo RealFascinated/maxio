@@ -28,9 +28,7 @@ export function formatDuration(seconds: number): string {
 }
 
 export function formatIops(value: number): string {
-  if (value <= 0) return '0'
-  if (value < 10) return value.toFixed(1)
-  return Math.round(value).toLocaleString()
+  return Math.max(0, Math.round(value)).toLocaleString()
 }
 
 export function hitRate(hits: number, misses: number): string {
