@@ -423,6 +423,9 @@ impl CacheLayer {
         fs::copy(data_path, &cache_path)
             .await
             .map_err(StorageError::Io)?;
+        if let Some(m) = &self.metrics {
+            m.record_drive_read_op();
+        }
         self.record_access_inner(bucket, key, size).await;
         Ok(cache_path)
     }
@@ -482,6 +485,9 @@ impl CacheLayer {
             match fs::copy(&cache_path, &data_path).await {
                 Ok(_) => {
                     flushed_bytes += size;
+                    if let Some(m) = &self.metrics {
+                        m.record_drive_write_op();
+                    }
                     self.mark_clean(&bucket, &key, size).await;
                 }
                 Err(e) => {

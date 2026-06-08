@@ -43,9 +43,9 @@ impl ObjectStorage {
     }
 
     #[inline]
-    fn record(&self, op: &str, elapsed: std::time::Duration) {
+    fn record(&self, op: &str, elapsed: std::time::Duration, bytes: u64) {
         if let Some(ref m) = self.metrics {
-            m.record_storage_op(op, elapsed);
+            m.record_storage_op(op, elapsed, bytes);
         }
     }
 
@@ -74,6 +74,9 @@ impl ObjectStorage {
         // synchronous so that insert_version + archive_version are ordered correctly.
         if self.async_meta_write && !versioned {
             BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await?;
+            if let Some(ref m) = self.metrics {
+                m.record_drive_write_op();
+            }
 
             let result = PutResult {
                 size: written.size,
@@ -116,6 +119,9 @@ impl ObjectStorage {
         {
             let _ = self.meta.delete_object_meta(bucket, key).await;
             return Err(e);
+        }
+        if let Some(ref m) = self.metrics {
+            m.record_drive_write_op();
         }
 
         if versioned {
@@ -593,7 +599,7 @@ impl Storage for ObjectStorage {
     async fn create_bucket(&self, meta: &BucketMeta) -> Result<bool, StorageError> {
         let t = std::time::Instant::now();
         let result = self.meta.create_bucket(meta).await;
-        self.record("create_bucket", t.elapsed());
+        self.record("create_bucket", t.elapsed(), 0);
         result
     }
 
@@ -607,14 +613,14 @@ impl Storage for ObjectStorage {
         if matches!(&result, Ok(true)) {
             let _ = self.blobs.remove_bucket_tree(name).await;
         }
-        self.record("delete_bucket", t.elapsed());
+        self.record("delete_bucket", t.elapsed(), 0);
         result
     }
 
     async fn list_buckets(&self) -> Result<Vec<BucketMeta>, StorageError> {
         let t = std::time::Instant::now();
         let result = self.meta.list_buckets().await;
-        self.record("list_buckets", t.elapsed());
+        self.record("list_buckets", t.elapsed(), 0);
         result
     }
 
@@ -692,7 +698,8 @@ impl Storage for ObjectStorage {
         let result = self
             .put_object_inner(bucket, key, content_type, body, checksum)
             .await;
-        self.record("put_object", t.elapsed());
+        let bytes = result.as_ref().map(|r| r.size).unwrap_or(0);
+        self.record("put_object", t.elapsed(), bytes);
         result
     }
 
@@ -713,7 +720,8 @@ impl Storage for ObjectStorage {
             Ok((stream, meta))
         }
         .await;
-        self.record("get_object", t.elapsed());
+        let bytes = result.as_ref().map(|(_, meta)| meta.size).unwrap_or(0);
+        self.record("get_object", t.elapsed(), bytes);
         result
     }
 
@@ -739,7 +747,8 @@ impl Storage for ObjectStorage {
             Ok((stream, meta))
         }
         .await;
-        self.record("get_object_range", t.elapsed());
+        let bytes = if result.is_ok() { length } else { 0 };
+        self.record("get_object_range", t.elapsed(), bytes);
         result
     }
 
@@ -755,7 +764,7 @@ impl Storage for ObjectStorage {
             Ok(meta)
         }
         .await;
-        self.record("head_object", t.elapsed());
+        self.record("head_object", t.elapsed(), 0);
         result
     }
 
@@ -799,7 +808,7 @@ impl Storage for ObjectStorage {
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<DeleteResult, StorageError> {
         let t = std::time::Instant::now();
         let result = self.delete_object_inner(bucket, key).await;
-        self.record("delete_object", t.elapsed());
+        self.record("delete_object", t.elapsed(), 0);
         result
     }
 
@@ -810,7 +819,7 @@ impl Storage for ObjectStorage {
     ) -> Result<Vec<(BatchDeleteObject, Result<DeleteResult, StorageError>)>, StorageError> {
         let t = std::time::Instant::now();
         let result = self.delete_objects_batch_inner(bucket, objects).await;
-        self.record("delete_objects_batch", t.elapsed());
+        self.record("delete_objects_batch", t.elapsed(), 0);
         result
     }
 
@@ -827,7 +836,7 @@ impl Storage for ObjectStorage {
             .meta
             .list_objects_page(bucket, prefix, start_after, max_keys, search)
             .await;
-        self.record("list_objects", t.elapsed());
+        self.record("list_objects", t.elapsed(), 0);
         result
     }
 
@@ -874,7 +883,7 @@ impl Storage for ObjectStorage {
             Ok(meta)
         }
         .await;
-        self.record("create_multipart_upload", t.elapsed());
+        self.record("create_multipart_upload", t.elapsed(), 0);
         result
     }
 
@@ -890,7 +899,8 @@ impl Storage for ObjectStorage {
         let result = self
             .upload_part_inner(bucket, upload_id, part_number, body, checksum)
             .await;
-        self.record("upload_part", t.elapsed());
+        let bytes = result.as_ref().map(|part| part.size).unwrap_or(0);
+        self.record("upload_part", t.elapsed(), bytes);
         result
     }
 
@@ -904,7 +914,8 @@ impl Storage for ObjectStorage {
         let result = self
             .complete_multipart_upload_inner(bucket, upload_id, parts)
             .await;
-        self.record("complete_multipart_upload", t.elapsed());
+        let bytes = result.as_ref().map(|r| r.size).unwrap_or(0);
+        self.record("complete_multipart_upload", t.elapsed(), bytes);
         result
     }
 

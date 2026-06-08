@@ -47,10 +47,26 @@ export interface LatencySnapshot {
   writeSeconds: number | null
 }
 
+export interface ThroughputSnapshot {
+  windowSeconds: number
+  readBytesPerSec: number
+  writeBytesPerSec: number
+}
+
+export interface OpsTotalsSnapshot {
+  windowSeconds: number
+  readIops: number
+  writeIops: number
+  metaIops: number
+}
+
 export interface MetricsSnapshot {
   uptimeSeconds: number
   storageTotals: StorageTotalsSnapshot
+  throughput: ThroughputSnapshot
   latency: LatencySnapshot
+  opsTotals: OpsTotalsSnapshot
+  activeClients: number
   caches: CacheSnapshot[]
   storageOps: StorageOpSnapshot[]
   metadataOps: MetadataOpSnapshot[]

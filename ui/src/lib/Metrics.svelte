@@ -1,21 +1,23 @@
 <script lang="ts">
   import { createQuery } from '@tanstack/svelte-query'
   import * as Table from '$lib/components/ui/table'
+  import * as Card from '$lib/components/ui/card'
   import { Callout } from '$lib/components/ui/callout'
   import { Badge } from '$lib/components/ui/badge'
+  import SemiGauge from '$lib/components/metrics/SemiGauge.svelte'
   import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
   import Cpu from 'lucide-svelte/icons/cpu'
   import Database from 'lucide-svelte/icons/database'
-  import Download from 'lucide-svelte/icons/download'
+  import ChevronDown from 'lucide-svelte/icons/chevron-down'
   import HardDrive from 'lucide-svelte/icons/hard-drive'
   import Package from 'lucide-svelte/icons/package'
-  import Server from 'lucide-svelte/icons/server'
   import Table2 from 'lucide-svelte/icons/table-2'
-  import Upload from 'lucide-svelte/icons/upload'
+  import Users from 'lucide-svelte/icons/users'
   import { metricsKeys } from '$lib/api/keys'
   import { fetchMetrics, type CacheSnapshot } from '$lib/api/metrics'
-  import { formatBytes } from '$lib/format-bytes'
-  import { formatDuration, formatMetricName, formatUptime, hitRate } from '$lib/format'
+  import { formatBytes, formatThroughput } from '$lib/format-bytes'
+  import { cn } from '$lib/utils.js'
+  import { formatDuration, formatIops, formatMetricName, formatUptime, hitRate } from '$lib/format'
 
   const metricsQuery = createQuery(() => ({
     queryKey: metricsKeys.snapshot(),
@@ -23,20 +25,49 @@
     refetchInterval: 1_000,
   }))
 
-  function formatLatency(seconds: number | null | undefined): string {
-    if (seconds == null) return '—'
-    return formatDuration(seconds)
+  let peakThroughput = $state(0)
+  let peakIops = $state(0)
+  let showCaches = $state(false)
+
+  function formatLatencyMicros(seconds: number | null | undefined): string {
+    if (seconds == null) return '0'
+    const micros = seconds * 1_000_000
+    if (micros < 1) return '<1'
+    return Math.round(micros).toLocaleString()
   }
 
   function isObjectDiskCache(cache: CacheSnapshot): boolean {
     return cache.id === 'object_disk'
   }
+
+  $effect(() => {
+    const data = metricsQuery.data
+    if (!data) return
+    const total = data.throughput.readBytesPerSec + data.throughput.writeBytesPerSec
+    peakThroughput = Math.max(total, peakThroughput * 0.95)
+    const totalIops =
+      data.opsTotals.readIops + data.opsTotals.writeIops + data.opsTotals.metaIops
+    peakIops = Math.max(totalIops, peakIops * 0.95)
+  })
 </script>
 
-<div class="mx-auto max-w-5xl space-y-6">
-  <div class="flex items-center gap-3">
-    <BarChart2 class="size-6 text-coollabs dark:text-warning" />
-    <h1 class="text-2xl font-bold dark:text-white">Metrics</h1>
+<div class="mx-auto max-w-6xl space-y-6">
+  <div class="flex items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <BarChart2 class="size-6 text-coollabs dark:text-warning" />
+      <h1 class="text-2xl font-bold dark:text-white">Metrics</h1>
+    </div>
+    {#if metricsQuery.data}
+      <div
+        class="flex items-center gap-2 rounded-sm border-2 border-neutral-200 bg-white px-3 py-1.5 text-sm dark:border-coolgray-200 dark:bg-coolgray-100"
+      >
+        <Users class="size-4 text-neutral-500" />
+        <span class="text-neutral-500">Active S3 Connections</span>
+        <span class="font-semibold tabular-nums dark:text-white">
+          {metricsQuery.data.activeClients.toLocaleString()}
+        </span>
+      </div>
+    {/if}
   </div>
 
   {#if metricsQuery.isPending}
@@ -47,13 +78,20 @@
     </Callout>
   {:else if metricsQuery.data}
     {@const data = metricsQuery.data}
+    {@const readThroughput = formatThroughput(data.throughput.readBytesPerSec)}
+    {@const writeThroughput = formatThroughput(data.throughput.writeBytesPerSec)}
+    {@const totalThroughputBps =
+      data.throughput.readBytesPerSec + data.throughput.writeBytesPerSec}
+    {@const totalThroughput = formatThroughput(totalThroughputBps)}
+    {@const opsTotal =
+      data.opsTotals.readIops + data.opsTotals.writeIops + data.opsTotals.metaIops}
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
       <div class="mb-3 flex items-center gap-2">
         <Database class="size-5 text-coollabs dark:text-warning" />
         <h2 class="text-lg font-bold dark:text-white">Storage</h2>
       </div>
-      <dl class="grid gap-4 sm:grid-cols-3">
+      <dl class="grid gap-4 sm:grid-cols-4">
         <div>
           <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Buckets</dt>
           <dd class="text-lg font-semibold dark:text-white">
@@ -72,101 +110,225 @@
             {formatBytes(data.storageTotals.sizeBytes)}
           </dd>
         </div>
-      </dl>
-    </section>
-
-    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <div class="mb-3 flex items-center gap-2">
-        <Server class="size-5 text-coollabs dark:text-warning" />
-        <h2 class="text-lg font-bold dark:text-white">Server</h2>
-      </div>
-      <dl class="grid gap-4 sm:grid-cols-3">
         <div>
           <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Uptime</dt>
           <dd class="text-lg font-semibold dark:text-white">{formatUptime(data.uptimeSeconds)}</dd>
         </div>
-        <div>
-          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
-            <Download class="size-3.5" />
-            Avg read latency
-          </dt>
-          <dd class="text-lg font-semibold dark:text-white">{formatLatency(data.latency.readSeconds)}</dd>
-          <dd class="text-xs text-neutral-500">Last {data.latency.windowSeconds}s, end-to-end</dd>
-        </div>
-        <div>
-          <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-500">
-            <Upload class="size-3.5" />
-            Avg write latency
-          </dt>
-          <dd class="text-lg font-semibold dark:text-white">{formatLatency(data.latency.writeSeconds)}</dd>
-          <dd class="text-xs text-neutral-500">Last {data.latency.windowSeconds}s, end-to-end</dd>
-        </div>
       </dl>
     </section>
 
-    {#each data.caches as cache (cache.id)}
-      <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-        <div class="mb-3 flex flex-wrap items-center gap-2">
-          <HardDrive class="size-5 shrink-0 text-coollabs dark:text-warning" />
-          <h2 class="text-lg font-bold dark:text-white">{formatMetricName(cache.id)}</h2>
-          {#if isObjectDiskCache(cache)}
-            {#if cache.enabled}
-              <Badge variant="success" label="Enabled" />
-            {:else}
-              <span class="text-xs font-bold text-muted-foreground">Disabled</span>
-            {/if}
-            {#if cache.writebackHalted}
-              <Badge variant="error" label="Writeback halted" />
-            {/if}
-          {/if}
-        </div>
-        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hits</dt>
-            <dd class="text-lg font-semibold dark:text-white">{cache.hits.toLocaleString()}</dd>
+    <div class="space-y-4">
+      <Card.Root class="flex h-full flex-col gap-0 border-2 border-neutral-200 bg-white py-0 dark:border-coolgray-200 dark:bg-coolgray-100">
+        <Card.Header class="border-b border-neutral-200 pt-4 !pb-4 dark:border-coolgray-200">
+          <Card.Title class="text-center text-base font-bold dark:text-white">
+            R/W Throughput
+          </Card.Title>
+        </Card.Header>
+        <Card.Content class="flex flex-1 flex-col py-5">
+          <div class="grid items-center gap-6 md:grid-cols-3">
+            <div class="text-center md:text-left">
+              <div class="mb-1 flex items-center justify-center gap-2 md:justify-start">
+                <span class="size-2 rounded-full bg-coollabs"></span>
+                <span class="text-sm font-medium text-neutral-500">Read</span>
+              </div>
+              <p class="text-3xl font-bold tabular-nums dark:text-white">{readThroughput.value}</p>
+              <p class="text-sm text-neutral-500">{readThroughput.unit}</p>
+            </div>
+
+            <SemiGauge
+              segments={[
+                { value: data.throughput.readBytesPerSec, class: 'stroke-coollabs' },
+                { value: data.throughput.writeBytesPerSec, class: 'stroke-pink-500' },
+              ]}
+              total={Math.max(totalThroughputBps, peakThroughput, 1)}
+              centerLabel="Total"
+              centerValue={totalThroughput.value}
+              centerUnit={totalThroughput.unit}
+            />
+
+            <div class="text-center md:text-right">
+              <div class="mb-1 flex items-center justify-center gap-2 md:justify-end">
+                <span class="size-2 rounded-full bg-pink-500"></span>
+                <span class="text-sm font-medium text-neutral-500">Write</span>
+              </div>
+              <p class="text-3xl font-bold tabular-nums dark:text-white">{writeThroughput.value}</p>
+              <p class="text-sm text-neutral-500">{writeThroughput.unit}</p>
+            </div>
           </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Misses</dt>
-            <dd class="text-lg font-semibold dark:text-white">{cache.misses.toLocaleString()}</dd>
-          </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hit rate</dt>
-            <dd class="text-lg font-semibold dark:text-white">
-              {hitRate(cache.hits, cache.misses)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Evictions</dt>
-            <dd class="text-lg font-semibold dark:text-white">{cache.evictions.toLocaleString()}</dd>
-          </div>
-          <div>
-            <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Entries</dt>
-            <dd class="text-lg font-semibold dark:text-white">{cache.entries.toLocaleString()}</dd>
-          </div>
-          {#if isObjectDiskCache(cache)}
-            <div>
-              <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Size</dt>
-              <dd class="text-lg font-semibold dark:text-white">
-                {formatBytes(cache.sizeBytes)}
-                {#if cache.maxSizeBytes > 0}
-                  <span class="text-sm font-normal text-neutral-500">
-                    / {formatBytes(cache.maxSizeBytes)}
+          <p class="mt-auto pt-4 text-center text-xs text-neutral-500">
+            Rolling average over the last {data.throughput.windowSeconds}s
+          </p>
+        </Card.Content>
+      </Card.Root>
+
+      <div class="grid items-stretch gap-4 lg:grid-cols-2">
+        <Card.Root class="flex h-full flex-col gap-0 border-2 border-neutral-200 bg-white py-0 dark:border-coolgray-200 dark:bg-coolgray-100">
+          <Card.Header class="border-b border-neutral-200 pt-4 !pb-4 dark:border-coolgray-200">
+            <Card.Title class="text-center text-base font-bold dark:text-white">Latency</Card.Title>
+          </Card.Header>
+          <Card.Content class="flex flex-1 flex-col py-5">
+            <div class="grid gap-6 sm:grid-cols-2">
+              <div class="text-center">
+                <div class="mb-1 flex items-center justify-center gap-2">
+                  <span class="size-2 rounded-full bg-coollabs"></span>
+                  <span class="text-sm font-medium text-neutral-500">Read</span>
+                </div>
+                <p class="text-3xl font-bold tabular-nums dark:text-white">
+                  {formatLatencyMicros(data.latency.readSeconds)}
+                </p>
+                <p class="text-sm text-neutral-500">μs</p>
+              </div>
+              <div class="text-center">
+                <div class="mb-1 flex items-center justify-center gap-2">
+                  <span class="size-2 rounded-full bg-pink-500"></span>
+                  <span class="text-sm font-medium text-neutral-500">Write</span>
+                </div>
+                <p class="text-3xl font-bold tabular-nums dark:text-white">
+                  {formatLatencyMicros(data.latency.writeSeconds)}
+                </p>
+                <p class="text-sm text-neutral-500">μs</p>
+              </div>
+            </div>
+            <p class="mt-auto pt-4 text-center text-xs text-neutral-500">
+              Avg over the last {data.latency.windowSeconds}s, end-to-end
+            </p>
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root class="flex h-full flex-col gap-0 border-2 border-neutral-200 bg-white py-0 dark:border-coolgray-200 dark:bg-coolgray-100">
+          <Card.Header class="border-b border-neutral-200 pt-4 !pb-4 dark:border-coolgray-200">
+            <Card.Title class="text-center text-base font-bold dark:text-white">IOPS</Card.Title>
+          </Card.Header>
+          <Card.Content class="flex flex-1 flex-col py-5">
+            <div class="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+              <SemiGauge
+                segments={[
+                  { value: data.opsTotals.readIops, class: 'stroke-coollabs' },
+                  { value: data.opsTotals.writeIops, class: 'stroke-pink-500' },
+                  { value: data.opsTotals.metaIops, class: 'stroke-sky-400' },
+                ]}
+                total={Math.max(opsTotal, peakIops, 1)}
+                centerValue={formatIops(opsTotal)}
+                centerUnit="IOPS"
+              />
+              <ul class="space-y-2 text-sm">
+                <li class="flex items-center gap-2">
+                  <span class="size-2 rounded-full bg-coollabs"></span>
+                  <span class="text-neutral-500">Read</span>
+                  <span class="ml-auto font-semibold tabular-nums dark:text-white">
+                    {formatIops(data.opsTotals.readIops)}
                   </span>
+                </li>
+                <li class="flex items-center gap-2">
+                  <span class="size-2 rounded-full bg-pink-500"></span>
+                  <span class="text-neutral-500">Write</span>
+                  <span class="ml-auto font-semibold tabular-nums dark:text-white">
+                    {formatIops(data.opsTotals.writeIops)}
+                  </span>
+                </li>
+                <li class="flex items-center gap-2">
+                  <span class="size-2 rounded-full bg-sky-400"></span>
+                  <span class="text-neutral-500">Meta</span>
+                  <span class="ml-auto font-semibold tabular-nums dark:text-white">
+                    {formatIops(data.opsTotals.metaIops)}
+                  </span>
+                </li>
+              </ul>
+            </div>
+            <p class="mt-auto pt-4 text-center text-xs text-neutral-500">
+              Rolling average over the last {data.opsTotals.windowSeconds}s
+            </p>
+          </Card.Content>
+        </Card.Root>
+      </div>
+    </div>
+
+    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
+      <button
+        type="button"
+        class="flex w-full items-center justify-between gap-2 text-left"
+        onclick={() => (showCaches = !showCaches)}
+        aria-expanded={showCaches}
+      >
+        <span class="flex items-center gap-2">
+          <HardDrive class="size-5 shrink-0 text-coollabs dark:text-warning" />
+          <span class="text-lg font-bold dark:text-white">
+            {showCaches ? 'Hide caches' : 'Show caches'}
+          </span>
+          <span class="text-xs font-medium text-neutral-500">({data.caches.length})</span>
+        </span>
+        <ChevronDown
+          class={cn('size-5 shrink-0 text-neutral-500 transition-transform', showCaches && 'rotate-180')}
+        />
+      </button>
+
+      {#if showCaches}
+        <div class="mt-4 space-y-4 border-t border-neutral-200 pt-4 dark:border-coolgray-200">
+          {#each data.caches as cache (cache.id)}
+            <div>
+              <div class="mb-3 flex flex-wrap items-center gap-2">
+                <h3 class="text-base font-bold dark:text-white">{formatMetricName(cache.id)}</h3>
+                {#if isObjectDiskCache(cache)}
+                  {#if cache.enabled}
+                    <Badge variant="success" label="Enabled" />
+                  {:else}
+                    <span class="text-xs font-bold text-muted-foreground">Disabled</span>
+                  {/if}
+                  {#if cache.writebackHalted}
+                    <Badge variant="error" label="Writeback halted" />
+                  {/if}
                 {/if}
-              </dd>
+              </div>
+              <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hits</dt>
+                  <dd class="text-lg font-semibold dark:text-white">{cache.hits.toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Misses</dt>
+                  <dd class="text-lg font-semibold dark:text-white">{cache.misses.toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hit rate</dt>
+                  <dd class="text-lg font-semibold dark:text-white">
+                    {hitRate(cache.hits, cache.misses)}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Evictions</dt>
+                  <dd class="text-lg font-semibold dark:text-white">{cache.evictions.toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Entries</dt>
+                  <dd class="text-lg font-semibold dark:text-white">{cache.entries.toLocaleString()}</dd>
+                </div>
+                {#if isObjectDiskCache(cache)}
+                  <div>
+                    <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Size</dt>
+                    <dd class="text-lg font-semibold dark:text-white">
+                      {formatBytes(cache.sizeBytes)}
+                      {#if cache.maxSizeBytes > 0}
+                        <span class="text-sm font-normal text-neutral-500">
+                          / {formatBytes(cache.maxSizeBytes)}
+                        </span>
+                      {/if}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty objects</dt>
+                    <dd class="text-lg font-semibold dark:text-white">{cache.dirtyObjects.toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty bytes</dt>
+                    <dd class="text-lg font-semibold dark:text-white">{formatBytes(cache.dirtyBytes)}</dd>
+                  </div>
+                {/if}
+              </dl>
             </div>
-            <div>
-              <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty objects</dt>
-              <dd class="text-lg font-semibold dark:text-white">{cache.dirtyObjects.toLocaleString()}</dd>
-            </div>
-            <div>
-              <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty bytes</dt>
-              <dd class="text-lg font-semibold dark:text-white">{formatBytes(cache.dirtyBytes)}</dd>
-            </div>
-          {/if}
-        </dl>
-      </section>
-    {/each}
+          {/each}
+        </div>
+      {/if}
+    </section>
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
       <div class="mb-3 flex items-center gap-2">
@@ -236,7 +398,7 @@
           <Cpu class="size-5 text-coollabs dark:text-warning" />
           <h2 class="text-lg font-bold dark:text-white">Process</h2>
         </div>
-        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Resident memory</dt>
             <dd class="text-lg font-semibold dark:text-white">

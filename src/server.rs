@@ -37,6 +37,10 @@ pub fn build_router(state: AppState) -> Router {
     let s3_routes = s3_router()
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            active_s3_clients_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             auth_middleware,
         ))
         .layer(axum::middleware::from_fn_with_state(
@@ -124,6 +128,17 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+async fn active_s3_clients_middleware(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    state.metrics.begin_s3_request();
+    let response = next.run(req).await;
+    state.metrics.end_s3_request();
+    response
 }
 
 async fn http_metrics_middleware(

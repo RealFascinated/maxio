@@ -3,6 +3,7 @@ use base64::Engine;
 use super::cache::CacheLayer;
 use super::hashing::{ChecksumHasher, EtagMd5};
 use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
+use crate::metrics::MetricsRegistry;
 use rand::RngExt;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -18,6 +19,7 @@ pub struct BlobStorage {
     cache: Option<Arc<CacheLayer>>,
     /// Directories known to already exist — avoids a `create_dir_all` syscall on repeat paths.
     known_dirs: Mutex<HashSet<PathBuf>>,
+    metrics: Option<Arc<MetricsRegistry>>,
 }
 
 pub struct WrittenPayload {
@@ -102,12 +104,32 @@ impl BlobStorage {
             buckets_dir,
             cache: None,
             known_dirs: Mutex::new(HashSet::new()),
+            metrics: None,
         })
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     pub fn with_cache(mut self, cache: Arc<CacheLayer>) -> Self {
         self.cache = Some(cache);
         self
+    }
+
+    #[inline]
+    fn record_drive_read(&self) {
+        if let Some(ref m) = self.metrics {
+            m.record_drive_read_op();
+        }
+    }
+
+    #[inline]
+    fn record_drive_write(&self) {
+        if let Some(ref m) = self.metrics {
+            m.record_drive_write_op();
+        }
     }
 
     fn staging_buckets_dir(&self) -> &Path {
@@ -307,6 +329,7 @@ impl BlobStorage {
         };
 
         tmp_guard.disarm();
+        self.record_drive_write();
 
         Ok(WrittenPayload {
             size,
@@ -335,6 +358,7 @@ impl BlobStorage {
         meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
         let obj_path = self.resolve_read_path(bucket, key, meta.size).await?;
+        self.record_drive_read();
         if meta.size <= SMALL_OBJECT_THRESHOLD {
             let data = fs::read(&obj_path).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
@@ -352,6 +376,7 @@ impl BlobStorage {
         length: u64,
     ) -> Result<ByteStream, StorageError> {
         let obj_path = self.resolve_read_path(bucket, key, _meta.size).await?;
+        self.record_drive_read();
         if length <= SMALL_OBJECT_THRESHOLD {
             let mut file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
             file.seek(std::io::SeekFrom::Start(offset))
@@ -389,6 +414,7 @@ impl BlobStorage {
         }
 
         if writeback {
+            self.record_drive_write();
             let bucket_dir = self.buckets_dir.join(bucket);
             tokio::spawn(async move {
                 let _ = remove_file_if_exists(&obj_path).await;
@@ -410,6 +436,7 @@ impl BlobStorage {
         }
 
         remove_file_if_exists(&obj_path).await?;
+        self.record_drive_write();
         if cleanup_parents {
             self.cleanup_empty_parents(bucket, key).await;
         }
@@ -436,6 +463,7 @@ impl BlobStorage {
         let bucket_name = bucket.to_string();
         let mut handles = Vec::with_capacity(keys.len());
         for key in keys {
+            self.record_drive_write();
             let permit = sem
                 .clone()
                 .acquire_owned()
@@ -576,6 +604,7 @@ impl BlobStorage {
         };
 
         let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
+        self.record_drive_write();
         Ok((etag, size, checksum_algorithm, checksum_value))
     }
 
@@ -633,6 +662,7 @@ impl BlobStorage {
         );
 
         tmp_obj_guard.disarm();
+        self.record_drive_write();
         Ok(WrittenPayload {
             size: total_size,
             etag,
@@ -692,6 +722,7 @@ impl BlobStorage {
         let ver_dir = self.versions_dir(bucket, key);
         fs::create_dir_all(&ver_dir).await?;
         fs::copy(data_path, self.version_data_path(bucket, key, version_id)).await?;
+        self.record_drive_write();
         Ok(())
     }
 

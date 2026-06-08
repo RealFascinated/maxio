@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use prometheus::{
@@ -64,17 +65,38 @@ pub const LATENCY_WINDOW_SECS: u64 = 60;
 
 const READ_LATENCY_OPS: &[&str] = &["get_object", "get_object_range"];
 const WRITE_LATENCY_OPS: &[&str] = &["put_object", "complete_multipart_upload"];
-
+const READ_THROUGHPUT_OPS: &[&str] = &["get_object", "get_object_range"];
+const WRITE_THROUGHPUT_OPS: &[&str] = &["put_object", "upload_part", "complete_multipart_upload"];
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricsSnapshot {
     pub uptime_seconds: f64,
     pub storage_totals: StorageTotalsSnapshot,
+    pub throughput: ThroughputSnapshot,
     pub latency: LatencySnapshot,
+    pub ops_totals: OpsTotalsSnapshot,
+    pub active_clients: u64,
     pub caches: Vec<CacheSnapshot>,
     pub storage_ops: Vec<StorageOpSnapshot>,
     pub metadata_ops: Vec<MetadataOpSnapshot>,
     pub process: Option<ProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThroughputSnapshot {
+    pub window_seconds: u64,
+    pub read_bytes_per_sec: f64,
+    pub write_bytes_per_sec: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsTotalsSnapshot {
+    pub window_seconds: u64,
+    pub read_iops: f64,
+    pub write_iops: f64,
+    pub meta_iops: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -175,6 +197,88 @@ impl RollingLatencyWindow {
     }
 }
 
+struct RollingBytesWindow {
+    window: Duration,
+    samples: Mutex<VecDeque<(Instant, u64)>>,
+}
+
+impl RollingBytesWindow {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            samples: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn record(&self, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let now = Instant::now();
+        let mut samples = self.samples.lock().unwrap();
+        samples.push_back((now, bytes));
+        Self::prune(&self.window, &mut samples, now);
+    }
+
+    fn bytes_per_sec(&self) -> f64 {
+        let mut samples = self.samples.lock().unwrap();
+        let now = Instant::now();
+        Self::prune(&self.window, &mut samples, now);
+        let total_bytes: u64 = samples.iter().map(|(_, bytes)| bytes).sum();
+        let window_secs = self.window.as_secs_f64();
+        if window_secs <= 0.0 {
+            return 0.0;
+        }
+        total_bytes as f64 / window_secs
+    }
+
+    fn prune(window: &Duration, samples: &mut VecDeque<(Instant, u64)>, now: Instant) {
+        let cutoff = now.checked_sub(*window).unwrap_or(now);
+        while samples.front().is_some_and(|(t, _)| *t < cutoff) {
+            samples.pop_front();
+        }
+    }
+}
+
+struct RollingCountWindow {
+    window: Duration,
+    events: Mutex<VecDeque<Instant>>,
+}
+
+impl RollingCountWindow {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            events: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn record(&self) {
+        let now = Instant::now();
+        let mut events = self.events.lock().unwrap();
+        events.push_back(now);
+        Self::prune(&self.window, &mut events, now);
+    }
+
+    fn ops_per_sec(&self) -> f64 {
+        let mut events = self.events.lock().unwrap();
+        let now = Instant::now();
+        Self::prune(&self.window, &mut events, now);
+        let window_secs = self.window.as_secs_f64();
+        if window_secs <= 0.0 {
+            return 0.0;
+        }
+        events.len() as f64 / window_secs
+    }
+
+    fn prune(window: &Duration, events: &mut VecDeque<Instant>, now: Instant) {
+        let cutoff = now.checked_sub(*window).unwrap_or(now);
+        while events.front().is_some_and(|t| *t < cutoff) {
+            events.pop_front();
+        }
+    }
+}
+
 pub struct MetricsRegistry {
     registry: Registry,
     http_requests_total: CounterVec,
@@ -202,6 +306,12 @@ pub struct MetricsRegistry {
     last_process_cpu: Mutex<Option<(f64, Instant)>>,
     read_latency: RollingLatencyWindow,
     write_latency: RollingLatencyWindow,
+    read_throughput: RollingBytesWindow,
+    write_throughput: RollingBytesWindow,
+    drive_read_ops: RollingCountWindow,
+    drive_write_ops: RollingCountWindow,
+    meta_ops: RollingCountWindow,
+    active_s3_requests: AtomicUsize,
 }
 
 impl MetricsRegistry {
@@ -392,7 +502,21 @@ impl MetricsRegistry {
             last_process_cpu: Mutex::new(None),
             read_latency: RollingLatencyWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
             write_latency: RollingLatencyWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            read_throughput: RollingBytesWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            write_throughput: RollingBytesWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            drive_read_ops: RollingCountWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            drive_write_ops: RollingCountWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            meta_ops: RollingCountWindow::new(Duration::from_secs(LATENCY_WINDOW_SECS)),
+            active_s3_requests: AtomicUsize::new(0),
         })
+    }
+
+    pub fn begin_s3_request(&self) {
+        self.active_s3_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn end_s3_request(&self) {
+        self.active_s3_requests.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn init_object_disk_cache(&self, max_size: u64) {
@@ -479,7 +603,7 @@ impl MetricsRegistry {
             .observe(elapsed.as_secs_f64());
     }
 
-    pub fn record_storage_op(&self, operation: &str, elapsed: Duration) {
+    pub fn record_storage_op(&self, operation: &str, elapsed: Duration, bytes: u64) {
         let secs = elapsed.as_secs_f64();
         self.storage_duration
             .with_label_values(&[operation])
@@ -493,6 +617,19 @@ impl MetricsRegistry {
         } else if WRITE_LATENCY_OPS.contains(&operation) {
             self.write_latency.record(elapsed);
         }
+        if READ_THROUGHPUT_OPS.contains(&operation) {
+            self.read_throughput.record(bytes);
+        } else if WRITE_THROUGHPUT_OPS.contains(&operation) {
+            self.write_throughput.record(bytes);
+        }
+    }
+
+    pub fn record_drive_read_op(&self) {
+        self.drive_read_ops.record();
+    }
+
+    pub fn record_drive_write_op(&self) {
+        self.drive_write_ops.record();
     }
 
     pub fn record_metadata_op(&self, operation: &str, elapsed: Duration) {
@@ -504,6 +641,7 @@ impl MetricsRegistry {
         let entry = stats.entry(operation.to_string()).or_insert((0, 0.0));
         entry.0 += 1;
         entry.1 += secs;
+        self.meta_ops.record();
     }
 
     pub fn update_uptime(&self) {
@@ -590,11 +728,23 @@ impl MetricsRegistry {
                 object_count: 0,
                 size_bytes: 0,
             },
+            throughput: ThroughputSnapshot {
+                window_seconds: LATENCY_WINDOW_SECS,
+                read_bytes_per_sec: self.read_throughput.bytes_per_sec(),
+                write_bytes_per_sec: self.write_throughput.bytes_per_sec(),
+            },
             latency: LatencySnapshot {
                 window_seconds: LATENCY_WINDOW_SECS,
                 read_seconds: self.read_latency.average_seconds(),
                 write_seconds: self.write_latency.average_seconds(),
             },
+            ops_totals: OpsTotalsSnapshot {
+                window_seconds: LATENCY_WINDOW_SECS,
+                read_iops: self.drive_read_ops.ops_per_sec(),
+                write_iops: self.drive_write_ops.ops_per_sec(),
+                meta_iops: self.meta_ops.ops_per_sec(),
+            },
+            active_clients: self.active_s3_requests.load(Ordering::Relaxed) as u64,
             caches,
             storage_ops,
             metadata_ops,
@@ -677,6 +827,25 @@ mod tests {
         window.record(Duration::from_millis(200));
         let avg = window.average_seconds().unwrap();
         assert!((avg - 0.15).abs() < 0.001);
+    }
+
+    #[test]
+    fn rolling_bytes_window_computes_rate() {
+        let window = RollingBytesWindow::new(Duration::from_secs(10));
+        window.record(1_000);
+        window.record(2_000);
+        let rate = window.bytes_per_sec();
+        assert!((rate - 300.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rolling_count_window_computes_ops_per_sec() {
+        let window = RollingCountWindow::new(Duration::from_secs(10));
+        window.record();
+        window.record();
+        window.record();
+        let rate = window.ops_per_sec();
+        assert!((rate - 0.3).abs() < 0.001);
     }
 }
 
