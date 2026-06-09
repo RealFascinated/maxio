@@ -117,6 +117,43 @@ pub struct Config {
     /// Incompatible with bucket versioning (versioning takes the synchronous path regardless).
     #[arg(long, env = "MAXIO_ASYNC_META_WRITE", default_value = "false")]
     pub async_meta_write: bool,
+
+    /// Max Postgres connection pool size (MAXIO_DB_POOL_SIZE).
+    #[arg(long, env = "MAXIO_DB_POOL_SIZE", default_value = "64")]
+    pub db_pool_size: u32,
+
+    /// Cache prepared SQL statements on each pool connection (MAXIO_DB_PREPARED_STATEMENT_CACHE).
+    #[arg(
+        long,
+        env = "MAXIO_DB_PREPARED_STATEMENT_CACHE",
+        default_value = "true"
+    )]
+    pub db_prepared_statement_cache: bool,
+}
+
+/// Postgres pool tuning passed to [`crate::db::create_pool`].
+#[derive(Debug, Clone, Copy)]
+pub struct PoolSettings {
+    pub max_size: u32,
+    pub prepared_statement_cache: bool,
+}
+
+impl Default for PoolSettings {
+    fn default() -> Self {
+        Self {
+            max_size: 64,
+            prepared_statement_cache: true,
+        }
+    }
+}
+
+impl From<&Config> for PoolSettings {
+    fn from(config: &Config) -> Self {
+        Self {
+            max_size: config.db_pool_size,
+            prepared_statement_cache: config.db_prepared_statement_cache,
+        }
+    }
 }
 
 /// Entry limits for in-memory metadata caches.
@@ -152,7 +189,7 @@ impl From<&Config> for MemoryCacheLimits {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, PoolSettings};
     use clap::Parser;
 
     #[derive(Parser, Debug)]
@@ -170,5 +207,14 @@ mod tests {
         let cli = TestCli::parse_from(["maxio", "--database-url", "postgres://localhost/maxio"]);
 
         assert_eq!(cli.config.address, "0.0.0.0");
+    }
+
+    #[test]
+    fn default_db_pool_settings() {
+        let cli = TestCli::parse_from(["maxio", "--database-url", "postgres://localhost/maxio"]);
+
+        assert_eq!(cli.config.db_pool_size, 64);
+        assert!(cli.config.db_prepared_statement_cache);
+        assert_eq!(PoolSettings::from(&cli.config).max_size, 64);
     }
 }

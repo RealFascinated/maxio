@@ -11,7 +11,7 @@ pub async fn run(
     cache_dir: Option<&str>,
 ) -> anyhow::Result<()> {
     crate::db::run_migrations(database_url).await?;
-    let pool = Arc::new(crate::db::create_pool(database_url).await?);
+    let pool = Arc::new(crate::db::create_pool(database_url, Default::default()).await?);
     let blobs = BlobStorage::new(data_dir).await?;
     let orphans = orphans::scan_orphaned_meta(Arc::clone(&pool), &blobs, cache_dir).await?;
 

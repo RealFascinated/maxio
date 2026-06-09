@@ -55,7 +55,9 @@ pub async fn start_postgres() -> (testcontainers::ContainerAsync<Postgres>, Stri
 
 pub async fn create_storage(data_dir: &str, database_url: &str) -> Arc<dyn Storage> {
     maxio::db::run_migrations(database_url).await.unwrap();
-    let pool = maxio::db::create_pool(database_url).await.unwrap();
+    let pool = maxio::db::create_pool(database_url, Default::default())
+        .await
+        .unwrap();
     let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
         Arc::new(pool),
         maxio::config::MemoryCacheLimits::default(),
@@ -87,6 +89,8 @@ pub fn test_config(data_dir: String, database_url: String, default_buckets: &str
         iam_cache_max_entries: 10_000,
         public_url: None,
         async_meta_write: false,
+        db_pool_size: 64,
+        db_prepared_statement_cache: true,
     }
 }
 
@@ -94,7 +98,9 @@ pub async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> A
     maxio::db::run_migrations(&config.database_url)
         .await
         .unwrap();
-    let pool = maxio::db::create_pool(&config.database_url).await.unwrap();
+    let pool = maxio::db::create_pool(&config.database_url, Default::default())
+        .await
+        .unwrap();
     let pool = Arc::new(pool);
     let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
     let metrics = Arc::new(maxio::metrics::MetricsRegistry::new().unwrap());

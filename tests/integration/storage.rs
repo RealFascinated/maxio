@@ -225,7 +225,9 @@ async fn test_orphan_meta_scan_and_delete() {
     .await
     .unwrap();
 
-    let pool = maxio::db::create_pool(&database_url).await.unwrap();
+    let pool = maxio::db::create_pool(&database_url, Default::default())
+        .await
+        .unwrap();
     let blobs = BlobStorage::new(&data_dir).await.unwrap();
     let orphans = maxio::storage::orphans::scan_orphaned_meta(Arc::new(pool.clone()), &blobs, None)
         .await
@@ -244,7 +246,9 @@ async fn test_orphan_meta_scan_and_delete() {
     assert_eq!(removed, 1);
 
     let blobs = BlobStorage::new(&data_dir).await.unwrap();
-    let pool = maxio::db::create_pool(&database_url).await.unwrap();
+    let pool = maxio::db::create_pool(&database_url, Default::default())
+        .await
+        .unwrap();
     let orphans = maxio::storage::orphans::scan_orphaned_meta(Arc::new(pool), &blobs, None)
         .await
         .unwrap();

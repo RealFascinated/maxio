@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::api::console::LoginRateLimiter;
 use crate::auth::signing_key_cache::SigningKeyCache;
-use crate::config::{Config, MemoryCacheLimits};
+use crate::config::{Config, MemoryCacheLimits, PoolSettings};
 use crate::db;
 use crate::iam::{CachingIamStore, IamStore, PgIamStore};
 use crate::metrics::MetricsRegistry;
@@ -17,8 +17,8 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
     db::run_migrations(&config.database_url).await?;
-    let pool = db::create_pool(&config.database_url).await?;
-    let pool = Arc::new(pool);
+    let pool_settings = PoolSettings::from(&config);
+    let pool = Arc::new(db::create_pool(&config.database_url, pool_settings).await?);
 
     let metrics = Arc::new(MetricsRegistry::new()?);
     let cache_limits = MemoryCacheLimits::from(&config);

@@ -1192,9 +1192,7 @@ mod assemble_multipart_tests {
         let mut file = fs::File::create(path).await.unwrap();
         file.set_len(size).await.unwrap();
         file.write_all(&[head]).await.unwrap();
-        file.seek(std::io::SeekFrom::Start(size - 1))
-            .await
-            .unwrap();
+        file.seek(std::io::SeekFrom::Start(size - 1)).await.unwrap();
         file.write_all(&[tail]).await.unwrap();
     }
 

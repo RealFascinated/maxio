@@ -8,18 +8,45 @@ pub use bucket_cache::{BucketCache, CachedBucketEntry};
 pub use context::DbContext;
 
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
-use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use diesel_async::pooled_connection::deadpool::Pool;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
+use diesel_async::{AsyncConnection, AsyncPgConnection, CacheSize, RunQueryDsl};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+use futures::FutureExt;
+
+use crate::config::PoolSettings;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/migrations");
 
 pub type DbPool = Pool<AsyncPgConnection>;
 
-pub async fn create_pool(database_url: &str) -> Result<DbPool, anyhow::Error> {
-    let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
-    let pool = Pool::builder(config).max_size(64).build()?;
+pub async fn create_pool(
+    database_url: &str,
+    settings: PoolSettings,
+) -> Result<DbPool, anyhow::Error> {
+    let cache_size = if settings.prepared_statement_cache {
+        CacheSize::Unbounded
+    } else {
+        CacheSize::Disabled
+    };
+
+    let mut manager_config = ManagerConfig::<AsyncPgConnection>::default();
+    manager_config.custom_setup = Box::new(move |url| {
+        async move {
+            let mut conn = AsyncPgConnection::establish(url).await?;
+            conn.set_prepared_statement_cache_size(cache_size);
+            Ok(conn)
+        }
+        .boxed()
+    });
+
+    let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new_with_config(
+        database_url,
+        manager_config,
+    );
+    let pool = Pool::builder(config)
+        .max_size(settings.max_size as usize)
+        .build()?;
     Ok(pool)
 }
 

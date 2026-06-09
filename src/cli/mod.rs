@@ -105,7 +105,7 @@ pub async fn execute(cli: Cli) -> anyhow::Result<Option<Config>> {
 pub(crate) async fn load_iam_store(
     database_url: &str,
 ) -> anyhow::Result<std::sync::Arc<dyn crate::iam::IamStore>> {
-    let pool = crate::db::create_pool(database_url).await?;
+    let pool = crate::db::create_pool(database_url, Default::default()).await?;
     crate::db::run_migrations(database_url).await?;
     Ok(std::sync::Arc::new(crate::iam::PgIamStore::new(
         std::sync::Arc::new(pool),
