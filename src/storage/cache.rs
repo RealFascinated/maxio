@@ -71,6 +71,7 @@ impl CacheLayer {
         };
         if let Some((entries, dirty)) = layer.load_index().await? {
             layer.apply_index(entries, dirty).await;
+            layer.reconcile_index().await;
             layer.recalc_dirty_bytes().await;
             layer.scan_complete.store(true, Ordering::Release);
             layer.dirty_scan_complete.store(true, Ordering::Release);
@@ -114,6 +115,42 @@ impl CacheLayer {
     async fn apply_index(&self, entries: Vec<(String, String, u64)>, dirty: HashSet<ObjectKey>) {
         self.apply_lru_entries(entries).await;
         *self.dirty.lock().await = dirty;
+    }
+
+    /// Removes LRU entries whose cache files no longer exist on disk.
+    /// Called after loading the index to evict stale entries from crashed/external removals.
+    async fn reconcile_index(&self) {
+        let candidates: Vec<ObjectKey> = self.lru.lock().await.entries.keys().cloned().collect();
+        let buckets_dir = self.buckets_dir.clone();
+        let missing: Vec<ObjectKey> = stream::iter(candidates)
+            .map(|(bucket, key)| {
+                let buckets_dir = buckets_dir.clone();
+                async move {
+                    let path = super::blob::object_path_in(&buckets_dir, &bucket, &key);
+                    if fs::try_exists(&path).await.unwrap_or(true) {
+                        None
+                    } else {
+                        Some((bucket, key))
+                    }
+                }
+            })
+            .buffer_unordered(512)
+            .filter_map(|e| async move { e })
+            .collect()
+            .await;
+
+        if missing.is_empty() {
+            return;
+        }
+        let mut lru = self.lru.lock().await;
+        let mut dirty = self.dirty.lock().await;
+        for key in &missing {
+            if let Some((_, size)) = lru.entries.remove(key) {
+                lru.total_size = lru.total_size.saturating_sub(size);
+            }
+            dirty.remove(key);
+        }
+        tracing::info!(removed = missing.len(), "cache: removed stale index entries");
     }
 
     pub async fn save_index(&self) -> Result<(), anyhow::Error> {

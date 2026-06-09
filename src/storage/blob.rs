@@ -188,7 +188,9 @@ impl BlobStorage {
                     let _ = fs::remove_file(&cache_path).await;
                     cache.remove_entry(bucket, key).await;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    cache.remove_entry(bucket, key).await;
+                }
                 Err(_) => {}
             }
         }
