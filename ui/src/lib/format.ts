@@ -54,11 +54,15 @@ export function hitRate(hits: number, misses: number): string {
   return `${((hits / total) * 100).toFixed(1)}%`
 }
 
-/** Snake-case cache metric id → Title Case label (e.g. `object_disk` → `Object Disk Cache`). */
-export function formatMetricName(id: string): string {
-  const name = id
+/** Snake-case id → Title Case label (e.g. `get_object` → `Get Object`). */
+export function formatOperationName(id: string): string {
+  return id
     .split('_')
     .map((part) => (part === 'iam' ? 'IAM' : part.charAt(0).toUpperCase() + part.slice(1)))
     .join(' ')
-  return `${name} Cache`
+}
+
+/** Snake-case cache metric id → Title Case label (e.g. `object_disk` → `Object Disk Cache`). */
+export function formatMetricName(id: string): string {
+  return `${formatOperationName(id)} Cache`
 }

@@ -8,16 +8,21 @@
   import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
   import Cpu from 'lucide-svelte/icons/cpu'
   import Database from 'lucide-svelte/icons/database'
-  import ChevronDown from 'lucide-svelte/icons/chevron-down'
   import HardDrive from 'lucide-svelte/icons/hard-drive'
   import Package from 'lucide-svelte/icons/package'
   import Table2 from 'lucide-svelte/icons/table-2'
   import Users from 'lucide-svelte/icons/users'
   import { metricsKeys } from '$lib/api/keys'
-  import { fetchMetrics, type CacheSnapshot } from '$lib/api/metrics'
+  import { fetchMetrics } from '$lib/api/metrics'
   import { formatBytes, formatThroughput } from '$lib/format-bytes'
-  import { cn } from '$lib/utils.js'
-  import { formatIops, formatLatency, formatMetricName, formatUptime, hitRate } from '$lib/format'
+  import {
+    formatIops,
+    formatLatency,
+    formatMetricName,
+    formatOperationName,
+    formatUptime,
+    hitRate,
+  } from '$lib/format'
 
   const metricsQuery = createQuery(() => ({
     queryKey: metricsKeys.snapshot(),
@@ -27,12 +32,6 @@
 
   let peakThroughput = $state(0)
   let peakIops = $state(0)
-  let showCaches = $state(false)
-
-  function isObjectDiskCache(cache: CacheSnapshot): boolean {
-    return cache.id === 'object_disk'
-  }
-
   $effect(() => {
     const data = metricsQuery.data
     if (!data) return
@@ -242,97 +241,179 @@
       </div>
     </div>
 
-    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
-      <button
-        type="button"
-        class="flex w-full items-center justify-between gap-2 text-left"
-        onclick={() => (showCaches = !showCaches)}
-        aria-expanded={showCaches}
-      >
-        <span class="flex items-center gap-2">
-          <HardDrive class="size-5 shrink-0 text-coollabs dark:text-warning" />
-          <span class="text-lg font-bold dark:text-white">
-            {showCaches ? 'Hide caches' : 'Show caches'}
-          </span>
-          <span class="text-xs font-medium text-neutral-500">({data.caches.length})</span>
-        </span>
-        <ChevronDown
-          class={cn('size-5 shrink-0 text-neutral-500 transition-transform', showCaches && 'rotate-180')}
-        />
-      </button>
+    {@const objectDiskCache = data.caches.find((cache) => cache.id === 'object_disk')}
+    {@const otherCaches = data.caches.filter((cache) => cache.id !== 'object_disk')}
 
-      {#if showCaches}
-        <div class="mt-4 divide-y divide-neutral-200 border-t border-neutral-200 dark:divide-coolgray-200 dark:border-coolgray-200">
-          {#each data.caches as cache (cache.id)}
-            <div class="py-4">
-              <div class="mb-3 flex flex-wrap items-center gap-2">
-                <h3 class="text-base font-bold dark:text-white">{formatMetricName(cache.id)}</h3>
-                {#if isObjectDiskCache(cache)}
-                  {#if cache.enabled}
-                    <Badge variant="success" label="Enabled" />
-                  {:else}
-                    <span class="text-xs font-bold text-muted-foreground">Disabled</span>
-                  {/if}
-                  {#if cache.writebackHalted}
-                    <Badge variant="error" label="Writeback halted" />
-                  {/if}
-                {/if}
-              </div>
-              <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div>
-                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hits</dt>
-                  <dd class="text-lg font-semibold dark:text-white">{cache.hits.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Misses</dt>
-                  <dd class="text-lg font-semibold dark:text-white">{cache.misses.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Hit rate</dt>
-                  <dd class="text-lg font-semibold dark:text-white">
-                    {hitRate(cache.hits, cache.misses)}
+    {#if objectDiskCache}
+      {@const sizePercent =
+        objectDiskCache.maxSizeBytes > 0
+          ? Math.min(100, (objectDiskCache.sizeBytes / objectDiskCache.maxSizeBytes) * 100)
+          : 0}
+      <Card.Root class="flex flex-col gap-0 border-2 border-neutral-200 bg-white py-0 dark:border-coolgray-200 dark:bg-coolgray-100">
+        <Card.Header
+          class="flex flex-row flex-wrap items-center justify-between gap-3 border-b border-neutral-200 pt-4 !pb-4 dark:border-coolgray-200"
+        >
+          <div class="flex items-center gap-2">
+            <HardDrive class="size-5 text-coollabs dark:text-warning" />
+            <Card.Title class="text-base font-bold dark:text-white">
+              {formatMetricName(objectDiskCache.id)}
+            </Card.Title>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            {#if objectDiskCache.enabled}
+              <Badge variant="success" label="Enabled" />
+            {:else}
+              <Badge variant="warning" label="Disabled" />
+            {/if}
+            {#if objectDiskCache.writebackHalted}
+              <Badge variant="error" label="Writeback halted" />
+            {/if}
+          </div>
+        </Card.Header>
+        <Card.Content class="py-5">
+          <div class="grid gap-4 lg:grid-cols-3 lg:items-stretch">
+            <div
+              class="flex flex-col rounded-sm border-2 border-neutral-200 p-4 dark:border-coolgray-200 dark:bg-coolgray-300"
+            >
+              <p class="mb-4 text-xs font-medium uppercase tracking-wide text-neutral-500">
+                Performance
+              </p>
+              <dl class="flex flex-1 flex-col gap-3">
+                <div class="flex items-baseline justify-between gap-4">
+                  <dt class="text-sm text-neutral-500">Hits</dt>
+                  <dd class="text-xl font-bold tabular-nums dark:text-white">
+                    {objectDiskCache.hits.toLocaleString()}
                   </dd>
                 </div>
-                <div>
-                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Evictions</dt>
-                  <dd class="text-lg font-semibold dark:text-white">{cache.evictions.toLocaleString()}</dd>
+                <div class="flex items-baseline justify-between gap-4">
+                  <dt class="text-sm text-neutral-500">Misses</dt>
+                  <dd class="text-xl font-bold tabular-nums dark:text-white">
+                    {objectDiskCache.misses.toLocaleString()}
+                  </dd>
                 </div>
-                <div>
-                  <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Entries</dt>
-                  <dd class="text-lg font-semibold dark:text-white">{cache.entries.toLocaleString()}</dd>
+                <div
+                  class="mt-auto flex items-baseline justify-between gap-4 border-t border-neutral-200 pt-3 dark:border-coolgray-200"
+                >
+                  <dt class="text-sm font-medium text-neutral-500">Hit Rate</dt>
+                  <dd class="text-xl font-bold tabular-nums text-coollabs dark:text-warning">
+                    {hitRate(objectDiskCache.hits, objectDiskCache.misses)}
+                  </dd>
                 </div>
-                {#if isObjectDiskCache(cache)}
-                  <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Size</dt>
-                    <dd class="text-lg font-semibold dark:text-white">
-                      {formatBytes(cache.sizeBytes)}
-                      {#if cache.maxSizeBytes > 0}
-                        <span class="text-sm font-normal text-neutral-500">
-                          / {formatBytes(cache.maxSizeBytes)}
+              </dl>
+            </div>
+
+            <div
+              class="flex flex-col rounded-sm border-2 border-neutral-200 p-4 dark:border-coolgray-200 dark:bg-coolgray-300"
+            >
+              <p class="mb-4 text-xs font-medium uppercase tracking-wide text-neutral-500">
+                Capacity
+              </p>
+              <dl class="flex flex-1 flex-col gap-3">
+                <div class="flex items-baseline justify-between gap-4">
+                  <dt class="text-sm text-neutral-500">Entries</dt>
+                  <dd class="text-xl font-bold tabular-nums dark:text-white">
+                    {objectDiskCache.entries.toLocaleString()}
+                  </dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-4">
+                  <dt class="text-sm text-neutral-500">Evictions</dt>
+                  <dd class="text-xl font-bold tabular-nums dark:text-white">
+                    {objectDiskCache.evictions.toLocaleString()}
+                  </dd>
+                </div>
+                <div class="mt-auto border-t border-neutral-200 pt-3 dark:border-coolgray-200">
+                  <div class="flex items-baseline justify-between gap-4">
+                    <dt class="text-sm font-medium text-neutral-500">Size</dt>
+                    <dd class="text-right">
+                      <span class="text-xl font-bold tabular-nums dark:text-white">
+                        {formatBytes(objectDiskCache.sizeBytes)}
+                      </span>
+                      {#if objectDiskCache.maxSizeBytes > 0}
+                        <span class="text-sm text-neutral-500">
+                          / {formatBytes(objectDiskCache.maxSizeBytes)}
                         </span>
                       {/if}
                     </dd>
                   </div>
-                  <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty objects</dt>
-                    <dd class="text-lg font-semibold dark:text-white">{cache.dirtyObjects.toLocaleString()}</dd>
-                  </div>
-                  <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-neutral-500">Dirty bytes</dt>
-                    <dd class="text-lg font-semibold dark:text-white">{formatBytes(cache.dirtyBytes)}</dd>
-                  </div>
-                {/if}
+                  {#if objectDiskCache.maxSizeBytes > 0}
+                    <div
+                      class="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-coolgray-200"
+                    >
+                      <div
+                        class="h-full rounded-full bg-coollabs transition-[width] dark:bg-warning"
+                        style="width: {sizePercent}%"
+                      ></div>
+                    </div>
+                  {/if}
+                </div>
               </dl>
             </div>
+
+            <div
+              class="flex flex-col rounded-sm border-2 border-neutral-200 p-4 dark:border-coolgray-200 dark:bg-coolgray-300"
+            >
+              <p class="mb-4 text-xs font-medium uppercase tracking-wide text-neutral-500">
+                Writeback
+              </p>
+              <dl class="flex flex-1 flex-col gap-3">
+                <div class="flex items-baseline justify-between gap-4">
+                  <dt class="text-sm text-neutral-500">Dirty Objects</dt>
+                  <dd class="text-xl font-bold tabular-nums dark:text-white">
+                    {objectDiskCache.dirtyObjects.toLocaleString()}
+                  </dd>
+                </div>
+                <div
+                  class="mt-auto flex items-baseline justify-between gap-4 border-t border-neutral-200 pt-3 dark:border-coolgray-200"
+                >
+                  <dt class="text-sm font-medium text-neutral-500">Dirty Bytes</dt>
+                  <dd class="text-xl font-bold tabular-nums dark:text-white">
+                    {formatBytes(objectDiskCache.dirtyBytes)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </Card.Content>
+      </Card.Root>
+    {/if}
+
+    <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
+      <div class="mb-3 flex items-center gap-2">
+        <HardDrive class="size-5 text-coollabs dark:text-warning" />
+        <h3 class="text-base font-bold dark:text-white">Caches</h3>
+      </div>
+      <Table.Root>
+        <Table.Header>
+          <Table.Row>
+            <Table.Head>Cache</Table.Head>
+            <Table.Head class="text-right">Hits</Table.Head>
+            <Table.Head class="text-right">Misses</Table.Head>
+            <Table.Head class="text-right">Hit Rate</Table.Head>
+            <Table.Head class="text-right">Evictions</Table.Head>
+            <Table.Head class="text-right">Entries</Table.Head>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {#each otherCaches as cache (cache.id)}
+            <Table.Row>
+              <Table.Cell class="text-base font-bold dark:text-white">
+                {formatMetricName(cache.id)}
+              </Table.Cell>
+              <Table.Cell class="text-right">{cache.hits.toLocaleString()}</Table.Cell>
+              <Table.Cell class="text-right">{cache.misses.toLocaleString()}</Table.Cell>
+              <Table.Cell class="text-right">{hitRate(cache.hits, cache.misses)}</Table.Cell>
+              <Table.Cell class="text-right">{cache.evictions.toLocaleString()}</Table.Cell>
+              <Table.Cell class="text-right">{cache.entries.toLocaleString()}</Table.Cell>
+            </Table.Row>
           {/each}
-        </div>
-      {/if}
+        </Table.Body>
+      </Table.Root>
     </section>
 
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
       <div class="mb-3 flex items-center gap-2">
         <Package class="size-5 text-coollabs dark:text-warning" />
-        <h2 class="text-lg font-bold dark:text-white">Storage operations</h2>
+        <h3 class="text-base font-bold dark:text-white">Storage Operations</h3>
       </div>
       {#if data.storageOps.length === 0}
         <p class="text-sm text-neutral-500">No storage operations recorded yet.</p>
@@ -348,7 +429,9 @@
           <Table.Body>
             {#each data.storageOps as op}
               <Table.Row>
-                <Table.Cell class="font-mono text-sm">{op.operation}</Table.Cell>
+                <Table.Cell class="text-base font-bold dark:text-white">
+                  {formatOperationName(op.operation)}
+                </Table.Cell>
                 <Table.Cell class="text-right">{op.count.toLocaleString()}</Table.Cell>
                 <Table.Cell class="text-right">
                   {#if op.count > 0}
@@ -369,7 +452,7 @@
     <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
       <div class="mb-3 flex items-center gap-2">
         <Table2 class="size-5 text-coollabs dark:text-warning" />
-        <h2 class="text-lg font-bold dark:text-white">Metadata operations</h2>
+        <h3 class="text-base font-bold dark:text-white">Metadata Operations</h3>
       </div>
       {#if data.metadataOps.length === 0}
         <p class="text-sm text-neutral-500">No metadata operations recorded yet.</p>
@@ -385,7 +468,9 @@
           <Table.Body>
             {#each data.metadataOps as op}
               <Table.Row>
-                <Table.Cell class="font-mono text-sm">{op.operation}</Table.Cell>
+                <Table.Cell class="text-base font-bold dark:text-white">
+                  {formatOperationName(op.operation)}
+                </Table.Cell>
                 <Table.Cell class="text-right">{op.count.toLocaleString()}</Table.Cell>
                 <Table.Cell class="text-right">
                   {#if op.count > 0}
@@ -407,7 +492,7 @@
       <section class="rounded-sm border-2 border-neutral-200 bg-white p-4 dark:border-coolgray-200 dark:bg-coolgray-100">
         <div class="mb-3 flex items-center gap-2">
           <Cpu class="size-5 text-coollabs dark:text-warning" />
-          <h2 class="text-lg font-bold dark:text-white">Process</h2>
+          <h3 class="text-base font-bold dark:text-white">Process</h3>
         </div>
         <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
