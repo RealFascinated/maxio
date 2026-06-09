@@ -211,6 +211,12 @@ impl CacheLayer {
     /// adds files not yet indexed and removes entries whose files are gone.
     async fn run_merge_scan(&self) {
         let start = Instant::now();
+        // Snapshot LRU keys before the scan so we can distinguish truly new files
+        // from entries that were evicted by reserve_space during the scan. Without
+        // this, evicted entries (file deleted, LRU entry removed) would look like
+        // "unindexed" files seen on disk and get re-added as phantoms.
+        let pre_scan_keys: HashSet<ObjectKey> =
+            self.lru.lock().await.entries.keys().cloned().collect();
         let found = match self.scan_lru_entries().await {
             Ok(f) => f,
             Err(e) => {
@@ -223,10 +229,11 @@ impl CacheLayer {
         let now = Instant::now();
         let mut lru = self.lru.lock().await;
         let mut dirty = self.dirty.lock().await;
-        let stale: Vec<ObjectKey> = lru
-            .entries
-            .keys()
-            .filter(|k| !on_disk.contains_key(*k))
+        // Remove entries that were in the LRU at scan start but have no file on disk.
+        // Skip entries already removed by reserve_space during the scan.
+        let stale: Vec<ObjectKey> = pre_scan_keys
+            .iter()
+            .filter(|k| !on_disk.contains_key(*k) && lru.entries.contains_key(*k))
             .cloned()
             .collect();
         let mut removed: u64 = 0;
@@ -237,9 +244,11 @@ impl CacheLayer {
             dirty.remove(key);
             removed += 1;
         }
+        // Add files that are on disk but were not in the LRU at scan start.
+        // Skipping pre_scan_keys prevents re-adding entries evicted during the scan.
         let mut added: u64 = 0;
         for (key, size) in &on_disk {
-            if !lru.entries.contains_key(key) {
+            if !pre_scan_keys.contains(key) && !lru.entries.contains_key(key) {
                 lru.entries.insert(key.clone(), (now, *size));
                 lru.total_size += size;
                 added += 1;
@@ -452,7 +461,11 @@ impl CacheLayer {
                 m.record_cache_eviction(cache_name::OBJECT_DISK);
             }
             let path = self.object_path(&key.0, &key.1);
-            fs::remove_file(&path).await.map_err(StorageError::Io)?;
+            match fs::remove_file(&path).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(StorageError::Io(e)),
+            }
             {
                 let mut lru = self.lru.lock().await;
                 lru.entries.remove(&key);
@@ -591,6 +604,26 @@ impl CacheLayer {
             loop {
                 ticker.tick().await;
                 self.sync_gauges().await;
+            }
+        });
+    }
+
+    /// Periodically evicts LRU clean entries when `total_size` exceeds `max_size`.
+    pub fn spawn_trim_task(self: Arc<Self>) {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(30));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let over = {
+                    let lru = self.lru.lock().await;
+                    lru.total_size > self.max_size
+                };
+                if over {
+                    if let Err(e) = self.reserve_space(0).await {
+                        tracing::warn!("cache trim: {e}");
+                    }
+                }
             }
         });
     }

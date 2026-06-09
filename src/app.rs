@@ -44,6 +44,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         cache_handle = Some(Arc::clone(&cache));
         cache.clone().spawn_scan_task();
         cache.clone().spawn_gauge_task();
+        cache.clone().spawn_trim_task();
         cache.clone().spawn_flush_task();
         blobs.with_cache(cache)
     } else {
