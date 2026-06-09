@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-pub const LATENCY_WINDOW_SECS: u64 = 60;
+pub const LATENCY_WINDOW_SECS: u64 = 15;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
