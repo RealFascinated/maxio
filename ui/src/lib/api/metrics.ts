@@ -73,18 +73,6 @@ export interface MetricsSnapshot {
   process: ProcessSnapshot | null
 }
 
-/** Dev-only fixture for exercising the IOPS gauge (remove when done testing). */
-const DEV_OPS_TOTALS: OpsTotalsSnapshot = {
-  windowSeconds: 30,
-  readIops: 1_250,
-  writeIops: 750,
-  metaIops: 400,
-}
-
 export async function fetchMetrics(): Promise<MetricsSnapshot> {
-  const snapshot = await apiFetch<MetricsSnapshot>('/api/metrics')
-  if (import.meta.env.DEV) {
-    snapshot.opsTotals = DEV_OPS_TOTALS
-  }
-  return snapshot
+  return apiFetch<MetricsSnapshot>('/api/metrics')
 }

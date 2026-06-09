@@ -262,9 +262,9 @@
       </button>
 
       {#if showCaches}
-        <div class="mt-4 space-y-4 border-t border-neutral-200 pt-4 dark:border-coolgray-200">
+        <div class="mt-4 divide-y divide-neutral-200 border-t border-neutral-200 dark:divide-coolgray-200 dark:border-coolgray-200">
           {#each data.caches as cache (cache.id)}
-            <div>
+            <div class="py-4">
               <div class="mb-3 flex flex-wrap items-center gap-2">
                 <h3 class="text-base font-bold dark:text-white">{formatMetricName(cache.id)}</h3>
                 {#if isObjectDiskCache(cache)}
