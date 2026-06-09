@@ -17,7 +17,7 @@
   import { fetchMetrics, type CacheSnapshot } from '$lib/api/metrics'
   import { formatBytes, formatThroughput } from '$lib/format-bytes'
   import { cn } from '$lib/utils.js'
-  import { formatDuration, formatIops, formatLatency, formatMetricName, formatUptime, hitRate } from '$lib/format'
+  import { formatIops, formatLatency, formatMetricName, formatUptime, hitRate } from '$lib/format'
 
   const metricsQuery = createQuery(() => ({
     queryKey: metricsKeys.snapshot(),
@@ -351,7 +351,13 @@
                 <Table.Cell class="font-mono text-sm">{op.operation}</Table.Cell>
                 <Table.Cell class="text-right">{op.count.toLocaleString()}</Table.Cell>
                 <Table.Cell class="text-right">
-                  {formatDuration(op.count > 0 ? op.sumSeconds / op.count : 0)}
+                  {#if op.count > 0}
+                    {@const lat = formatLatency(op.sumSeconds / op.count)}
+                    {lat.value}{lat.unit ? ` ${lat.unit}` : ''}
+                  {:else}
+                    {@const lat = formatLatency(0)}
+                    {lat.value}{lat.unit ? ` ${lat.unit}` : ''}
+                  {/if}
                 </Table.Cell>
               </Table.Row>
             {/each}
@@ -382,7 +388,13 @@
                 <Table.Cell class="font-mono text-sm">{op.operation}</Table.Cell>
                 <Table.Cell class="text-right">{op.count.toLocaleString()}</Table.Cell>
                 <Table.Cell class="text-right">
-                  {formatDuration(op.count > 0 ? op.sumSeconds / op.count : 0)}
+                  {#if op.count > 0}
+                    {@const lat = formatLatency(op.sumSeconds / op.count)}
+                    {lat.value}{lat.unit ? ` ${lat.unit}` : ''}
+                  {:else}
+                    {@const lat = formatLatency(0)}
+                    {lat.value}{lat.unit ? ` ${lat.unit}` : ''}
+                  {/if}
                 </Table.Cell>
               </Table.Row>
             {/each}
