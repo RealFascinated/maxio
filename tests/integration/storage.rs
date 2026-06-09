@@ -234,7 +234,10 @@ async fn test_orphan_meta_scan_and_delete() {
     assert_eq!(orphans[0].bucket, "orphan-bucket");
     assert_eq!(orphans[0].key, "missing.txt");
 
-    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
+    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
+        Arc::new(pool),
+        maxio::config::MemoryCacheLimits::default(),
+    ));
     let removed = maxio::storage::orphans::delete_orphaned_meta(meta.as_ref(), &orphans)
         .await
         .unwrap();

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::api::console::LoginRateLimiter;
 use crate::auth::signing_key_cache::SigningKeyCache;
-use crate::config::Config;
+use crate::config::{Config, MemoryCacheLimits};
 use crate::db;
 use crate::iam::{CachingIamStore, IamStore, PgIamStore};
 use crate::metrics::MetricsRegistry;
@@ -21,9 +21,11 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     let pool = Arc::new(pool);
 
     let metrics = Arc::new(MetricsRegistry::new()?);
+    let cache_limits = MemoryCacheLimits::from(&config);
 
-    let meta: Arc<dyn MetadataStore> =
-        Arc::new(PgMetadataStore::new(pool.clone()).with_metrics(Arc::clone(&metrics)));
+    let meta: Arc<dyn MetadataStore> = Arc::new(
+        PgMetadataStore::new(pool.clone(), cache_limits).with_metrics(Arc::clone(&metrics)),
+    );
     let blobs = BlobStorage::new(&config.data_dir)
         .await?
         .with_metrics(Arc::clone(&metrics));
@@ -59,13 +61,17 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
 
     crate::storage::provision_default_buckets(storage.as_ref(), &config.default_buckets).await;
 
-    let signing_key_cache = Arc::new(SigningKeyCache::new(Some(Arc::clone(&metrics))));
+    let signing_key_cache = Arc::new(SigningKeyCache::new(
+        Some(Arc::clone(&metrics)),
+        cache_limits.signing_key_max_entries,
+    ));
     let pg_iam = Arc::new(PgIamStore::new(pool.clone()));
     let user_store: Arc<dyn IamStore> = Arc::new(CachingIamStore::new(
         pg_iam,
         Duration::from_secs(5 * 60),
         Arc::clone(&signing_key_cache),
         Some(Arc::clone(&metrics)),
+        cache_limits.iam_max_entries,
     ));
     let stats = BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
 

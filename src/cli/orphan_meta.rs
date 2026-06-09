@@ -33,7 +33,10 @@ pub async fn run(
     println!("{} orphaned metadata row(s)", orphans.len());
 
     if delete {
-        let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(pool));
+        let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
+            pool,
+            crate::config::MemoryCacheLimits::default(),
+        ));
         let removed = orphans::delete_orphaned_meta(meta.as_ref(), &orphans).await?;
         println!("✓ deleted {removed} orphaned metadata row(s)");
     }

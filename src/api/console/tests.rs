@@ -22,7 +22,10 @@ async fn test_storage(
     let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     crate::db::run_migrations(&database_url).await?;
     let pool = crate::db::create_pool(&database_url).await?;
-    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
+    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
+        Arc::new(pool),
+        crate::config::MemoryCacheLimits::default(),
+    ));
     let blobs = BlobStorage::new(data_dir).await?;
     Ok((Arc::new(ObjectStorage::new(blobs, meta)), postgres))
 }

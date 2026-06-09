@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
+use crate::config::MemoryCacheLimits;
 use crate::db::repos::{self, PutBucketContext};
 use crate::db::{DbContext, DbPool};
 use crate::metrics::MetricsRegistry;
@@ -15,19 +16,21 @@ use super::{BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, Sto
 pub struct PgMetadataStore {
     ctx: DbContext,
     metrics: Option<Arc<MetricsRegistry>>,
+    limits: MemoryCacheLimits,
 }
 
 impl PgMetadataStore {
-    pub fn new(pool: Arc<DbPool>) -> Self {
+    pub fn new(pool: Arc<DbPool>, limits: MemoryCacheLimits) -> Self {
         Self {
-            ctx: DbContext::new(pool, None),
+            ctx: DbContext::new(pool, None, limits),
             metrics: None,
+            limits,
         }
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
         self.metrics = Some(Arc::clone(&metrics));
-        self.ctx = DbContext::new(self.ctx.pool_arc(), Some(metrics));
+        self.ctx = DbContext::new(self.ctx.pool_arc(), Some(metrics), self.limits);
         self
     }
 

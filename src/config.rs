@@ -84,6 +84,30 @@ pub struct Config {
     #[arg(long, env = "MAXIO_CACHE_FLUSH_INTERVAL", default_value = "30")]
     pub cache_flush_interval: u64,
 
+    /// Max object read-metadata cache entries (MAXIO_OBJECT_READ_CACHE_MAX_ENTRIES).
+    #[arg(
+        long,
+        env = "MAXIO_OBJECT_READ_CACHE_MAX_ENTRIES",
+        default_value = "262144"
+    )]
+    pub object_read_cache_max_entries: usize,
+
+    /// Max bucket metadata cache entries (MAXIO_BUCKET_CACHE_MAX_ENTRIES).
+    #[arg(long, env = "MAXIO_BUCKET_CACHE_MAX_ENTRIES", default_value = "10000")]
+    pub bucket_cache_max_entries: usize,
+
+    /// Max signing key cache entries (MAXIO_SIGNING_KEY_CACHE_MAX_ENTRIES).
+    #[arg(
+        long,
+        env = "MAXIO_SIGNING_KEY_CACHE_MAX_ENTRIES",
+        default_value = "10000"
+    )]
+    pub signing_key_cache_max_entries: usize,
+
+    /// Max entries per IAM metadata sub-cache (MAXIO_IAM_CACHE_MAX_ENTRIES).
+    #[arg(long, env = "MAXIO_IAM_CACHE_MAX_ENTRIES", default_value = "10000")]
+    pub iam_cache_max_entries: usize,
+
     /// Public S3 base URL for presigned links (MAXIO_PUBLIC_URL), e.g. https://s3.example.com
     #[arg(long, env = "MAXIO_PUBLIC_URL")]
     pub public_url: Option<String>,
@@ -93,6 +117,37 @@ pub struct Config {
     /// Incompatible with bucket versioning (versioning takes the synchronous path regardless).
     #[arg(long, env = "MAXIO_ASYNC_META_WRITE", default_value = "false")]
     pub async_meta_write: bool,
+}
+
+/// Entry limits for in-memory metadata caches.
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryCacheLimits {
+    pub object_read_max_entries: usize,
+    pub bucket_max_entries: usize,
+    pub signing_key_max_entries: usize,
+    pub iam_max_entries: usize,
+}
+
+impl Default for MemoryCacheLimits {
+    fn default() -> Self {
+        Self {
+            object_read_max_entries: 262_144,
+            bucket_max_entries: 10_000,
+            signing_key_max_entries: 10_000,
+            iam_max_entries: 10_000,
+        }
+    }
+}
+
+impl From<&Config> for MemoryCacheLimits {
+    fn from(config: &Config) -> Self {
+        Self {
+            object_read_max_entries: config.object_read_cache_max_entries,
+            bucket_max_entries: config.bucket_cache_max_entries,
+            signing_key_max_entries: config.signing_key_cache_max_entries,
+            iam_max_entries: config.iam_cache_max_entries,
+        }
+    }
 }
 
 #[cfg(test)]

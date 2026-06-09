@@ -1,26 +1,29 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
 use crate::auth::signing_key_cache::SigningKeyCache;
+use crate::cache::MetricsLruCache;
 use crate::iam::iam_store::IamStore;
 use crate::iam::policy::PolicyDocument;
 use crate::iam::types::*;
 use crate::metrics::{MetricsRegistry, cache_name};
 
+#[derive(Clone)]
 struct KeyEntry {
     user: Arc<IamUser>,
     key: AccessKey,
     expires_at: Instant,
 }
 
+#[derive(Clone)]
 struct UserEntry {
     user: Arc<IamUser>,
     expires_at: Instant,
 }
 
+#[derive(Clone)]
 struct PoliciesEntry {
     policies: Arc<Vec<PolicyDocument>>,
     expires_at: Instant,
@@ -37,11 +40,10 @@ struct PoliciesEntry {
 pub struct CachingIamStore {
     inner: Arc<dyn IamStore>,
     ttl: Duration,
-    key_cache: RwLock<HashMap<String, KeyEntry>>,
-    user_cache: RwLock<HashMap<String, UserEntry>>,
-    policies_cache: RwLock<HashMap<String, PoliciesEntry>>,
+    key_cache: MetricsLruCache<String, KeyEntry>,
+    user_cache: MetricsLruCache<String, UserEntry>,
+    policies_cache: MetricsLruCache<String, PoliciesEntry>,
     signing_keys: Arc<SigningKeyCache>,
-    metrics: Option<Arc<MetricsRegistry>>,
 }
 
 impl CachingIamStore {
@@ -50,103 +52,66 @@ impl CachingIamStore {
         ttl: Duration,
         signing_keys: Arc<SigningKeyCache>,
         metrics: Option<Arc<MetricsRegistry>>,
+        max_entries: usize,
     ) -> Self {
         Self {
             inner,
             ttl,
-            key_cache: RwLock::new(HashMap::new()),
-            user_cache: RwLock::new(HashMap::new()),
-            policies_cache: RwLock::new(HashMap::new()),
+            key_cache: MetricsLruCache::new(
+                metrics.clone(),
+                cache_name::IAM_ACCESS_KEY,
+                max_entries,
+            ),
+            user_cache: MetricsLruCache::new(metrics.clone(), cache_name::IAM_USER, max_entries),
+            policies_cache: MetricsLruCache::new(metrics, cache_name::IAM_POLICIES, max_entries),
             signing_keys,
-            metrics,
         }
     }
 
     fn evict_key(&self, access_key_id: &str) {
-        if let Ok(mut cache) = self.key_cache.write() {
-            if cache.remove(access_key_id).is_some() {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_eviction(cache_name::IAM_ACCESS_KEY);
-                    m.set_cache_entries(cache_name::IAM_ACCESS_KEY, cache.len());
-                }
-            }
-        }
+        self.key_cache.remove(access_key_id);
         self.signing_keys.evict(access_key_id);
     }
 
     fn evict_user_policies(&self, username: &str) {
-        if let Ok(mut cache) = self.policies_cache.write() {
-            if cache.remove(username).is_some() {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_eviction(cache_name::IAM_POLICIES);
-                    m.set_cache_entries(cache_name::IAM_POLICIES, cache.len());
-                }
-            }
-        }
+        self.policies_cache.remove(username);
     }
 
-    fn sync_key_entries(&self, entries: usize) {
-        if let Some(m) = &self.metrics {
-            m.set_cache_entries(cache_name::IAM_ACCESS_KEY, entries);
-        }
-    }
-
-    fn sync_user_entries(&self, entries: usize) {
-        if let Some(m) = &self.metrics {
-            m.set_cache_entries(cache_name::IAM_USER, entries);
-        }
-    }
-
-    fn sync_policies_entries(&self, entries: usize) {
-        if let Some(m) = &self.metrics {
-            m.set_cache_entries(cache_name::IAM_POLICIES, entries);
-        }
+    fn entry_valid(expires_at: Instant) -> bool {
+        expires_at > Instant::now()
     }
 }
 
 #[async_trait]
 impl IamStore for CachingIamStore {
     async fn lookup_by_access_key(&self, access_key_id: &str) -> Option<(IamUser, AccessKey)> {
+        if let Some(entry) = self
+            .key_cache
+            .get_if(access_key_id, |e| Self::entry_valid(e.expires_at))
         {
-            let cache = self.key_cache.read().ok()?;
-            if let Some(entry) = cache.get(access_key_id) {
-                if entry.expires_at > Instant::now() {
-                    if let Some(m) = &self.metrics {
-                        m.record_cache_hit(cache_name::IAM_ACCESS_KEY);
-                    }
-                    return Some(((*entry.user).clone(), entry.key.clone()));
-                }
-            }
+            return Some(((*entry.user).clone(), entry.key.clone()));
         }
 
-        if let Some(m) = &self.metrics {
-            m.record_cache_miss(cache_name::IAM_ACCESS_KEY);
-        }
+        self.key_cache.record_miss();
         let (user, key) = self.inner.lookup_by_access_key(access_key_id).await?;
         let expires_at = Instant::now() + self.ttl;
         let user_arc = Arc::new(user.clone());
 
-        if let Ok(mut cache) = self.key_cache.write() {
-            cache.insert(
-                access_key_id.to_string(),
-                KeyEntry {
-                    user: Arc::clone(&user_arc),
-                    key: key.clone(),
-                    expires_at,
-                },
-            );
-            self.sync_key_entries(cache.len());
-        }
-        if let Ok(mut cache) = self.user_cache.write() {
-            cache.insert(
-                user.username.clone(),
-                UserEntry {
-                    user: user_arc,
-                    expires_at,
-                },
-            );
-            self.sync_user_entries(cache.len());
-        }
+        self.key_cache.insert(
+            access_key_id.to_string(),
+            KeyEntry {
+                user: Arc::clone(&user_arc),
+                key: key.clone(),
+                expires_at,
+            },
+        );
+        self.user_cache.insert(
+            user.username.clone(),
+            UserEntry {
+                user: user_arc,
+                expires_at,
+            },
+        );
         Some((user, key))
     }
 
@@ -161,34 +126,23 @@ impl IamStore for CachingIamStore {
     }
 
     async fn get_user(&self, username: &str) -> Option<IamUser> {
+        if let Some(entry) = self
+            .user_cache
+            .get_if(username, |e| Self::entry_valid(e.expires_at))
         {
-            if let Ok(cache) = self.user_cache.read() {
-                if let Some(entry) = cache.get(username) {
-                    if entry.expires_at > Instant::now() {
-                        if let Some(m) = &self.metrics {
-                            m.record_cache_hit(cache_name::IAM_USER);
-                        }
-                        return Some((*entry.user).clone());
-                    }
-                }
-            }
+            return Some((*entry.user).clone());
         }
 
-        if let Some(m) = &self.metrics {
-            m.record_cache_miss(cache_name::IAM_USER);
-        }
+        self.user_cache.record_miss();
         let user = self.inner.get_user(username).await?;
         let expires_at = Instant::now() + self.ttl;
-        if let Ok(mut cache) = self.user_cache.write() {
-            cache.insert(
-                username.to_string(),
-                UserEntry {
-                    user: Arc::new(user.clone()),
-                    expires_at,
-                },
-            );
-            self.sync_user_entries(cache.len());
-        }
+        self.user_cache.insert(
+            username.to_string(),
+            UserEntry {
+                user: Arc::new(user.clone()),
+                expires_at,
+            },
+        );
         Some(user)
     }
 
@@ -197,34 +151,23 @@ impl IamStore for CachingIamStore {
     }
 
     async fn effective_policies(&self, user: &IamUser) -> Vec<PolicyDocument> {
+        if let Some(entry) = self
+            .policies_cache
+            .get_if(&user.username, |e| Self::entry_valid(e.expires_at))
         {
-            if let Ok(cache) = self.policies_cache.read() {
-                if let Some(entry) = cache.get(&user.username) {
-                    if entry.expires_at > Instant::now() {
-                        if let Some(m) = &self.metrics {
-                            m.record_cache_hit(cache_name::IAM_POLICIES);
-                        }
-                        return (*entry.policies).clone();
-                    }
-                }
-            }
+            return (*entry.policies).clone();
         }
 
-        if let Some(m) = &self.metrics {
-            m.record_cache_miss(cache_name::IAM_POLICIES);
-        }
+        self.policies_cache.record_miss();
         let policies = self.inner.effective_policies(user).await;
         let expires_at = Instant::now() + self.ttl;
-        if let Ok(mut cache) = self.policies_cache.write() {
-            cache.insert(
-                user.username.clone(),
-                PoliciesEntry {
-                    policies: Arc::new(policies.clone()),
-                    expires_at,
-                },
-            );
-            self.sync_policies_entries(cache.len());
-        }
+        self.policies_cache.insert(
+            user.username.clone(),
+            PoliciesEntry {
+                policies: Arc::new(policies.clone()),
+                expires_at,
+            },
+        );
         policies
     }
 

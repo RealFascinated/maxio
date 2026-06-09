@@ -56,7 +56,10 @@ pub async fn start_postgres() -> (testcontainers::ContainerAsync<Postgres>, Stri
 pub async fn create_storage(data_dir: &str, database_url: &str) -> Arc<dyn Storage> {
     maxio::db::run_migrations(database_url).await.unwrap();
     let pool = maxio::db::create_pool(database_url).await.unwrap();
-    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(Arc::new(pool)));
+    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
+        Arc::new(pool),
+        maxio::config::MemoryCacheLimits::default(),
+    ));
     let blobs = BlobStorage::new(data_dir).await.unwrap();
     Arc::new(ObjectStorage::new(blobs, meta))
 }
@@ -78,6 +81,10 @@ pub fn test_config(data_dir: String, database_url: String, default_buckets: &str
         cache_max_size: 10 * 1024 * 1024 * 1024,
         cache_writeback: false,
         cache_flush_interval: 30,
+        object_read_cache_max_entries: 262_144,
+        bucket_cache_max_entries: 10_000,
+        signing_key_cache_max_entries: 10_000,
+        iam_cache_max_entries: 10_000,
         public_url: None,
         async_meta_write: false,
     }
@@ -101,7 +108,10 @@ pub async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> A
         metrics,
         stats,
         cache: None,
-        signing_key_cache: Arc::new(maxio::auth::signing_key_cache::SigningKeyCache::new(None)),
+        signing_key_cache: Arc::new(maxio::auth::signing_key_cache::SigningKeyCache::new(
+            None,
+            maxio::config::MemoryCacheLimits::default().signing_key_max_entries,
+        )),
     }
 }
 

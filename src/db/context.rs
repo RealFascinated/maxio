@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::DbPool;
 use super::bucket_cache::BucketCache;
 use super::object_read_cache::ObjectReadCache;
+use crate::config::MemoryCacheLimits;
 use crate::metrics::MetricsRegistry;
 
 /// Shared database pool plus process-local caches for metadata hot paths.
@@ -14,11 +15,18 @@ pub struct DbContext {
 }
 
 impl DbContext {
-    pub fn new(pool: Arc<DbPool>, metrics: Option<Arc<MetricsRegistry>>) -> Self {
+    pub fn new(
+        pool: Arc<DbPool>,
+        metrics: Option<Arc<MetricsRegistry>>,
+        limits: MemoryCacheLimits,
+    ) -> Self {
         Self {
             pool,
-            bucket_cache: Arc::new(BucketCache::new(metrics.clone())),
-            object_read_cache: Arc::new(ObjectReadCache::new(metrics)),
+            bucket_cache: Arc::new(BucketCache::new(metrics.clone(), limits.bucket_max_entries)),
+            object_read_cache: Arc::new(ObjectReadCache::new(
+                metrics,
+                limits.object_read_max_entries,
+            )),
         }
     }
 

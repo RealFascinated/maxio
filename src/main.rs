@@ -18,6 +18,7 @@
 mod api;
 mod app;
 mod auth;
+mod cache;
 mod cli;
 mod config;
 mod db;

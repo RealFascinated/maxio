@@ -2,6 +2,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::config::MemoryCacheLimits;
 use crate::db::repos::{self, MetaBlobSource};
 use crate::db::{DbContext, DbPool};
 
@@ -35,7 +36,7 @@ pub async fn scan_orphaned_meta(
     blobs: &BlobStorage,
     cache_dir: Option<&str>,
 ) -> Result<Vec<OrphanMetaEntry>, StorageError> {
-    let ctx = DbContext::new(pool, None);
+    let ctx = DbContext::new(pool, None, MemoryCacheLimits::default());
     eprintln!("loading metadata from database...");
     let refs = repos::list_blob_backed_meta(&ctx).await?;
     let total = refs.len();

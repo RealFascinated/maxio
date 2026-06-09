@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
+use crate::cache::MetricsLruCache;
 use crate::metrics::{MetricsRegistry, cache_name};
 
 /// Cached entry: (date, region, derived_key).
@@ -10,16 +10,13 @@ type CacheEntry = (String, String, Vec<u8>);
 /// (secret_key, date, region) only changes once per day, so caching it
 /// eliminates 4 sequential HMAC-SHA256 operations on every authenticated request.
 pub struct SigningKeyCache {
-    /// access_key_id → (date, region, derived_key)
-    entries: RwLock<HashMap<String, CacheEntry>>,
-    metrics: Option<Arc<MetricsRegistry>>,
+    entries: MetricsLruCache<String, CacheEntry>,
 }
 
 impl SigningKeyCache {
-    pub fn new(metrics: Option<Arc<MetricsRegistry>>) -> Self {
+    pub fn new(metrics: Option<Arc<MetricsRegistry>>, max_entries: usize) -> Self {
         Self {
-            entries: RwLock::new(HashMap::new()),
-            metrics,
+            entries: MetricsLruCache::new(metrics, cache_name::SIGNING_KEY, max_entries),
         }
     }
 
@@ -32,41 +29,22 @@ impl SigningKeyCache {
         region: &str,
         secret_key: &str,
     ) -> Vec<u8> {
-        if let Ok(entries) = self.entries.read() {
-            if let Some((cached_date, cached_region, key)) = entries.get(access_key_id) {
-                if cached_date == date && cached_region == region {
-                    if let Some(m) = &self.metrics {
-                        m.record_cache_hit(cache_name::SIGNING_KEY);
-                    }
-                    return key.clone();
-                }
+        let key = access_key_id.to_string();
+        if let Some((cached_date, cached_region, derived)) = self.entries.lookup(&key) {
+            if cached_date == date && cached_region == region {
+                self.entries.record_hit();
+                return derived;
             }
         }
-        if let Some(m) = &self.metrics {
-            m.record_cache_miss(cache_name::SIGNING_KEY);
-        }
-        let key = super::signature_v4::derive_signing_key(secret_key, date, region);
-        if let Ok(mut entries) = self.entries.write() {
-            entries.insert(
-                access_key_id.to_string(),
-                (date.to_string(), region.to_string(), key.clone()),
-            );
-            if let Some(m) = &self.metrics {
-                m.set_cache_entries(cache_name::SIGNING_KEY, entries.len());
-            }
-        }
-        key
+        self.entries.record_miss();
+        let derived = super::signature_v4::derive_signing_key(secret_key, date, region);
+        self.entries
+            .insert(key, (date.to_string(), region.to_string(), derived.clone()));
+        derived
     }
 
     /// Removes the entry for an access key (call on key deletion/deactivation).
     pub fn evict(&self, access_key_id: &str) {
-        if let Ok(mut entries) = self.entries.write() {
-            if entries.remove(access_key_id).is_some() {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_eviction(cache_name::SIGNING_KEY);
-                    m.set_cache_entries(cache_name::SIGNING_KEY, entries.len());
-                }
-            }
-        }
+        self.entries.remove(access_key_id);
     }
 }
