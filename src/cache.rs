@@ -165,7 +165,8 @@ where
         if let Ok(mut map) = self.inner.write() {
             let keys: Vec<K> = map
                 .iter()
-                .filter_map(|(k, _)| pred(k).then(|| k.clone()))
+                .filter(|(k, _)| pred(k))
+                .map(|(k, _)| k.clone())
                 .collect();
             let removed = keys.len() as u64;
             for key in keys {
