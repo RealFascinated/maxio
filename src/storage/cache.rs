@@ -667,6 +667,22 @@ impl CacheLayer {
         });
     }
 
+    /// Periodically persists the LRU index so restarts re-discover fewer files.
+    pub fn spawn_index_save_task(self: Arc<Self>) {
+        tokio::spawn(async move {
+            self.wait_until_scan_complete().await;
+            let mut ticker = tokio::time::interval(Duration::from_secs(5 * 60));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            ticker.tick().await; // skip the immediate first tick
+            loop {
+                ticker.tick().await;
+                if let Err(e) = self.save_index().await {
+                    tracing::warn!("cache: periodic index save failed: {e}");
+                }
+            }
+        });
+    }
+
     pub fn spawn_flush_task(self: Arc<Self>) {
         if !self.writeback {
             return;

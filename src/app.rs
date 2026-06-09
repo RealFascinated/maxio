@@ -45,6 +45,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         cache.clone().spawn_scan_task();
         cache.clone().spawn_gauge_task();
         cache.clone().spawn_trim_task();
+        cache.clone().spawn_index_save_task();
         cache.clone().spawn_flush_task();
         blobs.with_cache(cache)
     } else {
