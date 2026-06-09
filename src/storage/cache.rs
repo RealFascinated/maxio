@@ -116,7 +116,6 @@ impl CacheLayer {
         *self.dirty.lock().await = dirty;
     }
 
-
     pub async fn save_index(&self) -> Result<(), anyhow::Error> {
         let lru = self.lru.lock().await;
         let dirty = self.dirty.lock().await;
