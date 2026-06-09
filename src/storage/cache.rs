@@ -150,7 +150,10 @@ impl CacheLayer {
             }
             dirty.remove(key);
         }
-        tracing::info!(removed = missing.len(), "cache: removed stale index entries");
+        tracing::info!(
+            removed = missing.len(),
+            "cache: removed stale index entries"
+        );
     }
 
     pub async fn save_index(&self) -> Result<(), anyhow::Error> {
