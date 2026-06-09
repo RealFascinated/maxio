@@ -37,6 +37,46 @@ pub(super) async fn upsert_object_conn(
     Ok(())
 }
 
+fn staged_write_still_current(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+    last_modified: &str,
+) -> bool {
+    match ctx.object_read_cache().lookup(bucket_name, key) {
+        ReadCacheLookup::Absent => false,
+        ReadCacheLookup::Hit(cached) => cached.last_modified == last_modified,
+        ReadCacheLookup::Miss => true,
+    }
+}
+
+pub fn defer_object_upsert(
+    ctx: &DbContext,
+    bucket_name: &str,
+    meta: &ObjectMeta,
+    put_ctx: Option<PutBucketContext>,
+) {
+    write_through_read_cache(ctx, bucket_name, meta);
+
+    let ctx = ctx.clone();
+    let bucket_name = bucket_name.to_string();
+    let meta = meta.clone();
+    let staged_at = meta.last_modified.clone();
+    tokio::spawn(async move {
+        if !staged_write_still_current(&ctx, &bucket_name, &meta.key, &staged_at) {
+            return;
+        }
+        if let Err(e) = upsert_object(&ctx, &bucket_name, &meta, put_ctx.as_ref()).await {
+            tracing::warn!(
+                bucket = %bucket_name,
+                key = %meta.key,
+                error = %e,
+                "async metadata write failed"
+            );
+        }
+    });
+}
+
 pub async fn upsert_object(
     ctx: &DbContext,
     bucket_name: &str,
