@@ -3,6 +3,7 @@ mod admin;
 mod auth;
 mod bucket_settings;
 mod buckets;
+mod maintenance;
 mod metrics;
 mod objects;
 mod session;
@@ -24,6 +25,7 @@ use axum::{
 };
 use bucket_settings::{get_cors, get_public, get_versioning, set_cors, set_public, set_versioning};
 use buckets::{create_bucket, delete_bucket_api, list_buckets};
+use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
 use metrics::get_metrics_api;
 use objects::{
     create_folder, delete_object_api, download_object, list_objects, presign_object, upload_object,
@@ -42,6 +44,11 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .layer(json_body_limit);
 
     let admin_routes: Router<AppState> = Router::new()
+        .route("/maintenance/orphan-meta", get(scan_orphan_meta_api))
+        .route(
+            "/maintenance/orphan-meta/repair",
+            post(repair_orphan_meta_api),
+        )
         .route("/metrics", get(get_metrics_api))
         .route("/users", get(admin::list_users_api))
         .route("/users", post(admin::create_user_api))

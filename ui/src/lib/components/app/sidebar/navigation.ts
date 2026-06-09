@@ -1,9 +1,10 @@
 import Home from 'lucide-svelte/icons/home'
 import UsersIcon from 'lucide-svelte/icons/users'
 import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
+import Settings from 'lucide-svelte/icons/settings'
 import type { Component } from 'svelte'
 
-export type AppView = 'objects' | 'settings' | 'users' | 'metrics'
+export type AppView = 'objects' | 'settings' | 'users' | 'metrics' | 'serverSettings'
 
 export interface SidebarNavEntry {
   id: string
@@ -23,6 +24,7 @@ export interface NavHandlers {
   goHome: () => void
   goUsers: () => void
   goMetrics: () => void
+  goServerSettings: () => void
 }
 
 interface NavItemDef {
@@ -42,6 +44,7 @@ const mainNavItems: NavItemDef[] = [
     isActive: (ctx) =>
       ctx.currentView !== 'users' &&
       ctx.currentView !== 'metrics' &&
+      ctx.currentView !== 'serverSettings' &&
       ctx.selectedBucket === null,
     onSelect: (handlers) => handlers.goHome,
   },
@@ -60,6 +63,14 @@ const mainNavItems: NavItemDef[] = [
     visible: (ctx) => ctx.isRootUser,
     isActive: (ctx) => ctx.currentView === 'metrics',
     onSelect: (handlers) => handlers.goMetrics,
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    icon: Settings,
+    visible: (ctx) => ctx.isRootUser,
+    isActive: (ctx) => ctx.currentView === 'serverSettings',
+    onSelect: (handlers) => handlers.goServerSettings,
   },
 ]
 

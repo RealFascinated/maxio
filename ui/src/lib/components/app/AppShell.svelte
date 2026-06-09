@@ -8,6 +8,7 @@
   import BucketSettings from "$lib/components/BucketSettings.svelte";
   import UserList from "$lib/components/UserList.svelte";
   import Metrics from "$lib/components/Metrics.svelte";
+  import ServerSettings from "$lib/components/ServerSettings.svelte";
   import AppSidebar from "$lib/components/app/sidebar/AppSidebar.svelte";
   import { buildSidebarNavItems } from "$lib/components/app/sidebar/navigation";
   import {
@@ -42,7 +43,7 @@
   let sessionIsRoot = $state<boolean | null>(null);
   let collapsed = $state(false);
   let selectedBucket = $state<string | null>(null);
-  let currentView = $state<"objects" | "settings" | "users" | "metrics">("objects");
+  let currentView = $state<"objects" | "settings" | "users" | "metrics" | "serverSettings">("objects");
   let objectBrowserRef = $state<ObjectBrowser | null>(null);
   let currentPrefix = $state("");
   let currentBreadcrumbs = $state<{ label: string; prefix: string }[]>([]);
@@ -68,7 +69,7 @@
   const sidebarNavItems = $derived(
     buildSidebarNavItems(
       { currentView, selectedBucket, isRootUser },
-      { goHome, goUsers, goMetrics },
+      { goHome, goUsers, goMetrics, goServerSettings },
     ).map((item) => ({
       ...item,
       onSelect: () => {
@@ -109,7 +110,12 @@
     const authResolved =
       authenticatedOverride !== null || authQuery.isSuccess || authQuery.isError;
     if (!authResolved) return;
-    if ((currentView === "users" || currentView === "metrics") && !isRootUser) {
+    if (
+      (currentView === "users" ||
+        currentView === "metrics" ||
+        currentView === "serverSettings") &&
+      !isRootUser
+    ) {
       goHome();
     }
   });
@@ -129,6 +135,11 @@
     } else if (hash === "/metrics") {
       selectedBucket = null;
       currentView = "metrics";
+      currentPrefix = "";
+      currentBreadcrumbs = [];
+    } else if (hash === "/settings") {
+      selectedBucket = null;
+      currentView = "serverSettings";
       currentPrefix = "";
       currentBreadcrumbs = [];
     } else {
@@ -255,6 +266,14 @@
     currentPrefix = "";
     currentBreadcrumbs = [];
     window.location.hash = "/metrics";
+  }
+
+  function goServerSettings() {
+    selectedBucket = null;
+    currentView = "serverSettings";
+    currentPrefix = "";
+    currentBreadcrumbs = [];
+    window.location.hash = "/settings";
   }
 
   function handlePrefixChange(p: string, crumbs: { label: string; prefix: string }[]) {
@@ -402,6 +421,8 @@
           <UserList />
         {:else if currentView === "metrics" && isRootUser}
           <Metrics />
+        {:else if currentView === "serverSettings" && isRootUser}
+          <ServerSettings />
         {:else if selectedBucket && currentView === "settings"}
           <BucketSettings
             bucket={selectedBucket}

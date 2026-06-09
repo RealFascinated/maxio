@@ -40,3 +40,8 @@ export const metricsKeys = {
   all: ['metrics'] as const,
   snapshot: () => [...metricsKeys.all, 'snapshot'] as const,
 }
+
+export const maintenanceKeys = {
+  all: ['maintenance'] as const,
+  orphanMeta: () => [...maintenanceKeys.all, 'orphan-meta'] as const,
+}
