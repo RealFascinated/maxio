@@ -641,15 +641,9 @@ impl BlobStorage {
 
         for part in parts {
             let part_path = self.part_path(bucket, upload_id, part.part_number);
-            let mut part_stream: ByteStream = Box::pin(fs::File::open(&part_path).await?);
-            loop {
-                let n = part_stream.read(&mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                total_size += n as u64;
-                writer.write_all(&buf[..n]).await?;
-            }
+            let part_file = fs::File::open(&part_path).await?;
+            let mut part_stream = BufReader::with_capacity(IO_BUFFER_SIZE, part_file);
+            total_size += stream_to_writer(&mut part_stream, &mut writer, &mut buf).await?;
 
             let raw_md5 = hex::decode(part.etag.trim_matches('"'))
                 .map_err(|_| StorageError::InvalidKey("invalid part etag".into()))?;
@@ -888,6 +882,31 @@ impl Drop for TempPathGuard {
     }
 }
 
+/// Copy `reader` into `writer` using a fixed-size buffer (never the whole object).
+async fn stream_to_writer<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    buf: &mut [u8],
+) -> Result<u64, StorageError>
+where
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+{
+    let mut total = 0u64;
+    loop {
+        let n = reader.read(buf).await.map_err(StorageError::Io)?;
+        if n == 0 {
+            break;
+        }
+        writer
+            .write_all(&buf[..n])
+            .await
+            .map_err(StorageError::Io)?;
+        total += n as u64;
+    }
+    Ok(total)
+}
+
 async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
     match fs::remove_file(path).await {
         Ok(()) => Ok(()),
@@ -1085,6 +1104,171 @@ mod read_path_tests {
             !tokio::fs::try_exists(&data_path).await.unwrap(),
             "data file should be removed in background"
         );
+    }
+}
+
+#[cfg(test)]
+mod assemble_multipart_tests {
+    use super::*;
+    use crate::storage::PartMeta;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
+    use tempfile::TempDir;
+    use tokio::io::{AsyncRead, ReadBuf};
+
+    const FIVE_GIB: u64 = 5 * 1024 * 1024 * 1024;
+
+    struct LargePartReader {
+        remaining: u64,
+        max_buf_capacity: Arc<AtomicUsize>,
+    }
+
+    impl AsyncRead for LargePartReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let capacity = buf.remaining();
+            self.max_buf_capacity.fetch_max(capacity, Ordering::Relaxed);
+            if self.remaining == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            let n = capacity.min(self.remaining as usize);
+            buf.put_slice(&[0x42; IO_BUFFER_SIZE][..n]);
+            self.remaining -= n as u64;
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_to_writer_does_not_buffer_whole_part() {
+        let max_buf_capacity = Arc::new(AtomicUsize::new(0));
+        let mut reader = LargePartReader {
+            remaining: FIVE_GIB,
+            max_buf_capacity: Arc::clone(&max_buf_capacity),
+        };
+        let dir = TempDir::new().unwrap();
+        let out_path = dir.path().join("out.bin");
+        let out = fs::File::create(&out_path).await.unwrap();
+        let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, out);
+        let mut buf = vec![0u8; IO_BUFFER_SIZE];
+
+        let copied = stream_to_writer(&mut reader, &mut writer, &mut buf)
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        assert_eq!(copied, FIVE_GIB);
+        assert_eq!(
+            tokio::fs::metadata(&out_path).await.unwrap().len(),
+            FIVE_GIB
+        );
+        assert!(
+            max_buf_capacity.load(Ordering::Relaxed) <= IO_BUFFER_SIZE,
+            "peak read buffer capacity was {} bytes, expected <= {}",
+            max_buf_capacity.load(Ordering::Relaxed),
+            IO_BUFFER_SIZE
+        );
+    }
+
+    async fn etag_for_file(path: &Path) -> String {
+        let mut file = fs::File::open(path).await.unwrap();
+        let mut hasher = EtagMd5::new();
+        let mut buf = vec![0u8; IO_BUFFER_SIZE];
+        loop {
+            let n = file.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        format!("\"{}\"", hex::encode(hasher.finalize()))
+    }
+
+    async fn write_sparse_part(path: &Path, size: u64, head: u8, tail: u8) {
+        let mut file = fs::File::create(path).await.unwrap();
+        file.set_len(size).await.unwrap();
+        file.write_all(&[head]).await.unwrap();
+        file.seek(std::io::SeekFrom::Start(size - 1))
+            .await
+            .unwrap();
+        file.write_all(&[tail]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn assemble_multipart_streams_five_gib_sparse_parts() {
+        let data_root = TempDir::new().unwrap();
+        let blobs = BlobStorage::new(data_root.path().to_str().unwrap())
+            .await
+            .unwrap();
+
+        let bucket = "mp-bucket";
+        let upload_id = "upload-1";
+        blobs.ensure_upload_dir(bucket, upload_id).await.unwrap();
+
+        let part1_path = blobs.part_path(bucket, upload_id, 1);
+        write_sparse_part(&part1_path, FIVE_GIB, b'A', b'Z').await;
+        let part1_etag = etag_for_file(&part1_path).await;
+
+        let part2_path = blobs.part_path(bucket, upload_id, 2);
+        tokio::fs::write(&part2_path, b"tail-part").await.unwrap();
+        let part2_etag = etag_for_file(&part2_path).await;
+
+        let parts = vec![
+            PartMeta {
+                part_number: 1,
+                etag: part1_etag,
+                size: FIVE_GIB,
+                last_modified: "2025-01-01T00:00:00.000Z".to_string(),
+                checksum_algorithm: None,
+                checksum_value: None,
+            },
+            PartMeta {
+                part_number: 2,
+                etag: part2_etag,
+                size: 9,
+                last_modified: "2025-01-01T00:00:00.000Z".to_string(),
+                checksum_algorithm: None,
+                checksum_value: None,
+            },
+        ];
+
+        let written = blobs
+            .assemble_multipart_temp(bucket, "large.bin", upload_id, &parts)
+            .await
+            .unwrap();
+
+        assert_eq!(written.size, FIVE_GIB + 9);
+        assert_eq!(
+            tokio::fs::metadata(&written.tmp_path).await.unwrap().len(),
+            FIVE_GIB + 9
+        );
+
+        let mut assembled = fs::File::open(&written.tmp_path).await.unwrap();
+        let mut head = [0u8; 1];
+        assembled.read_exact(&mut head).await.unwrap();
+        assert_eq!(head, [b'A']);
+
+        assembled
+            .seek(std::io::SeekFrom::Start(FIVE_GIB - 1))
+            .await
+            .unwrap();
+        let mut part1_tail = [0u8; 1];
+        assembled.read_exact(&mut part1_tail).await.unwrap();
+        assert_eq!(part1_tail, [b'Z']);
+
+        assembled
+            .seek(std::io::SeekFrom::Start(FIVE_GIB))
+            .await
+            .unwrap();
+        let mut tail = [0u8; 9];
+        assembled.read_exact(&mut tail).await.unwrap();
+        assert_eq!(&tail, b"tail-part");
+
+        let _ = tokio::fs::remove_file(&written.tmp_path).await;
     }
 }
 
