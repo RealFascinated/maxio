@@ -100,9 +100,14 @@ where
 
     pub fn insert(&self, key: K, value: V) {
         if let Ok(mut map) = self.inner.write() {
-            if map.push(key, value).is_some() {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_eviction(self.name);
+            // `push` returns `Some` on in-place updates too; only a returned *different*
+            // key is an LRU capacity eviction.
+            let inserted = key.clone();
+            if let Some((evicted_key, _)) = map.push(key, value) {
+                if evicted_key != inserted {
+                    if let Some(m) = &self.metrics {
+                        m.record_cache_eviction(self.name);
+                    }
                 }
             }
             self.sync_entries(map.len());
@@ -202,5 +207,13 @@ mod tests {
         assert_eq!(cache.get(&"first"), Some("1"));
         assert_eq!(cache.get(&"second"), None);
         assert_eq!(cache.get(&"third"), Some("3"));
+    }
+
+    #[test]
+    fn update_does_not_count_as_eviction() {
+        let cache = MetricsLruCache::<&str, &str>::new(None, "test", 2);
+        cache.insert("key", "v1");
+        cache.insert("key", "v2");
+        assert_eq!(cache.get(&"key"), Some("v2"));
     }
 }
