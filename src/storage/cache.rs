@@ -615,14 +615,28 @@ impl CacheLayer {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                let over = {
+                let size_before = {
                     let lru = self.lru.lock().await;
-                    lru.total_size > self.max_size
+                    lru.total_size
                 };
-                if over {
-                    if let Err(e) = self.reserve_space(0).await {
-                        tracing::warn!("cache trim: {e}");
+                if size_before <= self.max_size {
+                    continue;
+                }
+                tracing::info!(
+                    size_gb = size_before as f64 / 1e9,
+                    max_gb = self.max_size as f64 / 1e9,
+                    "cache: over limit, trimming"
+                );
+                match self.reserve_space(0).await {
+                    Ok(_) => {
+                        let size_after = self.lru.lock().await.total_size;
+                        tracing::info!(
+                            freed_gb = size_before.saturating_sub(size_after) as f64 / 1e9,
+                            size_gb = size_after as f64 / 1e9,
+                            "cache: trim complete"
+                        );
                     }
+                    Err(e) => tracing::warn!("cache trim failed: {e}"),
                 }
             }
         });
