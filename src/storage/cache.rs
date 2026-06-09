@@ -71,7 +71,6 @@ impl CacheLayer {
         };
         if let Some((entries, dirty)) = layer.load_index().await? {
             layer.apply_index(entries, dirty).await;
-            layer.reconcile_index().await;
             layer.recalc_dirty_bytes().await;
             layer.scan_complete.store(true, Ordering::Release);
             layer.dirty_scan_complete.store(true, Ordering::Release);
@@ -117,44 +116,6 @@ impl CacheLayer {
         *self.dirty.lock().await = dirty;
     }
 
-    /// Removes LRU entries whose cache files no longer exist on disk.
-    /// Called after loading the index to evict stale entries from crashed/external removals.
-    async fn reconcile_index(&self) {
-        let candidates: Vec<ObjectKey> = self.lru.lock().await.entries.keys().cloned().collect();
-        let buckets_dir = self.buckets_dir.clone();
-        let missing: Vec<ObjectKey> = stream::iter(candidates)
-            .map(|(bucket, key)| {
-                let buckets_dir = buckets_dir.clone();
-                async move {
-                    let path = super::blob::object_path_in(&buckets_dir, &bucket, &key);
-                    if fs::try_exists(&path).await.unwrap_or(true) {
-                        None
-                    } else {
-                        Some((bucket, key))
-                    }
-                }
-            })
-            .buffer_unordered(512)
-            .filter_map(|e| async move { e })
-            .collect()
-            .await;
-
-        if missing.is_empty() {
-            return;
-        }
-        let mut lru = self.lru.lock().await;
-        let mut dirty = self.dirty.lock().await;
-        for key in &missing {
-            if let Some((_, size)) = lru.entries.remove(key) {
-                lru.total_size = lru.total_size.saturating_sub(size);
-            }
-            dirty.remove(key);
-        }
-        tracing::info!(
-            removed = missing.len(),
-            "cache: removed stale index entries"
-        );
-    }
 
     pub async fn save_index(&self) -> Result<(), anyhow::Error> {
         let lru = self.lru.lock().await;
@@ -188,10 +149,15 @@ impl CacheLayer {
         self.dirty_scan_ready.notified().await;
     }
 
-    /// Walks the cache directory to rebuild LRU state. Runs in the background on startup
-    /// unless a persisted index was loaded.
+    /// Walks the cache directory to rebuild LRU state. Runs in the background on startup.
+    /// When an index was already loaded (`scan_complete` is true), performs a merge scan:
+    /// discovers unindexed files and drops stale entries without blocking requests.
     pub fn spawn_scan_task(self: Arc<Self>) {
         if self.scan_complete.load(Ordering::Acquire) {
+            // Index was loaded — reconcile it with the filesystem in background.
+            tokio::spawn(async move {
+                self.run_merge_scan().await;
+            });
             return;
         }
         tokio::spawn(async move {
@@ -240,6 +206,59 @@ impl CacheLayer {
                 }
             }
         });
+    }
+
+    /// Scans the cache directory and merges results into the current LRU:
+    /// adds files not yet indexed and removes entries whose files are gone.
+    async fn run_merge_scan(&self) {
+        let start = Instant::now();
+        let found = match self.scan_lru_entries().await {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("cache: merge scan failed: {e}");
+                return;
+            }
+        };
+        let on_disk: HashMap<ObjectKey, u64> =
+            found.into_iter().map(|(b, k, s)| ((b, k), s)).collect();
+        let now = Instant::now();
+        let mut lru = self.lru.lock().await;
+        let mut dirty = self.dirty.lock().await;
+        let stale: Vec<ObjectKey> = lru
+            .entries
+            .keys()
+            .filter(|k| !on_disk.contains_key(*k))
+            .cloned()
+            .collect();
+        let mut removed: u64 = 0;
+        for key in &stale {
+            if let Some((_, size)) = lru.entries.remove(key) {
+                lru.total_size = lru.total_size.saturating_sub(size);
+            }
+            dirty.remove(key);
+            removed += 1;
+        }
+        let mut added: u64 = 0;
+        for (key, size) in &on_disk {
+            if !lru.entries.contains_key(key) {
+                lru.entries.insert(key.clone(), (now, *size));
+                lru.total_size += size;
+                added += 1;
+            }
+        }
+        let entries = lru.entries.len();
+        drop(dirty);
+        drop(lru);
+        tracing::info!(
+            removed,
+            added,
+            entries,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "cache: merged index with filesystem"
+        );
+        if let Err(e) = self.save_index().await {
+            tracing::warn!("cache: index save after merge: {e}");
+        }
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
