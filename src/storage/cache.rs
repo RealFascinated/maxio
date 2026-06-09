@@ -30,6 +30,9 @@ pub struct CacheLayer {
     scan_ready: Notify,
     dirty_scan_complete: AtomicBool,
     dirty_scan_ready: Notify,
+    /// Set when LRU was seeded from .lru-index.bin; tells spawn_scan_task to run
+    /// a merge scan (discover/drop) rather than a full replace scan.
+    index_loaded: AtomicBool,
     metrics: Option<Arc<MetricsRegistry>>,
 }
 
@@ -67,16 +70,20 @@ impl CacheLayer {
             scan_ready: Notify::new(),
             dirty_scan_complete: AtomicBool::new(false),
             dirty_scan_ready: Notify::new(),
+            index_loaded: AtomicBool::new(false),
             metrics: None,
         };
         if let Some((entries, dirty)) = layer.load_index().await? {
+            // Apply index state (LRU entries + dirty set) but leave scan_complete=false.
+            // spawn_scan_task will run a merge scan to reconcile with the filesystem
+            // before marking scan_complete, ensuring total_size is accurate before
+            // reserve_space or the trimmer can run.
             layer.apply_index(entries, dirty).await;
             layer.recalc_dirty_bytes().await;
-            layer.scan_complete.store(true, Ordering::Release);
-            layer.dirty_scan_complete.store(true, Ordering::Release);
+            layer.index_loaded.store(true, Ordering::Release);
             tracing::info!(
                 entries = layer.lru.lock().await.entries.len(),
-                "cache: restored LRU index"
+                "cache: loaded LRU index, reconciling with filesystem"
             );
         } else if cfg!(test) {
             let found = layer.scan_lru_entries().await?;
@@ -148,79 +155,89 @@ impl CacheLayer {
         self.dirty_scan_ready.notified().await;
     }
 
-    /// Walks the cache directory to rebuild LRU state. Runs in the background on startup.
-    /// When an index was already loaded (`scan_complete` is true), performs a merge scan:
-    /// discovers unindexed files and drops stale entries without blocking requests.
+    /// Walks the cache directory to rebuild or reconcile LRU state.
+    ///
+    /// - No index: full replace scan. Replaces LRU entirely from filesystem.
+    /// - Index loaded: merge scan. Adds unindexed files, drops stale entries.
+    ///
+    /// In both cases sets `scan_complete` when done so pending operations can proceed.
     pub fn spawn_scan_task(self: Arc<Self>) {
         if self.scan_complete.load(Ordering::Acquire) {
-            // Index was loaded — reconcile it with the filesystem in background.
-            tokio::spawn(async move {
-                self.run_merge_scan().await;
-            });
             return;
         }
         tokio::spawn(async move {
-            let start = Instant::now();
-            match self.scan_lru_entries().await {
-                Ok(found) => {
-                    self.apply_lru_entries(found).await;
-                    let entries = self.lru.lock().await.entries.len();
-                    self.scan_complete.store(true, Ordering::Release);
-                    self.scan_ready.notify_waiters();
-                    tracing::info!(
-                        entries,
-                        elapsed_ms = start.elapsed().as_millis() as u64,
-                        "cache: directory scan complete"
-                    );
-                    if let Err(e) = self.save_index().await {
-                        tracing::warn!("cache index save after scan: {e}");
-                    }
-
-                    if self.writeback {
-                        let dirty_start = Instant::now();
-                        self.scan_dirty_entries().await;
-                        self.recalc_dirty_bytes().await;
-                        let dirty_count = self.dirty.lock().await.len();
-                        self.dirty_scan_complete.store(true, Ordering::Release);
-                        self.dirty_scan_ready.notify_waiters();
-                        tracing::debug!(
-                            dirty = dirty_count,
-                            elapsed_ms = dirty_start.elapsed().as_millis() as u64,
-                            "cache: dirty scan complete"
-                        );
-                        if let Err(e) = self.save_index().await {
-                            tracing::warn!("cache index save after dirty scan: {e}");
-                        }
-                    } else {
-                        self.dirty_scan_complete.store(true, Ordering::Release);
-                        self.dirty_scan_ready.notify_waiters();
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("cache directory scan failed: {e}");
-                    self.scan_complete.store(true, Ordering::Release);
-                    self.scan_ready.notify_waiters();
-                    self.dirty_scan_complete.store(true, Ordering::Release);
-                    self.dirty_scan_ready.notify_waiters();
-                }
+            if self.index_loaded.load(Ordering::Acquire) {
+                self.run_merge_scan().await;
+            } else {
+                self.run_fresh_scan().await;
             }
         });
     }
 
-    /// Scans the cache directory and merges results into the current LRU:
-    /// adds files not yet indexed and removes entries whose files are gone.
+    async fn run_fresh_scan(&self) {
+        let start = Instant::now();
+        match self.scan_lru_entries().await {
+            Ok(found) => {
+                self.apply_lru_entries(found).await;
+                let entries = self.lru.lock().await.entries.len();
+                self.scan_complete.store(true, Ordering::Release);
+                self.scan_ready.notify_waiters();
+                tracing::info!(
+                    entries,
+                    elapsed_ms = start.elapsed().as_millis() as u64,
+                    "cache: directory scan complete"
+                );
+                if let Err(e) = self.save_index().await {
+                    tracing::warn!("cache index save after scan: {e}");
+                }
+                if self.writeback {
+                    let dirty_start = Instant::now();
+                    self.scan_dirty_entries().await;
+                    self.recalc_dirty_bytes().await;
+                    let dirty_count = self.dirty.lock().await.len();
+                    self.dirty_scan_complete.store(true, Ordering::Release);
+                    self.dirty_scan_ready.notify_waiters();
+                    tracing::debug!(
+                        dirty = dirty_count,
+                        elapsed_ms = dirty_start.elapsed().as_millis() as u64,
+                        "cache: dirty scan complete"
+                    );
+                    if let Err(e) = self.save_index().await {
+                        tracing::warn!("cache index save after dirty scan: {e}");
+                    }
+                } else {
+                    self.dirty_scan_complete.store(true, Ordering::Release);
+                    self.dirty_scan_ready.notify_waiters();
+                }
+            }
+            Err(e) => {
+                tracing::error!("cache directory scan failed: {e}");
+                self.scan_complete.store(true, Ordering::Release);
+                self.scan_ready.notify_waiters();
+                self.dirty_scan_complete.store(true, Ordering::Release);
+                self.dirty_scan_ready.notify_waiters();
+            }
+        }
+    }
+
+    /// Reconciles the index-seeded LRU against the actual cache filesystem.
+    /// Adds unindexed files, drops phantom entries, then sets scan_complete so
+    /// reserve_space and the trimmer see accurate total_size before running.
     async fn run_merge_scan(&self) {
         let start = Instant::now();
-        // Snapshot LRU keys before the scan so we can distinguish truly new files
-        // from entries that were evicted by reserve_space during the scan. Without
-        // this, evicted entries (file deleted, LRU entry removed) would look like
-        // "unindexed" files seen on disk and get re-added as phantoms.
+        // Snapshot LRU keys before the filesystem walk. Entries evicted by
+        // concurrent reserve_space calls (shouldn't happen yet since scan_complete
+        // is still false at this point) would otherwise be re-added as phantoms.
         let pre_scan_keys: HashSet<ObjectKey> =
             self.lru.lock().await.entries.keys().cloned().collect();
         let found = match self.scan_lru_entries().await {
             Ok(f) => f,
             Err(e) => {
-                tracing::warn!("cache: merge scan failed: {e}");
+                tracing::error!("cache: merge scan failed: {e}");
+                self.scan_complete.store(true, Ordering::Release);
+                self.scan_ready.notify_waiters();
+                self.dirty_scan_complete.store(true, Ordering::Release);
+                self.dirty_scan_ready.notify_waiters();
                 return;
             }
         };
@@ -229,8 +246,7 @@ impl CacheLayer {
         let now = Instant::now();
         let mut lru = self.lru.lock().await;
         let mut dirty = self.dirty.lock().await;
-        // Remove entries that were in the LRU at scan start but have no file on disk.
-        // Skip entries already removed by reserve_space during the scan.
+        // Drop entries whose files no longer exist on disk.
         let stale: Vec<ObjectKey> = pre_scan_keys
             .iter()
             .filter(|k| !on_disk.contains_key(*k) && lru.entries.contains_key(*k))
@@ -244,8 +260,7 @@ impl CacheLayer {
             dirty.remove(key);
             removed += 1;
         }
-        // Add files that are on disk but were not in the LRU at scan start.
-        // Skipping pre_scan_keys prevents re-adding entries evicted during the scan.
+        // Add files on disk that were never in the index.
         let mut added: u64 = 0;
         for (key, size) in &on_disk {
             if !pre_scan_keys.contains(key) && !lru.entries.contains_key(key) {
@@ -267,6 +282,16 @@ impl CacheLayer {
         if let Err(e) = self.save_index().await {
             tracing::warn!("cache: index save after merge: {e}");
         }
+        // Mark scan complete — total_size is now accurate, trimmer and
+        // reserve_space can safely run.
+        self.scan_complete.store(true, Ordering::Release);
+        self.scan_ready.notify_waiters();
+        if self.writeback {
+            self.scan_dirty_entries().await;
+            self.recalc_dirty_bytes().await;
+        }
+        self.dirty_scan_complete.store(true, Ordering::Release);
+        self.dirty_scan_ready.notify_waiters();
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
