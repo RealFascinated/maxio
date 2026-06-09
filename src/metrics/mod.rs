@@ -56,10 +56,6 @@ impl MetricsRegistry {
         self.prom.record_cache_eviction(cache);
     }
 
-    pub fn record_cache_evictions(&self, cache: &str, count: u64) {
-        self.prom.record_cache_evictions(cache, count);
-    }
-
     pub fn set_cache_entries(&self, cache: &str, entries: usize) {
         self.prom.set_cache_entries(cache, entries);
     }

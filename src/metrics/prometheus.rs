@@ -103,7 +103,7 @@ impl PrometheusMetrics {
         let cache_evictions = CounterVec::new(
             Opts::new(
                 "maxio_cache_evictions_total",
-                "Cache evictions or invalidations",
+                "LRU evictions when a cache is at capacity",
             ),
             &["cache"],
         )?;
@@ -257,14 +257,6 @@ impl PrometheusMetrics {
 
     pub fn record_cache_eviction(&self, cache: &str) {
         self.cache_evictions.with_label_values(&[cache]).inc();
-    }
-
-    pub fn record_cache_evictions(&self, cache: &str, count: u64) {
-        if count > 0 {
-            self.cache_evictions
-                .with_label_values(&[cache])
-                .inc_by(count as f64);
-        }
     }
 
     pub fn set_cache_entries(&self, cache: &str, entries: usize) {

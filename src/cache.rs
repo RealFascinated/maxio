@@ -109,7 +109,7 @@ where
         }
     }
 
-    /// Removes and records an eviction.
+    /// Removes an entry (invalidation; does not count as an LRU eviction).
     pub fn remove<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -117,9 +117,6 @@ where
     {
         if let Ok(mut map) = self.inner.write() {
             if map.pop(key).is_some() {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_eviction(self.name);
-                }
                 self.sync_entries(map.len());
                 return true;
             }
@@ -154,10 +151,7 @@ where
                 }
             }
             if removed > 0 {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_evictions(self.name, removed);
-                    m.set_cache_entries(self.name, map.len());
-                }
+                self.sync_entries(map.len());
             }
             return removed;
         }
@@ -178,10 +172,7 @@ where
                 map.pop(&key);
             }
             if removed > 0 {
-                if let Some(m) = &self.metrics {
-                    m.record_cache_evictions(self.name, removed);
-                    m.set_cache_entries(self.name, map.len());
-                }
+                self.sync_entries(map.len());
             }
             return removed;
         }
