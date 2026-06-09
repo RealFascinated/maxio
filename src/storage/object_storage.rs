@@ -300,8 +300,12 @@ impl ObjectStorage {
             });
         }
 
-        self.meta.delete_object_meta(bucket, key).await?;
-        self.blobs.unlink_object(bucket, key).await?;
+        let (meta_result, blob_result) = tokio::join!(
+            self.meta.delete_object_meta(bucket, key),
+            self.blobs.unlink_object(bucket, key),
+        );
+        meta_result?;
+        blob_result?;
         Ok(DeleteResult {
             version_id: None,
             is_delete_marker: false,

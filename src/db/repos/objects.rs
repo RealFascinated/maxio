@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::db::DbContext;
+use crate::db::object_read_cache::ReadCacheLookup;
 use crate::db::schema::{object_acl_grants, object_checksums, object_tags, objects};
 use crate::iam::Acl;
 use crate::storage::{ObjectMeta, StorageError};
@@ -137,8 +138,10 @@ pub async fn get_object_for_read(
     bucket_name: &str,
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
-    if let Some(meta) = ctx.object_read_cache().get(bucket_name, key) {
-        return Ok(meta);
+    match ctx.object_read_cache().lookup(bucket_name, key) {
+        ReadCacheLookup::Hit(meta) => return Ok(meta),
+        ReadCacheLookup::Absent => return Err(StorageError::NotFound(key.to_string())),
+        ReadCacheLookup::Miss => {}
     }
 
     ctx.object_read_cache().record_miss();
@@ -156,7 +159,10 @@ pub async fn get_object_for_read(
         .first(&mut conn)
         .await
         .map_err(|e| match e {
-            diesel::result::Error::NotFound => StorageError::NotFound(key.to_string()),
+            diesel::result::Error::NotFound => {
+                ctx.object_read_cache().mark_absent(bucket_name, key);
+                StorageError::NotFound(key.to_string())
+            }
             other => db_err(other),
         })?;
 
@@ -204,7 +210,7 @@ pub async fn delete_object(
     .execute(&mut conn)
     .await
     .map_err(db_err)?;
-    ctx.object_read_cache().remove(bucket_name, key);
+    ctx.object_read_cache().mark_absent(bucket_name, key);
     Ok(())
 }
 
@@ -230,7 +236,7 @@ pub async fn delete_objects_by_keys(
     .await
     .map_err(db_err)?;
 
-    ctx.object_read_cache().remove_many(bucket_name, keys);
+    ctx.object_read_cache().mark_absent_many(bucket_name, keys);
     Ok(deleted_keys)
 }
 

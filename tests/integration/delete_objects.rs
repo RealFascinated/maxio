@@ -131,8 +131,8 @@ async fn test_delete_objects_batch_with_version_id() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("<Deleted>"), "body: {}", body);
     assert!(
-        !body.contains(old_vid),
-        "deleted version should not appear as error: {}",
+        !body.contains("<Error>"),
+        "batch delete should not report errors: {}",
         body
     );
 

@@ -417,7 +417,7 @@ pub async fn update_current_after_delete(
             .await
             .map_err(db_err)?;
     } else {
-        ctx.object_read_cache().remove(bucket_name, key);
+        ctx.object_read_cache().mark_absent(bucket_name, key);
     }
 
     Ok(())

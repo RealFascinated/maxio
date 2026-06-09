@@ -540,7 +540,7 @@ pub async fn s3_put_chunked(url: &str, data: &[u8]) -> reqwest::Response {
     );
     chunked_body.extend_from_slice(data);
     chunked_body.extend_from_slice(b"\r\n");
-    chunked_body.extend_from_slice(format!("0;chunk-signature={}\r\n", chunk_sig).as_bytes());
+    chunked_body.extend_from_slice(format!("0;chunk-signature={}\r\n\r\n", chunk_sig).as_bytes());
 
     client()
         .put(url)
