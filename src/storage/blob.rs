@@ -501,11 +501,7 @@ impl BlobStorage {
             let buckets_dir = self.buckets_dir.clone();
             let bucket_name = bucket.to_string();
             tokio::spawn(async move {
-                prune_empty_dirs_up(
-                    buckets_dir.join(&bucket_name),
-                    &buckets_dir.join(&bucket_name),
-                )
-                .await;
+                prune_empty_subdirs(&buckets_dir.join(&bucket_name)).await;
             });
         } else {
             self.prune_empty_dirs(bucket).await;
@@ -536,8 +532,7 @@ impl BlobStorage {
     }
 
     pub async fn prune_empty_dirs(&self, bucket: &str) {
-        let bucket_dir = self.buckets_dir.join(bucket);
-        prune_empty_dirs_up(bucket_dir.clone(), &bucket_dir).await;
+        prune_empty_subdirs(&self.buckets_dir.join(bucket)).await;
     }
 
     pub async fn cleanup_empty_parents(&self, bucket: &str, key: &str) {
@@ -832,6 +827,28 @@ async fn prune_empty_dirs_up(mut dir: PathBuf, stop_at: &Path) {
     }
 }
 
+fn collect_subdirs_post_order(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            collect_subdirs_post_order(&path, out);
+            out.push(path);
+        }
+    }
+}
+
+/// Remove every empty subdirectory under `dir` (post-order). The root `dir` itself is kept.
+async fn prune_empty_subdirs(dir: &Path) {
+    let mut dirs = Vec::new();
+    collect_subdirs_post_order(dir, &mut dirs);
+    for d in dirs {
+        let _ = fs::remove_dir(&d).await;
+    }
+}
+
 async fn sweep_buckets_dir(buckets_dir: &Path) -> u64 {
     let mut temp_removed = 0u64;
     let mut bucket_entries = match fs::read_dir(buckets_dir).await {
@@ -1103,6 +1120,49 @@ mod read_path_tests {
         assert!(
             !tokio::fs::try_exists(&data_path).await.unwrap(),
             "data file should be removed in background"
+        );
+    }
+}
+
+#[cfg(test)]
+mod unlink_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn unlink_objects_batch_prunes_empty_parent_dirs() {
+        let temp = TempDir::new().unwrap();
+        let blobs = BlobStorage::new(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+        let bucket_dir = temp.path().join("buckets").join("bucket");
+        tokio::fs::create_dir_all(bucket_dir.join("test/nested"))
+            .await
+            .unwrap();
+        tokio::fs::write(bucket_dir.join("test/nested/file.txt"), b"x")
+            .await
+            .unwrap();
+        tokio::fs::write(bucket_dir.join("test/.folder"), b"")
+            .await
+            .unwrap();
+
+        blobs
+            .unlink_objects_batch(
+                "bucket",
+                &[
+                    "test/nested/file.txt".to_string(),
+                    "test/".to_string(),
+                ],
+                4,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !tokio::fs::try_exists(bucket_dir.join("test"))
+                .await
+                .unwrap(),
+            "empty folder tree should be removed from disk"
         );
     }
 }

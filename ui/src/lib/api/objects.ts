@@ -83,6 +83,33 @@ export async function createFolder(bucket: string, name: string): Promise<{ ok: 
   })
 }
 
+export async function deleteFolder(bucket: string, name: string): Promise<{ ok: boolean; deleted: number }> {
+  return apiFetch<{ ok: boolean; deleted: number }>(`/api/buckets/${encodeURIComponent(bucket)}/folders`, {
+    method: 'DELETE',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export interface DeleteFoldersResult {
+  deleted: number
+  failed: string[]
+}
+
+export async function deleteFolders(bucket: string, prefixes: string[]): Promise<DeleteFoldersResult> {
+  const failed: string[] = []
+  let deleted = 0
+  for (const prefix of prefixes) {
+    try {
+      const result = await deleteFolder(bucket, prefix)
+      deleted += result.deleted
+    } catch (err) {
+      console.error('deleteFolder failed:', prefix, err)
+      failed.push(prefix)
+    }
+  }
+  return { deleted, failed }
+}
+
 export async function presignObject(bucket: string, key: string, expires: number): Promise<{ url: string }> {
   return apiFetch<{ url: string }>(`/api/buckets/${encodeURIComponent(bucket)}/presign/${encodeObjectKey(key)}?expires=${expires}`)
 }

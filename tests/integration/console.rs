@@ -537,3 +537,91 @@ async fn test_console_presign_uses_forwarded_host() {
     );
     assert_eq!(resp.bytes().await.unwrap().as_ref(), body);
 }
+
+#[tokio::test]
+async fn test_console_delete_folder() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/folder-del-bucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/folder-del-bucket/photos/", base_url),
+        vec![],
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/folder-del-bucket/photos/vacation.jpg", base_url),
+        b"photo".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/folder-del-bucket/photos/nested/note.txt", base_url),
+        b"note".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/folder-del-bucket/other.txt", base_url),
+        b"keep".to_vec(),
+    )
+    .await;
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .delete(format!(
+            "{}/api/buckets/folder-del-bucket/folders",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .json(&serde_json::json!({ "name": "photos/" }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(status, 200, "body: {body_text}");
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert!(body["deleted"].as_u64().unwrap() >= 3);
+
+    let resp = client()
+        .delete(format!(
+            "{}/api/buckets/folder-del-bucket/folders",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .json(&serde_json::json!({ "name": "photos/" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let empty_body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(empty_body["deleted"], 0);
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/folder-del-bucket/objects?prefix=",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let list: serde_json::Value = resp.json().await.unwrap();
+    let keys: Vec<String> = list["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(keys, vec!["other.txt".to_string()]);
+    let prefixes: Vec<String> = list["prefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(prefixes.is_empty());
+}

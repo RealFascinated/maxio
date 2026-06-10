@@ -27,7 +27,7 @@
   import { isPreviewable } from '$lib/preview'
   import { toast } from '$lib/toast'
   import { objectKeys, settingsKeys } from '$lib/api/keys'
-  import { createFolder as createFolderApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, presignObject, uploadObject, type S3File } from '$lib/api/objects'
+  import { createFolder as createFolderApi, deleteFolder as deleteFolderApi, deleteFolders as deleteFoldersApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, presignObject, uploadObject, type S3File } from '$lib/api/objects'
   import { getVersioning } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
@@ -52,6 +52,7 @@
   let detailFile = $state<S3File | null>(null)
   let previewFile = $state<S3File | null>(null)
   let pendingDelete = $state<string | null>(null)
+  let pendingDeletePrefix = $state<string | null>(null)
   let showBulkDeleteConfirm = $state(false)
   let selectedKeys = $state<Set<string>>(new Set())
   let createFolderInput = $state<HTMLInputElement | null>(null)
@@ -138,20 +139,37 @@
     },
   }))
 
-  const deleteObjectsMutation = createMutation(() => ({
-    mutationFn: (keys: string[]) => deleteObjectsApi(bucket, keys),
-    onSuccess: (result) => {
-      if (result.deleted > 0) {
-        toast.success(result.deleted === 1 ? '1 object deleted' : `${result.deleted} objects deleted`)
+  const deleteSelectionMutation = createMutation(() => ({
+    mutationFn: async ({ folders, objects }: { folders: string[]; objects: string[] }) => {
+      const [objectResult, folderResult] = await Promise.all([
+        objects.length > 0 ? deleteObjectsApi(bucket, objects) : Promise.resolve({ deleted: 0, failed: [] as string[] }),
+        folders.length > 0 ? deleteFoldersApi(bucket, folders) : Promise.resolve({ deleted: 0, failed: [] as string[] }),
+      ])
+      return { objectResult, folderResult }
+    },
+    onSuccess: ({ objectResult, folderResult }, { folders, objects }) => {
+      const foldersOk = folders.length - folderResult.failed.length
+      const objectsOk = objects.length - objectResult.failed.length
+      const failed = [...objectResult.failed, ...folderResult.failed]
+
+      if (foldersOk > 0 || objectsOk > 0) {
+        const parts: string[] = []
+        if (foldersOk > 0) parts.push(foldersOk === 1 ? '1 folder' : `${foldersOk} folders`)
+        if (objectsOk > 0) parts.push(objectsOk === 1 ? '1 object' : `${objectsOk} objects`)
+        let msg = `${parts.join(' and ')} deleted`
+        if (foldersOk > 0 && folderResult.deleted > 0) {
+          msg += ` (${folderResult.deleted} object${folderResult.deleted === 1 ? '' : 's'} inside)`
+        }
+        toast.success(msg)
       }
-      if (result.failed.length > 0) {
+      if (failed.length > 0) {
         toast.error(
-          result.failed.length === 1
-            ? `Failed to delete "${displayName(result.failed[0])}"`
-            : `Failed to delete ${result.failed.length} objects`,
+          failed.length === 1
+            ? `Failed to delete "${displayName(failed[0])}"`
+            : `Failed to delete ${failed.length} items`,
         )
       }
-      selectedKeys = new Set(result.failed)
+      selectedKeys = new Set(failed)
       showBulkDeleteConfirm = false
       queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
     },
@@ -167,18 +185,23 @@
     },
   }))
 
+  const deleteFolderMutation = createMutation(() => ({
+    mutationFn: (folderPrefix: string) => deleteFolderApi(bucket, folderPrefix),
+    onSuccess: (result, folderPrefix) => {
+      const label = prefixLabel(folderPrefix).replace(/\/$/, '')
+      toast.success(
+        result.deleted === 0
+          ? `Folder "${label}" deleted`
+          : `Folder "${label}" deleted (${result.deleted} object${result.deleted === 1 ? '' : 's'})`,
+      )
+      pendingDeletePrefix = null
+      selectedKeys = new Set([...selectedKeys].filter((k) => k !== folderPrefix))
+      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+    },
+  }))
+
   const files = $derived(objectsQuery.data?.pages.flatMap((page) => page.files) ?? [])
   const fileKeys = $derived(files.map((file) => file.key))
-  const selectedCount = $derived(selectedKeys.size)
-  const allFilesSelected = $derived(fileKeys.length > 0 && fileKeys.every((key) => selectedKeys.has(key)))
-  const someFilesSelected = $derived(fileKeys.some((key) => selectedKeys.has(key)))
-
-  $effect(() => {
-    prefix
-    searchQuery
-    selectedKeys = new Set()
-  })
-
   const prefixes = $derived.by(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -192,6 +215,19 @@
     }
     return result
   })
+  const selectableKeys = $derived([...prefixes, ...fileKeys])
+  const selectedCount = $derived(selectedKeys.size)
+  const selectedFolderCount = $derived(prefixes.filter((p) => selectedKeys.has(p)).length)
+  const selectedObjectCount = $derived(fileKeys.filter((k) => selectedKeys.has(k)).length)
+  const allSelected = $derived(selectableKeys.length > 0 && selectableKeys.every((key) => selectedKeys.has(key)))
+  const someSelected = $derived(selectableKeys.some((key) => selectedKeys.has(key)))
+
+  $effect(() => {
+    prefix
+    searchQuery
+    selectedKeys = new Set()
+  })
+
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
 
   const expiryOptions = [
@@ -296,6 +332,22 @@
     }
   }
 
+  function deleteFolder(folderPrefix: string, e: Event) {
+    e.stopPropagation()
+    pendingDeletePrefix = folderPrefix
+  }
+
+  async function confirmPendingFolderDelete() {
+    if (!pendingDeletePrefix) return
+    const folderPrefix = pendingDeletePrefix
+    try {
+      await deleteFolderMutation.mutateAsync(folderPrefix)
+    } catch (err) {
+      console.error('deleteFolder failed:', err)
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete folder')
+    }
+  }
+
   function toggleSelect(key: string) {
     const next = new Set(selectedKeys)
     if (next.has(key)) next.delete(key)
@@ -304,11 +356,11 @@
   }
 
   function toggleSelectAll() {
-    if (allFilesSelected) {
+    if (allSelected) {
       selectedKeys = new Set()
       return
     }
-    selectedKeys = new Set(fileKeys)
+    selectedKeys = new Set(selectableKeys)
   }
 
   function requestBulkDelete() {
@@ -316,13 +368,69 @@
     showBulkDeleteConfirm = true
   }
 
+  function bulkDeleteDescription(): string {
+    const folders = selectedFolderCount
+    const objects = selectedObjectCount
+    if (folders > 0 && objects > 0) {
+      return `This will permanently delete ${folders === 1 ? '1 folder' : `${folders} folders`} (and everything inside ${folders === 1 ? 'it' : 'them'}) and ${objects === 1 ? '1 object' : `${objects} objects`}.`
+    }
+    if (folders > 0) {
+      return folders === 1
+        ? `This will permanently delete the folder "${prefixLabel([...selectedKeys].find((k) => prefixes.includes(k))!).replace(/\/$/, '')}" and everything inside it.`
+        : `This will permanently delete ${folders} folders and everything inside them.`
+    }
+    if (objects === 1) {
+      return `This will delete "${displayName([...selectedKeys].find((k) => fileKeys.includes(k))!)}" from this bucket.`
+    }
+    return `This will permanently delete ${objects} objects from this bucket.`
+  }
+
+  function bulkDeleteTitle(): string {
+    const folders = selectedFolderCount
+    const objects = selectedObjectCount
+    if (folders > 0 && objects > 0) {
+      return `Delete ${selectedCount} items?`
+    }
+    if (folders > 0) {
+      return folders === 1 ? 'Delete folder?' : `Delete ${folders} folders?`
+    }
+    return objects === 1 ? 'Delete object?' : `Delete ${objects} objects?`
+  }
+
+  function bulkDeleteLabel(): string {
+    const folders = selectedFolderCount
+    const objects = selectedObjectCount
+    if (folders > 0 && objects > 0) {
+      return `Delete ${selectedCount} items`
+    }
+    if (folders > 0) {
+      return folders === 1 ? 'Delete folder' : `Delete ${folders} folders`
+    }
+    return objects === 1 ? 'Delete object' : `Delete ${objects} objects`
+  }
+
+  function bulkDeleteButtonLabel(): string {
+    const folders = selectedFolderCount
+    const objects = selectedObjectCount
+    if (folders > 0 && objects > 0) {
+      return `Delete ${selectedCount} items`
+    }
+    if (folders > 0) {
+      return folders === 1 ? '1 folder' : `${folders} folders`
+    }
+    return objects === 1 ? '1 object' : `${objects} objects`
+  }
+
   async function confirmBulkDelete() {
     if (selectedCount === 0) return
+    const selection = [...selectedKeys]
+    const folders = selection.filter((k) => prefixes.includes(k))
+    const objects = selection.filter((k) => fileKeys.includes(k))
     try {
-      await deleteObjectsMutation.mutateAsync([...selectedKeys])
+      await deleteSelectionMutation.mutateAsync({ folders, objects })
     } catch (err) {
-      console.error('deleteObjects failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to delete objects')
+      console.error('deleteSelection failed:', err)
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete selection')
     }
   }
 
@@ -397,10 +505,10 @@
         variant="destructive"
         class="h-8"
         onclick={requestBulkDelete}
-        disabled={deleteObjectsMutation.isPending}
+        disabled={deleteSelectionMutation.isPending}
       >
         <Trash2 class="size-4 mr-1" />
-        Delete {selectedCount === 1 ? '1 object' : `${selectedCount} objects`}
+        Delete {bulkDeleteButtonLabel()}
       </Button>
     {/if}
     <div class="relative min-w-[12rem] flex-1 max-w-sm">
@@ -444,21 +552,21 @@
       <Table.Header>
         <Table.Row>
           <Table.Head class="w-10 p-0">
-            {#if files.length > 0}
+            {#if selectableKeys.length > 0}
               <label class={objectCheckboxLabelClass}>
                 <input
                   type="checkbox"
                   class="peer sr-only"
-                  checked={allFilesSelected}
-                  aria-label={allFilesSelected ? 'Deselect all objects' : 'Select all objects'}
+                  checked={allSelected}
+                  aria-label={allSelected ? 'Deselect all' : 'Select all'}
                   onchange={toggleSelectAll}
                 />
                 <span
-                  class="{objectCheckboxBoxClass} {allFilesSelected || someFilesSelected ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
+                  class="{objectCheckboxBoxClass} {allSelected || someSelected ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
                 >
-                  {#if allFilesSelected}
+                  {#if allSelected}
                     <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
-                  {:else if someFilesSelected}
+                  {:else if someSelected}
                     <Minus class={objectCheckboxIconClass} size={12} strokeWidth={3} />
                   {/if}
                 </span>
@@ -474,8 +582,32 @@
       </Table.Header>
       <Table.Body>
         {#each prefixes as p}
-          <Table.Row class="cursor-pointer" onclick={() => navigateTo(p)}>
-            <Table.Cell></Table.Cell>
+          <Table.Row
+            class="cursor-pointer"
+            data-state={selectedKeys.has(p) ? 'selected' : undefined}
+            onclick={(e) => {
+              if ((e.target as HTMLElement).closest('[data-object-select]')) return
+              navigateTo(p)
+            }}
+          >
+            <Table.Cell class="w-10 p-0" data-object-select>
+              <label class={objectCheckboxLabelClass}>
+                <input
+                  type="checkbox"
+                  class="peer sr-only"
+                  checked={selectedKeys.has(p)}
+                  aria-label={`Select ${prefixLabel(p).replace(/\/$/, '')}`}
+                  onchange={() => toggleSelect(p)}
+                />
+                <span
+                  class="{objectCheckboxBoxClass} {selectedKeys.has(p) ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
+                >
+                  {#if selectedKeys.has(p)}
+                    <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+                  {/if}
+                </span>
+              </label>
+            </Table.Cell>
             <Table.Cell>
               <span class="flex items-center gap-2">
                 <Folder class="size-4 shrink-0 text-muted-foreground" />
@@ -485,7 +617,15 @@
             <Table.Cell class="text-muted-foreground">&mdash;</Table.Cell>
             <Table.Cell class="text-right text-muted-foreground">&mdash;</Table.Cell>
             <Table.Cell class="text-muted-foreground">&mdash;</Table.Cell>
-            <Table.Cell></Table.Cell>
+            <Table.Cell class="w-24 text-right">
+              <button
+                class="text-muted-foreground hover:text-destructive transition-colors"
+                onclick={(e) => deleteFolder(p, e)}
+                title="Delete folder"
+              >
+                <Trash2 class="size-4" />
+              </button>
+            </Table.Cell>
           </Table.Row>
         {/each}
         {#each files as file}
@@ -661,14 +801,25 @@
 {#if showBulkDeleteConfirm}
   <ConfirmDialog
     open
-    title={selectedCount === 1 ? 'Delete object?' : `Delete ${selectedCount} objects?`}
-    description={selectedCount === 1
-      ? `This will delete "${displayName([...selectedKeys][0])}" from this bucket.`
-      : `This will permanently delete ${selectedCount} objects from this bucket.`}
-    confirmLabel={selectedCount === 1 ? 'Delete object' : `Delete ${selectedCount} objects`}
+    title={bulkDeleteTitle()}
+    description={bulkDeleteDescription()}
+    confirmLabel={bulkDeleteLabel()}
     confirmVariant="destructive"
-    loading={deleteObjectsMutation.isPending}
+    loading={deleteSelectionMutation.isPending}
     onClose={() => (showBulkDeleteConfirm = false)}
     onConfirm={confirmBulkDelete}
+  />
+{/if}
+
+{#if pendingDeletePrefix}
+  <ConfirmDialog
+    open
+    title="Delete folder?"
+    description={`This will permanently delete the folder "${prefixLabel(pendingDeletePrefix).replace(/\/$/, '')}" and everything inside it.`}
+    confirmLabel="Delete folder"
+    confirmVariant="destructive"
+    loading={deleteFolderMutation.isPending}
+    onClose={() => (pendingDeletePrefix = null)}
+    onConfirm={confirmPendingFolderDelete}
   />
 {/if}

@@ -9,7 +9,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
 use super::objects::{
-    normalize_presign_host, parent_folder_prefix_for_deleted_object,
+    normalize_folder_prefix, normalize_presign_host, parent_folder_prefix_for_deleted_object,
     preserve_empty_parent_folder_after_object_delete,
 };
 
@@ -69,6 +69,20 @@ fn normalize_presign_host_strips_default_ports() {
         normalize_presign_host("s3.example.com:9000", "https"),
         "s3.example.com:9000"
     );
+}
+
+#[test]
+fn normalize_folder_prefix_trims_and_appends_slash() {
+    assert_eq!(
+        normalize_folder_prefix("photos"),
+        Some("photos/".to_string())
+    );
+    assert_eq!(
+        normalize_folder_prefix("photos/vacation/"),
+        Some("photos/vacation/".to_string())
+    );
+    assert_eq!(normalize_folder_prefix("  "), None);
+    assert_eq!(normalize_folder_prefix("/"), None);
 }
 
 #[test]

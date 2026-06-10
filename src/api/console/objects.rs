@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::auth::signature_v4;
 use crate::config::Config;
 use crate::server::AppState;
-use crate::storage::Storage;
+use crate::storage::{BatchDeleteObject, Storage};
 
 use super::access::{console_bucket_check, console_object_check};
 use super::session::ConsoleSession;
@@ -612,22 +612,29 @@ pub struct CreateFolderRequest {
     name: String,
 }
 
+pub(crate) fn normalize_folder_prefix(name: &str) -> Option<String> {
+    let trimmed = name.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(format!("{trimmed}/"))
+    }
+}
+
 pub async fn create_folder(
     State(state): State<AppState>,
     Extension(session): Extension<ConsoleSession>,
     Path(bucket): Path<String>,
     Json(body): Json<CreateFolderRequest>,
 ) -> impl IntoResponse {
-    let name = body.name.trim().trim_matches('/');
-    if name.is_empty() {
+    let Some(key) = normalize_folder_prefix(&body.name) else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Folder name is required"})),
         )
             .into_response();
-    }
+    };
 
-    let key = format!("{}/", name);
     if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await {
         return resp;
     }
@@ -650,4 +657,102 @@ pub async fn create_folder(
         )
             .into_response(),
     }
+}
+
+const CONSOLE_DELETE_FOLDER_BATCH: usize = 1000;
+
+pub async fn delete_folder(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<CreateFolderRequest>,
+) -> impl IntoResponse {
+    let Some(prefix) = normalize_folder_prefix(&body.name) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Folder name is required"})),
+        )
+            .into_response();
+    };
+
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
+        return resp;
+    }
+    if let Err(resp) =
+        console_object_check(&state, &session, &bucket, &prefix, "s3:DeleteObject").await
+    {
+        return resp;
+    }
+
+    match state.storage.head_bucket(&bucket).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Bucket not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
+
+    let objects =
+        match crate::storage::list_objects_all(state.storage.as_ref(), &bucket, &prefix).await {
+            Ok(objects) => objects,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        };
+
+    if objects.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true, "deleted": 0})),
+        )
+            .into_response();
+    }
+
+    let mut deleted = 0usize;
+    for chunk in objects.chunks(CONSOLE_DELETE_FOLDER_BATCH) {
+        let batch: Vec<BatchDeleteObject> = chunk
+            .iter()
+            .map(|obj| BatchDeleteObject {
+                key: obj.key.clone(),
+                version_id: None,
+            })
+            .collect();
+
+        match state.storage.delete_objects_batch(&bucket, &batch).await {
+            Ok(results) => {
+                for (_, outcome) in results {
+                    if outcome.is_ok() {
+                        deleted += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"ok": true, "deleted": deleted})),
+    )
+        .into_response()
 }
