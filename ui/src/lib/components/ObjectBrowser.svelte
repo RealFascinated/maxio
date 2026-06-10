@@ -19,7 +19,7 @@
   import Eye from 'lucide-svelte/icons/eye'
   import Search from 'lucide-svelte/icons/search'
   import X from 'lucide-svelte/icons/x'
-  import VersionHistory from './VersionHistory.svelte'
+  import ObjectDetailDrawer from './ObjectDetailDrawer.svelte'
   import FilePreview from './FilePreview.svelte'
   import { formatBytes } from '$lib/format-bytes'
   import { formatDate } from '$lib/format'
@@ -48,7 +48,7 @@
   let showCreateFolder = $state(false)
   let newFolderName = $state('')
   let shareMenuPos = $state({ top: 0, left: 0 })
-  let versionKey = $state<string | null>(null)
+  let detailFile = $state<S3File | null>(null)
   let previewFile = $state<S3File | null>(null)
   let pendingDelete = $state<string | null>(null)
   let showBulkDeleteConfirm = $state(false)
@@ -475,7 +475,11 @@
           </Table.Row>
         {/each}
         {#each files as file}
-          <Table.Row data-state={selectedKeys.has(file.key) ? 'selected' : undefined}>
+          <Table.Row
+            class="cursor-pointer"
+            data-state={selectedKeys.has(file.key) ? 'selected' : undefined}
+            onclick={() => (detailFile = file)}
+          >
             <Table.Cell>
               <input
                 type="checkbox"
@@ -509,8 +513,8 @@
                 {#if versioningEnabled}
                   <button
                     class="text-muted-foreground hover:text-foreground transition-colors"
-                    onclick={(e) => { e.stopPropagation(); versionKey = versionKey === file.key ? null : file.key }}
-                    title="Version history"
+                    onclick={(e) => { e.stopPropagation(); detailFile = file }}
+                    title="Object details"
                   >
                     <History class="size-4" />
                   </button>
@@ -539,20 +543,6 @@
               </span>
             </Table.Cell>
           </Table.Row>
-          {#if versionKey === file.key}
-            <Table.Row>
-              <Table.Cell colspan={6} class="p-0">
-                <div class="p-2">
-                  <VersionHistory
-                    {bucket}
-                    objectKey={file.key}
-                    onClose={() => (versionKey = null)}
-                    onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })}
-                  />
-                </div>
-              </Table.Cell>
-            </Table.Row>
-          {/if}
         {/each}
       </Table.Body>
     </Table.Root>
@@ -608,6 +598,16 @@
       </button>
     {/each}
   </div>
+{/if}
+
+{#if detailFile}
+  <ObjectDetailDrawer
+    {bucket}
+    file={detailFile}
+    {versioningEnabled}
+    onClose={() => (detailFile = null)}
+    onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })}
+  />
 {/if}
 
 {#if previewFile}

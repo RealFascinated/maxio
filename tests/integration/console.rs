@@ -320,6 +320,45 @@ async fn test_console_delete_object_missing_bucket_returns_404() {
 }
 
 #[tokio::test]
+async fn test_console_get_object_detail() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/detail-bucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/detail-bucket/nested/file.txt", base_url),
+        b"detail test".to_vec(),
+    )
+    .await;
+    let tagging_xml =
+        r#"<Tagging><TagSet><Tag><Key>env</Key><Value>prod</Value></Tag></TagSet></Tagging>"#;
+    s3_request(
+        "PUT",
+        &format!("{}/detail-bucket/nested/file.txt?tagging", base_url),
+        tagging_xml.as_bytes().to_vec(),
+    )
+    .await;
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/detail-bucket/objects/nested/file.txt",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["key"], "nested/file.txt");
+    assert_eq!(body["size"], 11);
+    assert_eq!(body["contentType"], "application/octet-stream");
+    assert!(body["etag"].is_string());
+    assert_eq!(body["tags"]["env"], "prod");
+}
+
+#[tokio::test]
 async fn test_console_presign_simple_key() {
     let base_url = start_server().await;
 

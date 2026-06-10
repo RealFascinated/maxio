@@ -237,6 +237,72 @@ pub async fn upload_object(
     }
 }
 
+fn console_object_detail_json(meta: &crate::storage::ObjectMeta) -> serde_json::Value {
+    serde_json::json!({
+        "key": meta.key,
+        "size": meta.size,
+        "lastModified": meta.last_modified,
+        "etag": meta.etag,
+        "contentType": meta.content_type,
+        "versionId": meta.version_id,
+        "isDeleteMarker": meta.is_delete_marker,
+        "tags": meta.tags.clone().unwrap_or_default(),
+    })
+}
+
+pub async fn get_object_api(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path((bucket, key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:GetObject").await {
+        return resp;
+    }
+
+    match state.storage.head_bucket(&bucket).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Bucket not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
+
+    let mut meta = match state.storage.head_object(&bucket, &key).await {
+        Ok(meta) => meta,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Object not found"})),
+            )
+                .into_response();
+        }
+    };
+
+    match state.storage.get_object_tagging(&bucket, &key).await {
+        Ok(tags) if !tags.is_empty() => meta.tags = Some(tags),
+        Ok(_) => {}
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
+
+    (StatusCode::OK, Json(console_object_detail_json(&meta))).into_response()
+}
+
 pub async fn delete_object_api(
     State(state): State<AppState>,
     Extension(session): Extension<ConsoleSession>,

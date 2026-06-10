@@ -9,6 +9,12 @@ export interface S3File {
   contentType: string
 }
 
+export interface ObjectDetail extends S3File {
+  versionId?: string | null
+  isDeleteMarker?: boolean
+  tags: Record<string, string>
+}
+
 export interface ObjectsResponse {
   files: S3File[]
   prefixes: string[]
@@ -42,6 +48,10 @@ export async function uploadObject(bucket: string, key: string, file: File): Pro
   })
   if (!res.ok) throw new Error(`Upload failed (${res.status})`)
   return { ok: true }
+}
+
+export async function getObjectDetail(bucket: string, key: string): Promise<ObjectDetail> {
+  return apiFetch<ObjectDetail>(`/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(key)}`)
 }
 
 export async function deleteObject(bucket: string, key: string): Promise<{ ok: boolean }> {

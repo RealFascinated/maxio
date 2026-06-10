@@ -19,10 +19,11 @@
   interface Props {
     bucket: string
     objectKey: string
-    onClose: () => void
+    onClose?: () => void
     onVersionDeleted?: () => void
+    embedded?: boolean
   }
-  let { bucket, objectKey, onClose, onVersionDeleted }: Props = $props()
+  let { bucket, objectKey, onClose, onVersionDeleted, embedded = false }: Props = $props()
 
   const versionsQuery = createQuery(() => ({
     queryKey: versionKeys.list(bucket, objectKey),
@@ -65,22 +66,26 @@
 
 </script>
 
-<div class="rounded-sm border bg-card">
-  <div class="flex items-center justify-between border-b px-4 py-2">
-    <h4 class="text-sm font-semibold">Version History</h4>
-    <Button variant="ghost" size="sm" onclick={onClose}>Close</Button>
-  </div>
+<div class:rounded-sm={!embedded} class:border={!embedded} class:bg-card={!embedded}>
+  {#if !embedded}
+    <div class="flex items-center justify-between border-b px-4 py-2">
+      <h4 class="text-sm font-semibold">Version History</h4>
+      {#if onClose}
+        <Button variant="ghost" size="sm" onclick={onClose}>Close</Button>
+      {/if}
+    </div>
+  {/if}
 
   {#if versionsQuery.isError || deleteError}
-    <div class="p-4"><Callout type="danger">{deleteError ?? (versionsQuery.error instanceof ApiError ? versionsQuery.error.message : 'Failed to load versions')}</Callout></div>
+    <div class={embedded ? 'py-2' : 'p-4'}><Callout type="danger">{deleteError ?? (versionsQuery.error instanceof ApiError ? versionsQuery.error.message : 'Failed to load versions')}</Callout></div>
   {/if}
 
   {#if versionsQuery.isPending}
-    <div class="flex items-center gap-2 px-4 py-4 text-sm text-muted-foreground">
+    <div class="flex items-center gap-2 {embedded ? 'py-2' : 'px-4 py-4'} text-sm text-muted-foreground">
       <Loader2 class="size-4 animate-spin" /> Loading versions...
     </div>
   {:else if versions.length === 0}
-    <div class="px-4 py-4 text-sm text-muted-foreground">No versions found.</div>
+    <div class="{embedded ? 'py-2' : 'px-4 py-4'} text-sm text-muted-foreground">No versions found.</div>
   {:else}
     <Table.Root>
       <Table.Header>

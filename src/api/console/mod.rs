@@ -28,7 +28,8 @@ use buckets::{create_bucket, delete_bucket_api, list_buckets};
 use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
 use metrics::get_metrics_api;
 use objects::{
-    create_folder, delete_object_api, download_object, list_objects, presign_object, upload_object,
+    create_folder, delete_object_api, download_object, get_object_api, list_objects,
+    presign_object, upload_object,
 };
 use versions::{delete_version, download_version, list_versions};
 
@@ -91,7 +92,7 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .route("/buckets/{bucket}/objects", get(list_objects))
         .route(
             "/buckets/{bucket}/objects/{*key}",
-            delete(delete_object_api),
+            get(get_object_api).delete(delete_object_api),
         )
         .route("/buckets/{bucket}/download/{*key}", get(download_object))
         .route("/buckets/{bucket}/presign/{*key}", get(presign_object))
