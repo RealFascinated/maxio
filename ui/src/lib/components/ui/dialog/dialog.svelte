@@ -56,7 +56,7 @@
       tabindex="-1"
       class="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-sm border border-neutral-200 bg-white p-4 text-black shadow-sm dark:border-coolgray-300 dark:bg-coolgray-100 dark:text-white"
     >
-      <div class="flex items-start justify-between gap-4 border-b border-neutral-200 pb-3 dark:border-coolgray-200">
+      <div class="flex items-start justify-between gap-4 pb-1">
         <div class="flex min-w-0 flex-col gap-1">
           <h2 id="dialog-title" class="truncate text-base font-bold text-black dark:text-white">{title}</h2>
           {#if description}
