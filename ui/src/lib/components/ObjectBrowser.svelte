@@ -736,7 +736,7 @@
             <Table.Cell class="text-muted-foreground">{formatDate(file.lastModified)}</Table.Cell>
             <Table.Cell class="w-24 text-right">
               <span class="flex items-center justify-end gap-4">
-                {#if isPreviewable(file.contentType)}
+                {#if isPreviewable(file.contentType, file.key)}
                   <button
                     class="text-muted-foreground hover:text-foreground transition-colors"
                     onclick={(e) => { e.stopPropagation(); previewFile = file }}

@@ -22,9 +22,14 @@ function normalize(contentType: string): string {
   return contentType.split(';')[0].trim().toLowerCase()
 }
 
-export function previewKind(contentType: string): PreviewKind {
+function isJsonFilename(filename: string): boolean {
+  const lower = filename.toLowerCase()
+  return lower.endsWith('.json') || lower.endsWith('.jsonc')
+}
+
+export function previewKind(contentType: string, filename = ''): PreviewKind {
   const ct = normalize(contentType)
-  if (!ct) return 'unsupported'
+  if (!ct && filename && isJsonFilename(filename)) return 'text'
 
   // SVG renders safely via <img> (no script execution in that context).
   if (ct.startsWith('image/')) return 'image'
@@ -38,9 +43,39 @@ export function previewKind(contentType: string): PreviewKind {
   if (TEXT_APP_TYPES.has(ct)) return 'text'
   if (ct.endsWith('+json') || ct.endsWith('+xml')) return 'text'
 
+  if (filename && isJsonFilename(filename)) return 'text'
+
   return 'unsupported'
 }
 
-export function isPreviewable(contentType: string): boolean {
-  return previewKind(contentType) !== 'unsupported'
+export function isPreviewable(contentType: string, filename = ''): boolean {
+  return previewKind(contentType, filename) !== 'unsupported'
+}
+
+/** Normalize API or file JSON to a string for editing or display. */
+export function jsonDocumentText(document: unknown): string {
+  if (typeof document === 'string') return document
+  if (document !== null && typeof document === 'object') {
+    return JSON.stringify(document)
+  }
+  return String(document ?? '')
+}
+
+/** Pretty-print JSON when the value parses; otherwise return null. */
+export function tryPrettyJson(text: unknown): string | null {
+  if (text !== null && typeof text === 'object') {
+    try {
+      return JSON.stringify(text, null, 2)
+    } catch {
+      return null
+    }
+  }
+  if (typeof text !== 'string') return null
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2)
+  } catch {
+    return null
+  }
 }

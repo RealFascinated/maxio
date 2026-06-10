@@ -32,6 +32,7 @@
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
   import { formatDate } from '$lib/format'
+  import { jsonDocumentText, tryPrettyJson } from '$lib/preview'
 
   let showCreate = $state(false)
   let newUsername = $state('')
@@ -129,8 +130,7 @@
     }) => putUserPolicy(username, policyName, document),
     onSuccess: () => {
       toast.success('Policy saved')
-      policyEditor = null
-      showPolicyDialog = false
+      closePolicyDialog()
       queryClient.invalidateQueries({ queryKey: userKeys.list() })
     },
   }))
@@ -168,16 +168,22 @@
   async function openPolicyEditor(user: IamUserSummary, policyName: string) {
     try {
       const existing = await getUserPolicy(user.username, policyName)
+      const raw = jsonDocumentText(existing.document)
       policyEditor = {
         username: user.username,
         policyName,
-        document: existing.document,
+        document: tryPrettyJson(raw) ?? raw,
       }
       showPolicyDialog = true
     } catch (err) {
       console.error('getUserPolicy failed:', err)
       toast.error(err instanceof ApiError ? err.message : 'Failed to load policy')
     }
+  }
+
+  function closePolicyDialog() {
+    policyEditor = null
+    showPolicyDialog = false
   }
 
   function openNewPolicyEditor(user: IamUserSummary) {
@@ -492,7 +498,7 @@
   title="Inline policy"
   size="lg"
   loading={savePolicyMutation.isPending}
-  onClose={() => { policyEditor = null; showPolicyDialog = false }}
+  onClose={closePolicyDialog}
 >
   {#if policyEditor}
     <div class="space-y-4">
@@ -505,7 +511,7 @@
         <textarea
           id="policyDoc"
           bind:value={policyEditor.document}
-          class="input-cool min-h-64 w-full resize-y rounded-sm bg-background p-3 font-mono text-xs"
+          class="input-cool h-80 w-full resize-none overflow-auto rounded-sm bg-background p-3 font-mono text-xs"
         ></textarea>
       </div>
     </div>
@@ -529,7 +535,7 @@
           <span></span>
         {/if}
         <div class="flex gap-2">
-          <Button variant="outline" disabled={savePolicyMutation.isPending} onclick={() => { policyEditor = null; showPolicyDialog = false }}>
+          <Button variant="outline" disabled={savePolicyMutation.isPending} onclick={closePolicyDialog}>
             Cancel
           </Button>
           <Button variant="brand" onclick={savePolicy} disabled={savePolicyMutation.isPending}>
@@ -615,8 +621,7 @@
     if (!policyToDelete) return
     try {
       await deletePolicyMutation.mutateAsync(policyToDelete)
-      policyEditor = null
-      showPolicyDialog = false
+      closePolicyDialog()
     } catch (err) {
       console.error('deleteUserPolicy failed:', err)
       toast.error(err instanceof ApiError ? err.message : 'Failed to delete policy')

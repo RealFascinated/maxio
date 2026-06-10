@@ -5,7 +5,7 @@
   import Download from 'lucide-svelte/icons/download'
   import { downloadUrl as objectDownloadUrl } from '$lib/api/objects'
   import { displayName } from '$lib/utils'
-  import { previewKind, BINARY_PREVIEW_CAP, TEXT_PREVIEW_CAP, type PreviewKind } from '$lib/preview'
+  import { previewKind, BINARY_PREVIEW_CAP, TEXT_PREVIEW_CAP, tryPrettyJson, type PreviewKind } from '$lib/preview'
 
   interface Props {
     bucket: string
@@ -16,7 +16,7 @@
   }
   let { bucket, objectKey, contentType, size, onClose }: Props = $props()
 
-  const kind: PreviewKind = $derived(previewKind(contentType))
+  const kind: PreviewKind = $derived(previewKind(contentType, objectKey))
   const name = $derived(displayName(objectKey))
   const downloadUrl = $derived(objectDownloadUrl(bucket, objectKey))
   const tooLarge = $derived(size > BINARY_PREVIEW_CAP)
@@ -26,6 +26,10 @@
   let blobUrl = $state<string | null>(null)
   let textContent = $state('')
   let truncated = $state(false)
+  let showOriginal = $state(false)
+
+  const prettyJson = $derived(tryPrettyJson(textContent))
+  const displayText = $derived(prettyJson && !showOriginal ? prettyJson : textContent)
 
   async function load() {
     if (kind === 'unsupported' || tooLarge) {
@@ -80,7 +84,14 @@
     {#if truncated}
       <p class="mb-2 text-xs text-amber-600 dark:text-amber-400">Preview truncated to the first {Math.round(TEXT_PREVIEW_CAP / 1024)} KB.</p>
     {/if}
-    <pre class="select-text overflow-auto whitespace-pre-wrap break-words rounded-sm bg-neutral-50 p-3 font-mono text-xs text-neutral-800 dark:bg-coolgray-200 dark:text-neutral-200">{textContent}</pre>
+    {#if prettyJson}
+      <div class="mb-2 flex justify-end">
+        <Button variant="outline" size="sm" onclick={() => (showOriginal = !showOriginal)}>
+          {showOriginal ? 'View formatted' : 'View original'}
+        </Button>
+      </div>
+    {/if}
+    <pre class="select-text max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-sm bg-neutral-50 p-3 font-mono text-xs text-neutral-800 dark:bg-coolgray-200 dark:text-neutral-200">{displayText}</pre>
   {/if}
   {#snippet footer()}
     <Button href={downloadUrl} variant="default">
