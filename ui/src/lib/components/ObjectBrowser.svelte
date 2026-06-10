@@ -59,6 +59,8 @@
   let selectedKeys = $state<Set<string>>(new Set())
   let createFolderInput = $state<HTMLInputElement | null>(null)
   let sentinelEl = $state<HTMLDivElement | undefined>()
+  let dragDepth = $state(0)
+  const isDragging = $derived(dragDepth > 0)
 
   $effect(() => {
     if (showCreateFolder && createFolderInput) {
@@ -119,9 +121,23 @@
   }))
 
   const uploadMutation = createMutation(() => ({
-    mutationFn: async (files: FileList) => {
-      for (const file of Array.from(files)) {
-        await uploadObject(bucket, `${prefix}${file.name}`, file)
+    mutationFn: async ({
+      files,
+      toastId,
+      totalBytes,
+    }: {
+      files: File[]
+      toastId: string | number
+      totalBytes: number
+    }) => {
+      let completedBytes = 0
+      for (const file of files) {
+        await uploadObject(bucket, `${prefix}${file.name}`, file, (loaded) => {
+          const overall = completedBytes + loaded
+          const pct = totalBytes > 0 ? Math.round((overall / totalBytes) * 100) : 100
+          toast.loading(uploadProgressMessage(files, file, pct), { id: toastId })
+        })
+        completedBytes += file.size
       }
       return files.length
     },
@@ -345,18 +361,61 @@
     return crumbs
   })
 
-  async function handleUpload() {
-    const inputFiles = fileInput?.files
-    if (!inputFiles || inputFiles.length === 0) return
-    const toastId = toast.loading(inputFiles.length === 1 ? `Uploading ${inputFiles[0].name}…` : `Uploading ${inputFiles.length} files…`)
+  function uploadProgressMessage(files: File[], currentFile: File, pct: number): string {
+    if (files.length === 1) return `Uploading ${currentFile.name} · ${pct}%`
+    return `Uploading ${files.length} files · ${pct}%`
+  }
+
+  function dragHasFiles(event: DragEvent): boolean {
+    return event.dataTransfer?.types.includes('Files') ?? false
+  }
+
+  function onDragEnter(event: DragEvent) {
+    if (!dragHasFiles(event) || uploadMutation.isPending) return
+    event.preventDefault()
+    dragDepth++
+  }
+
+  function onDragLeave(event: DragEvent) {
+    if (!dragHasFiles(event)) return
+    event.preventDefault()
+    dragDepth = Math.max(0, dragDepth - 1)
+  }
+
+  function onDragOver(event: DragEvent) {
+    if (!dragHasFiles(event) || uploadMutation.isPending) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  }
+
+  function onDrop(event: DragEvent) {
+    event.preventDefault()
+    dragDepth = 0
+    if (uploadMutation.isPending) return
+    const dropped = event.dataTransfer?.files
+    if (dropped?.length) void uploadFiles(dropped)
+  }
+
+  async function uploadFiles(files: FileList | File[]) {
+    const fileArray = Array.from(files)
+    if (fileArray.length === 0) return
+
+    const totalBytes = fileArray.reduce((sum, file) => sum + file.size, 0)
+    const toastId = toast.loading(uploadProgressMessage(fileArray, fileArray[0], 0))
     try {
-      await uploadMutation.mutateAsync(inputFiles)
+      await uploadMutation.mutateAsync({ files: fileArray, toastId, totalBytes })
       toast.dismiss(toastId)
     } catch (err) {
       console.error('Upload failed:', err)
       toast.error(err instanceof Error ? err.message : 'Upload failed', { id: toastId })
       if (fileInput) fileInput.value = ''
     }
+  }
+
+  async function handleUpload() {
+    const inputFiles = fileInput?.files
+    if (!inputFiles || inputFiles.length === 0) return
+    await uploadFiles(inputFiles)
   }
 
   async function deleteObject(key: string, e: Event) {
@@ -551,7 +610,27 @@
   })
 </script>
 
-<div class="flex flex-col gap-4">
+<div
+  class="relative flex flex-col gap-4"
+  role="region"
+  aria-label="Object browser drop zone"
+  ondragenter={onDragEnter}
+  ondragleave={onDragLeave}
+  ondragover={onDragOver}
+  ondrop={onDrop}
+>
+  {#if isDragging}
+    <div
+      class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-sm border-2 border-dashed border-coollabs bg-coollabs/5 dark:border-warning dark:bg-warning/5"
+      aria-hidden="true"
+    >
+      <div class="flex flex-col items-center gap-2 text-coollabs dark:text-warning">
+        <Upload class="size-8" />
+        <p class="text-sm font-medium">Drop files to upload</p>
+      </div>
+    </div>
+  {/if}
+
   {#if objectsQuery.isError}
     <Callout type="danger">{objectsQuery.error instanceof ApiError ? objectsQuery.error.message : 'Failed to load objects'}</Callout>
   {/if}

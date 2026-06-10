@@ -38,16 +38,32 @@ export async function listObjects(
   return apiFetch<ObjectsResponse>(`/api/buckets/${encodeURIComponent(bucket)}/objects?${params}`)
 }
 
-export async function uploadObject(bucket: string, key: string, file: File): Promise<{ ok: boolean }> {
+export async function uploadObject(
+  bucket: string,
+  key: string,
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ ok: boolean }> {
   const contentType = file.type || guessContentType(file.name)
-  const res = await fetch(`/api/buckets/${encodeURIComponent(bucket)}/upload/${encodeObjectKey(key)}`, {
-    method: 'PUT',
-    body: file,
-    credentials: 'same-origin',
-    headers: contentType ? { 'Content-Type': contentType } : undefined,
+  const url = `/api/buckets/${encodeURIComponent(bucket)}/upload/${encodeObjectKey(key)}`
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    xhr.withCredentials = true
+    if (contentType) xhr.setRequestHeader('Content-Type', contentType)
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(event.loaded, event.total)
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve({ ok: true })
+      else reject(new Error(`Upload failed (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('Upload failed'))
+    xhr.send(file)
   })
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`)
-  return { ok: true }
 }
 
 export async function getObjectDetail(bucket: string, key: string): Promise<ObjectDetail> {
