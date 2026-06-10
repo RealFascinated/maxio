@@ -1,4 +1,4 @@
-
+<div align="center">
 
 # MaxIO
 
@@ -6,7 +6,7 @@ S3-compatible object storage server — single-binary replacement for MinIO.
 
 Rust · Axum · PostgreSQL · SvelteKit · Svelte 5 · Tailwind CSS v4 · shadcn-svelte
 
-
+</div>
 
 ## About the Project
 
@@ -28,6 +28,7 @@ MaxIO is a lightweight, single-binary S3-compatible object storage server writte
 - **Optional SSD Cache** — Write-through or writeback cache layer for object bytes on a fast local disk
 - **Metrics** — Prometheus endpoint (`GET /metrics`) and a live throughput dashboard in the console (root users)
 - **Console UX** — Object search, infinite scroll, bulk select/delete, drag-and-drop upload, file preview, folder deletion, bucket settings (versioning, CORS, public read), and orphan-metadata scan/repair
+
 
 ## Installation
 
@@ -107,35 +108,33 @@ Open `http://localhost:9000/ui/` in your browser. Default credentials: `maxioadm
 
 ## Configuration
 
-
-| Variable                              | CLI Flag                          | Default                         | Description                                                                                                                          |
-| ------------------------------------- | --------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `MAXIO_DATABASE_URL`                  | `--database-url`                  | *(required)*                    | PostgreSQL connection URL for metadata                                                                                               |
-| `MAXIO_PORT`                          | `--port`                          | `9000`                          | Listen port                                                                                                                          |
-| `MAXIO_ADDRESS`                       | `--address`                       | `0.0.0.0`                       | Bind address                                                                                                                         |
-| `MAXIO_DATA_DIR`                      | `--data-dir`                      | `./data`                        | Object bytes storage directory                                                                                                       |
-| `MAXIO_ACCESS_KEY`                    | `--access-key`                    | `maxioadmin`                    | Root access key (aliases: `MINIO_ROOT_USER`, `MINIO_ACCESS_KEY`)                                                                     |
-| `MAXIO_SECRET_KEY`                    | `--secret-key`                    | `maxioadmin`                    | Root secret key (aliases: `MINIO_ROOT_PASSWORD`, `MINIO_SECRET_KEY`)                                                                 |
-| `MAXIO_ALLOW_INSECURE_DEV`            | `--allow-insecure-dev`            | `false`                         | Allow insecure development defaults, including default credentials and HTTP console cookies                                          |
-| `MAXIO_SECURE_COOKIES`                | `--secure-cookies`                | `true`                          | Force `Secure` on console session cookies; keep enabled for public consoles                                                          |
-| `MAXIO_DEFAULT_BUCKETS`               | `--default-buckets`               | *(none)*                        | Comma-separated list of bucket names to create during startup (aliases: `MINIO_DEFAULT_BUCKETS`)                                     |
-| `MAXIO_MAX_CONSOLE_BODY_BYTES`        | `--max-console-body-bytes`        | `1048576`                       | Max request body size for console JSON/form API routes; object uploads are streaming and not covered by this limit                   |
-| `MAXIO_METRICS_TOKEN`                 | `--metrics-token`                 | *(empty)*                       | Bearer token for `GET /metrics`; when empty the endpoint returns 403                                                                 |
-| `MAXIO_PUBLIC_URL`                    | `--public-url`                    | *(none)*                        | Public S3 base URL for presigned links behind a reverse proxy, e.g. `https://s3.example.com`                                         |
-| `MAXIO_ASYNC_META_WRITE`              | `--async-meta-write`              | `false`                         | Commit metadata to Postgres in the background after bytes are durable; improves PUT throughput (incompatible with bucket versioning) |
-| `MAXIO_DB_POOL_SIZE`                  | `--db-pool-size`                  | `64`                            | Max Postgres connection pool size                                                                                                    |
-| `MAXIO_DB_PREPARED_STATEMENT_CACHE`   | `--db-prepared-statement-cache`   | `true`                          | Cache prepared SQL statements on each pool connection                                                                                |
-| `MAXIO_CACHE_DIR`                     | `--cache-dir`                     | *(none)*                        | Optional SSD cache directory for object bytes                                                                                        |
-| `MAXIO_CACHE_MAX_SIZE`                | `--cache-max-size`                | `10737418240` (10 GiB)          | Maximum cache size in bytes                                                                                                          |
-| `MAXIO_CACHE_WRITEBACK`               | `--cache-writeback`               | `false`                         | Write to cache first and flush to `data_dir` in the background                                                                       |
-| `MAXIO_CACHE_FLUSH_INTERVAL`          | `--cache-flush-interval`          | `30`                            | Writeback flush interval in seconds                                                                                                  |
-| `MAXIO_OBJECT_READ_CACHE_MAX_ENTRIES` | `--object-read-cache-max-entries` | `262144`                        | Max object read-metadata cache entries                                                                                               |
-| `MAXIO_BUCKET_CACHE_MAX_ENTRIES`      | `--bucket-cache-max-entries`      | `10000`                         | Max bucket metadata cache entries                                                                                                    |
-| `MAXIO_SIGNING_KEY_CACHE_MAX_ENTRIES` | `--signing-key-cache-max-entries` | `10000`                         | Max signing key cache entries                                                                                                        |
-| `MAXIO_IAM_CACHE_MAX_ENTRIES`         | `--iam-cache-max-entries`         | `10000`                         | Max entries per IAM metadata sub-cache                                                                                               |
-| `MAXIO_HEALTHCHECK_URL`               | `healthcheck --url`               | `http://127.0.0.1:9000/healthz` | Healthcheck endpoint URL; default port follows `MAXIO_PORT` when set                                                                 |
-| `MAXIO_HEALTHCHECK_TIMEOUT_MS`        | `healthcheck --timeout-ms`        | `2000`                          | Healthcheck connect/read timeout in milliseconds                                                                                     |
-
+| Variable | CLI Flag | Default | Description |
+|---|---|---|---|
+| `MAXIO_DATABASE_URL` | `--database-url` | _(required)_ | PostgreSQL connection URL for metadata |
+| `MAXIO_PORT` | `--port` | `9000` | Listen port |
+| `MAXIO_ADDRESS` | `--address` | `0.0.0.0` | Bind address |
+| `MAXIO_DATA_DIR` | `--data-dir` | `./data` | Object bytes storage directory |
+| `MAXIO_ACCESS_KEY` | `--access-key` | `maxioadmin` | Root access key (aliases: `MINIO_ROOT_USER`, `MINIO_ACCESS_KEY`) |
+| `MAXIO_SECRET_KEY` | `--secret-key` | `maxioadmin` | Root secret key (aliases: `MINIO_ROOT_PASSWORD`, `MINIO_SECRET_KEY`) |
+| `MAXIO_ALLOW_INSECURE_DEV` | `--allow-insecure-dev` | `false` | Allow insecure development defaults, including default credentials and HTTP console cookies |
+| `MAXIO_SECURE_COOKIES` | `--secure-cookies` | `true` | Force `Secure` on console session cookies; keep enabled for public consoles |
+| `MAXIO_DEFAULT_BUCKETS` | `--default-buckets` | _(none)_ | Comma-separated list of bucket names to create during startup (aliases: `MINIO_DEFAULT_BUCKETS`) |
+| `MAXIO_MAX_CONSOLE_BODY_BYTES` | `--max-console-body-bytes` | `1048576` | Max request body size for console JSON/form API routes; object uploads are streaming and not covered by this limit |
+| `MAXIO_METRICS_TOKEN` | `--metrics-token` | _(empty)_ | Bearer token for `GET /metrics`; when empty the endpoint returns 403 |
+| `MAXIO_PUBLIC_URL` | `--public-url` | _(none)_ | Public S3 base URL for presigned links behind a reverse proxy, e.g. `https://s3.example.com` |
+| `MAXIO_ASYNC_META_WRITE` | `--async-meta-write` | `false` | Commit metadata to Postgres in the background after bytes are durable; improves PUT throughput (incompatible with bucket versioning) |
+| `MAXIO_DB_POOL_SIZE` | `--db-pool-size` | `64` | Max Postgres connection pool size |
+| `MAXIO_DB_PREPARED_STATEMENT_CACHE` | `--db-prepared-statement-cache` | `true` | Cache prepared SQL statements on each pool connection |
+| `MAXIO_CACHE_DIR` | `--cache-dir` | _(none)_ | Optional SSD cache directory for object bytes |
+| `MAXIO_CACHE_MAX_SIZE` | `--cache-max-size` | `10737418240` (10 GiB) | Maximum cache size in bytes |
+| `MAXIO_CACHE_WRITEBACK` | `--cache-writeback` | `false` | Write to cache first and flush to `data_dir` in the background |
+| `MAXIO_CACHE_FLUSH_INTERVAL` | `--cache-flush-interval` | `30` | Writeback flush interval in seconds |
+| `MAXIO_OBJECT_READ_CACHE_MAX_ENTRIES` | `--object-read-cache-max-entries` | `262144` | Max object read-metadata cache entries |
+| `MAXIO_BUCKET_CACHE_MAX_ENTRIES` | `--bucket-cache-max-entries` | `10000` | Max bucket metadata cache entries |
+| `MAXIO_SIGNING_KEY_CACHE_MAX_ENTRIES` | `--signing-key-cache-max-entries` | `10000` | Max signing key cache entries |
+| `MAXIO_IAM_CACHE_MAX_ENTRIES` | `--iam-cache-max-entries` | `10000` | Max entries per IAM metadata sub-cache |
+| `MAXIO_HEALTHCHECK_URL` | `healthcheck --url` | `http://127.0.0.1:9000/healthz` | Healthcheck endpoint URL; default port follows `MAXIO_PORT` when set |
+| `MAXIO_HEALTHCHECK_TIMEOUT_MS` | `healthcheck --timeout-ms` | `2000` | Healthcheck connect/read timeout in milliseconds |
 
 ## Usage
 
@@ -201,16 +200,10 @@ curl -H "Authorization: Bearer $MAXIO_METRICS_TOKEN" http://localhost:9000/metri
 
 The console **Metrics** page (root users only) shows live throughput, cache stats, Postgres latency, and per-bucket totals.
 
+
 ## Contributing
 
 See [CLAUDE.md](CLAUDE.md) for the full development workflow, architecture details, and testing instructions.
-
-## Core Maintainer
-
-
-| [Fascinated](https://github.com/andrasbacsai) |
-| --------------------------------------------- |
-
 
 ## License
 
