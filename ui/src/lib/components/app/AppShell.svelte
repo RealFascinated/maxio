@@ -307,6 +307,8 @@
           collapsed={false}
           variant="drawer"
           navItems={sidebarNavItems}
+          username={authQuery.data?.username}
+          isRoot={isRootUser}
           {themeMode}
           onToggleCollapsed={toggleSidebarCollapsed}
           onThemeChange={applyTheme}
@@ -321,6 +323,8 @@
       variant="inline"
       class="hidden shrink-0 lg:flex"
       navItems={sidebarNavItems}
+      username={authQuery.data?.username}
+      isRoot={isRootUser}
       {themeMode}
       onToggleCollapsed={toggleSidebarCollapsed}
       onThemeChange={applyTheme}
