@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { createQuery } from '@tanstack/svelte-query'
+  import { untrack } from 'svelte'
   import * as Table from '$lib/components/ui/table'
   import * as Card from '$lib/components/ui/card'
   import { Callout } from '$lib/components/ui/callout'
@@ -11,7 +13,8 @@
   import Package from 'lucide-svelte/icons/package'
   import Table2 from 'lucide-svelte/icons/table-2'
   import Users from 'lucide-svelte/icons/users'
-  import { fetchMetrics, type MetricsSnapshot } from '$lib/api/metrics'
+  import { fetchMetrics } from '$lib/api/metrics'
+  import { metricsKeys } from '$lib/api/keys'
   import { formatBytes, formatThroughput } from '$lib/format-bytes'
   import {
     formatIops,
@@ -22,44 +25,23 @@
     hitRate,
   } from '$lib/format'
 
-  let data = $state<MetricsSnapshot | undefined>(undefined)
-  let loading = $state(true)
-  let error = $state<unknown>(null)
-
-  $effect(() => {
-    let cancelled = false
-
-    async function poll() {
-      try {
-        const snapshot = await fetchMetrics()
-        if (!cancelled) {
-          data = snapshot
-          error = null
-        }
-      } catch (e) {
-        if (!cancelled) error = e
-      } finally {
-        if (!cancelled) loading = false
-      }
-    }
-
-    poll()
-    const id = setInterval(poll, 1_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  })
+  const metricsQuery = createQuery(() => ({
+    queryKey: metricsKeys.snapshot(),
+    queryFn: fetchMetrics,
+    refetchInterval: 1_000,
+    staleTime: 0,
+  }))
 
   let peakThroughput = $state(0)
   let peakIops = $state(0)
   $effect(() => {
+    const data = metricsQuery.data
     if (!data) return
     const total = data.throughput.readBytesPerSec + data.throughput.writeBytesPerSec
-    peakThroughput = Math.max(total, peakThroughput * 0.95)
+    peakThroughput = Math.max(total, untrack(() => peakThroughput) * 0.95)
     const totalIops =
       data.opsTotals.readIops + data.opsTotals.writeIops + data.opsTotals.metaIops
-    peakIops = Math.max(totalIops, peakIops * 0.95)
+    peakIops = Math.max(totalIops, untrack(() => peakIops) * 0.95)
   })
 </script>
 
@@ -69,26 +51,27 @@
       <BarChart2 class="size-6 text-coollabs dark:text-warning" />
       <h1>Metrics</h1>
     </div>
-    {#if data}
+    {#if metricsQuery.data}
       <div
         class="flex items-center gap-2 rounded-sm border-2 border-neutral-200 bg-white px-3 py-1.5 text-sm dark:border-coolgray-200 dark:bg-coolgray-100"
       >
         <Users class="size-4 text-neutral-500" />
         <span class="text-neutral-500">Active S3 Connections</span>
         <span class="font-semibold tabular-nums dark:text-white">
-          {data.activeClients.toLocaleString()}
+          {metricsQuery.data.activeClients.toLocaleString()}
         </span>
       </div>
     {/if}
   </div>
 
-  {#if loading}
+  {#if metricsQuery.isPending}
     <p class="text-sm text-neutral-500">Loading metrics…</p>
-  {:else if error}
+  {:else if metricsQuery.isError}
     <Callout type="danger">
-      Failed to load metrics. {#if error instanceof Error}{error.message}{/if}
+      Failed to load metrics. {#if metricsQuery.error instanceof Error}{metricsQuery.error.message}{/if}
     </Callout>
-  {:else if data}
+  {:else if metricsQuery.data}
+    {@const data = metricsQuery.data}
     {@const readThroughput = formatThroughput(data.throughput.readBytesPerSec)}
     {@const writeThroughput = formatThroughput(data.throughput.writeBytesPerSec)}
     {@const totalThroughputBps =
