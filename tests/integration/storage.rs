@@ -82,6 +82,97 @@ async fn test_list_objects_page_db_pagination() {
 }
 
 #[tokio::test]
+async fn test_list_objects_delimited_page_skips_dense_folders() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(data_dir, &database_url).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "dense-bucket".to_string(),
+            created_at: "2026-06-07T00:00:00.000Z".to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    for key in ["a-file.txt", "z-file.txt"] {
+        storage
+            .put_object(
+                "dense-bucket",
+                key,
+                "text/plain",
+                Box::pin(std::io::Cursor::new(b"x")),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    for i in 0..500 {
+        storage
+            .put_object(
+                "dense-bucket",
+                &format!("big-folder/item-{i:03}.txt"),
+                "text/plain",
+                Box::pin(std::io::Cursor::new(b"x")),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    for key in ["other-folder/", "third-folder/"] {
+        storage
+            .put_object(
+                "dense-bucket",
+                key,
+                "application/x-directory",
+                Box::pin(tokio::io::empty()),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let page = storage
+        .list_objects_delimited_page("dense-bucket", "", "/", None, 200, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        page.prefixes,
+        vec![
+            "big-folder/".to_string(),
+            "other-folder/".to_string(),
+            "third-folder/".to_string(),
+        ]
+    );
+    assert_eq!(
+        page.files
+            .iter()
+            .map(|o| o.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a-file.txt", "z-file.txt"]
+    );
+    assert!(!page.is_truncated);
+    assert!(page.next_continuation.is_none());
+
+    let _postgres = postgres;
+}
+
+#[tokio::test]
 async fn test_put_rollback_when_publish_fails() {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap();

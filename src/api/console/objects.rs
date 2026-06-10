@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use axum::{
     Json,
     extract::{Extension, Path, Query, State},
@@ -21,7 +19,6 @@ use super::session::ConsoleSession;
 type HmacSha256 = hmac::Hmac<Sha256>;
 
 const CONSOLE_LIST_PAGE_SIZE: usize = 200;
-const CONSOLE_LIST_SCAN_BATCH: usize = 200;
 const CONSOLE_SEARCH_MAX_LEN: usize = 256;
 
 #[derive(serde::Deserialize)]
@@ -41,32 +38,6 @@ fn console_list_file_json(obj: &crate::storage::ObjectMeta) -> serde_json::Value
         "etag": obj.etag,
         "contentType": obj.content_type,
     })
-}
-
-/// Classify one object into a direct file or a collapsed folder prefix.
-fn classify_list_entry(
-    obj: &crate::storage::ObjectMeta,
-    prefix: &str,
-    delimiter: &str,
-    prefix_set: &mut BTreeSet<String>,
-) -> Option<serde_json::Value> {
-    if obj.key.ends_with('/') {
-        if obj.key != prefix {
-            prefix_set.insert(obj.key.clone());
-        }
-        None
-    } else {
-        let suffix = &obj.key[prefix.len()..];
-        if let Some(pos) = suffix.find(delimiter) {
-            let common = format!("{}{}", prefix, &suffix[..pos + delimiter.len()]);
-            if common != prefix {
-                prefix_set.insert(common);
-            }
-            None
-        } else {
-            Some(console_list_file_json(obj))
-        }
-    }
 }
 
 pub async fn list_objects(
@@ -112,65 +83,36 @@ pub async fn list_objects(
         }
     }
 
-    let mut files = Vec::new();
-    let mut prefix_set = BTreeSet::new();
-    let mut cursor = params.start_after;
-    let mut next_continuation_token = None;
-
-    'scan: loop {
-        let page = match state
-            .storage
-            .list_objects_page(
-                &bucket,
-                &prefix,
-                cursor.as_deref(),
-                CONSOLE_LIST_SCAN_BATCH,
-                search,
+    let page = match state
+        .storage
+        .list_objects_delimited_page(
+            &bucket,
+            &prefix,
+            &delimiter,
+            params.start_after.as_deref(),
+            max_keys,
+            search,
+        )
+        .await
+    {
+        Ok(page) => page,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
             )
-            .await
-        {
-            Ok(page) => page,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-                    .into_response();
-            }
-        };
-
-        if page.objects.is_empty() {
-            break;
+                .into_response();
         }
+    };
 
-        for (i, obj) in page.objects.iter().enumerate() {
-            if let Some(file) = classify_list_entry(obj, &prefix, &delimiter, &mut prefix_set) {
-                files.push(file);
-            }
-
-            if files.len() + prefix_set.len() >= max_keys {
-                let more_in_batch = i + 1 < page.objects.len();
-                if more_in_batch || page.is_truncated {
-                    next_continuation_token = Some(obj.key.clone());
-                }
-                break 'scan;
-            }
-        }
-
-        if !page.is_truncated {
-            break;
-        }
-        cursor = page.next_continuation;
-    }
-
-    let prefixes: Vec<String> = prefix_set.into_iter().collect();
+    let files: Vec<serde_json::Value> = page.files.iter().map(console_list_file_json).collect();
 
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "files": files,
-            "prefixes": prefixes,
-            "nextContinuationToken": next_continuation_token,
+            "prefixes": page.prefixes,
+            "nextContinuationToken": page.next_continuation,
         })),
     )
         .into_response()

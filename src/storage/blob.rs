@@ -1149,10 +1149,7 @@ mod unlink_tests {
         blobs
             .unlink_objects_batch(
                 "bucket",
-                &[
-                    "test/nested/file.txt".to_string(),
-                    "test/".to_string(),
-                ],
+                &["test/nested/file.txt".to_string(), "test/".to_string()],
                 4,
             )
             .await

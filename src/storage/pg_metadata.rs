@@ -268,6 +268,29 @@ impl MetadataStore for PgMetadataStore {
         })
     }
 
+    async fn list_objects_delimited_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        delimiter: &str,
+        start_after: Option<&str>,
+        max_keys: usize,
+        search: Option<&str>,
+    ) -> Result<crate::storage::traits::DelimitedListPage, StorageError> {
+        meta_op!(self, "list_objects_delimited_page", {
+            repos::list_objects_delimited_page(
+                &self.ctx,
+                bucket,
+                prefix,
+                delimiter,
+                start_after,
+                max_keys,
+                search,
+            )
+            .await
+        })
+    }
+
     async fn put_object_acl(
         &self,
         bucket: &str,

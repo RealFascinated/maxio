@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 pub use crate::db::repos::PutBucketContext;
 
-use super::traits::ListPage;
+use super::traits::{DelimitedListPage, ListPage};
 use super::{BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError};
 
 #[async_trait]
@@ -65,6 +65,15 @@ pub trait MetadataStore: Send + Sync {
         max_keys: usize,
         search: Option<&str>,
     ) -> Result<ListPage, StorageError>;
+    async fn list_objects_delimited_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        delimiter: &str,
+        start_after: Option<&str>,
+        max_keys: usize,
+        search: Option<&str>,
+    ) -> Result<DelimitedListPage, StorageError>;
     async fn put_object_acl(
         &self,
         bucket: &str,

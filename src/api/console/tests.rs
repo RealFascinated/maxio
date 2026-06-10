@@ -136,13 +136,10 @@ async fn folder_delete_stats_counts_nested_objects() {
         .await
         .unwrap();
 
-    let (count, size_bytes) = folder_delete_stats(
-        storage.as_ref(),
-        "bucket",
-        &[String::from("photos/")],
-    )
-    .await
-    .unwrap();
+    let (count, size_bytes) =
+        folder_delete_stats(storage.as_ref(), "bucket", &[String::from("photos/")])
+            .await
+            .unwrap();
     assert_eq!(count, 3);
     assert_eq!(size_bytes, 15);
 }

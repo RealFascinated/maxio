@@ -29,7 +29,7 @@ use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
 use metrics::get_metrics_api;
 use objects::{
     create_folder, delete_folder, delete_object_api, download_object, get_object_api, list_objects,
-    preview_folder_delete, presign_object, upload_object,
+    presign_object, preview_folder_delete, upload_object,
 };
 use versions::{delete_version, download_version, list_versions};
 

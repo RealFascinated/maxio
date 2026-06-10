@@ -13,6 +13,14 @@ pub struct ListPage {
     pub next_continuation: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DelimitedListPage {
+    pub files: Vec<ObjectMeta>,
+    pub prefixes: Vec<String>,
+    pub is_truncated: bool,
+    pub next_continuation: Option<String>,
+}
+
 #[async_trait]
 pub trait Storage: Send + Sync {
     // Buckets
@@ -98,6 +106,15 @@ pub trait Storage: Send + Sync {
         max_keys: usize,
         search: Option<&str>,
     ) -> Result<ListPage, StorageError>;
+    async fn list_objects_delimited_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        delimiter: &str,
+        start_after: Option<&str>,
+        max_keys: usize,
+        search: Option<&str>,
+    ) -> Result<DelimitedListPage, StorageError>;
     async fn put_object_acl(
         &self,
         bucket: &str,
