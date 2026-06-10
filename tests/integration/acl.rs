@@ -69,3 +69,47 @@ async fn test_object_acl_get_after_put() {
     let body = get_acl.text().await.unwrap();
     assert!(body.contains("Owner"));
 }
+
+#[tokio::test]
+async fn test_public_read_acl_allows_anonymous_get() {
+    let base_url = start_server().await;
+    let bucket = "acl-anon-bucket";
+
+    assert_eq!(
+        s3_request("PUT", &format!("{}/{bucket}", base_url), vec![])
+            .await
+            .status(),
+        200
+    );
+
+    assert_eq!(
+        s3_request_with_headers(
+            "PUT",
+            &format!("{}/{bucket}?acl", base_url),
+            vec![],
+            vec![("x-amz-acl", "public-read")],
+        )
+        .await
+        .status(),
+        200
+    );
+
+    assert_eq!(
+        s3_request(
+            "PUT",
+            &format!("{}/{bucket}/open.txt", base_url),
+            b"acl public data".to_vec(),
+        )
+        .await
+        .status(),
+        200
+    );
+
+    let anon = client()
+        .get(format!("{}/{bucket}/open.txt", base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 200);
+    assert_eq!(&anon.bytes().await.unwrap()[..], b"acl public data");
+}

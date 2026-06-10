@@ -14,12 +14,18 @@ mod acl;
 mod auth;
 #[path = "integration/bucket.rs"]
 mod bucket;
+#[path = "integration/checksum.rs"]
+mod checksum;
 #[path = "integration/chunked_upload.rs"]
 mod chunked_upload;
+#[path = "integration/conditionals.rs"]
+mod conditionals;
 #[path = "integration/console.rs"]
 mod console;
 #[path = "integration/console_admin.rs"]
 mod console_admin;
+#[path = "integration/console_upload.rs"]
+mod console_upload;
 #[path = "integration/copy.rs"]
 mod copy;
 #[path = "integration/cors.rs"]
@@ -32,6 +38,8 @@ mod delete_objects;
 mod folder_marker;
 #[path = "integration/iam.rs"]
 mod iam;
+#[path = "integration/list_v1.rs"]
+mod list_v1;
 #[path = "integration/list_v2.rs"]
 mod list_v2;
 #[path = "integration/metrics.rs"]

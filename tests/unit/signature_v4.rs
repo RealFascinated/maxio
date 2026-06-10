@@ -1,5 +1,7 @@
+use axum::http::{HeaderMap, HeaderValue};
 use maxio::auth::signature_v4::{
     constant_time_eq, derive_signing_key, parse_authorization_header, parse_presigned_query,
+    verify_with_signing_key,
 };
 
 #[test]
@@ -55,4 +57,21 @@ fn constant_time_eq_matches_equal_slices() {
     assert!(constant_time_eq(b"abc", b"abc"));
     assert!(!constant_time_eq(b"abc", b"abd"));
     assert!(!constant_time_eq(b"ab", b"abc"));
+}
+
+#[test]
+fn verify_with_signing_key_rejects_wrong_signing_key() {
+    let header = "AWS4-HMAC-SHA256 Credential=maxioadmin/20250610/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc123";
+    let parsed = parse_authorization_header(header).unwrap();
+    let mut header_map = HeaderMap::new();
+    header_map.insert("host", HeaderValue::from_static("127.0.0.1:9000"));
+    header_map.insert("x-amz-date", HeaderValue::from_static("20250610T120000Z"));
+    assert!(!verify_with_signing_key(
+        "GET",
+        "/",
+        "",
+        &header_map,
+        &parsed,
+        &derive_signing_key("wrong-secret", "20250610", "us-east-1"),
+    ));
 }

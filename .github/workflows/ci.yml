@@ -38,3 +38,18 @@ jobs:
       - name: Build frontend
         run: bun run build
         working-directory: ui
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run unit tests
+        run: cargo test --test unit -- --skip console_objects
+
+      - name: Run integration tests
+        run: cargo test --test integration

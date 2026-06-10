@@ -116,3 +116,69 @@ async fn test_iam_user_policy_grants_object_read() {
     .await;
     assert_eq!(put.status(), 403);
 }
+
+#[tokio::test]
+async fn test_iam_list_and_delete_user() {
+    let base_url = start_server().await;
+
+    assert_eq!(
+        iam_action(
+            &base_url,
+            &[("Action", "CreateUser"), ("UserName", "list-me")],
+        )
+        .await
+        .status(),
+        200
+    );
+
+    let list = iam_action(&base_url, &[("Action", "ListUsers")]).await;
+    assert_eq!(list.status(), 200);
+    let body = list.text().await.unwrap();
+    assert!(body.contains("<UserName>list-me</UserName>"));
+
+    assert_eq!(
+        iam_action(
+            &base_url,
+            &[("Action", "DeleteUser"), ("UserName", "list-me")],
+        )
+        .await
+        .status(),
+        200
+    );
+
+    let list_after = iam_action(&base_url, &[("Action", "ListUsers")]).await;
+    let body_after = list_after.text().await.unwrap();
+    assert!(!body_after.contains("<UserName>list-me</UserName>"));
+}
+
+#[tokio::test]
+async fn test_iam_non_admin_denied() {
+    let base_url = start_server().await;
+
+    assert_eq!(
+        iam_action(&base_url, &[("Action", "CreateUser"), ("UserName", "bob")],)
+            .await
+            .status(),
+        200
+    );
+
+    let key_resp = iam_action(
+        &base_url,
+        &[("Action", "CreateAccessKey"), ("UserName", "bob")],
+    )
+    .await;
+    let key_body = key_resp.text().await.unwrap();
+    let access_key_id = extract_xml_tag(&key_body, "AccessKeyId").unwrap();
+    let secret = extract_xml_tag(&key_body, "SecretAccessKey").unwrap();
+
+    let body = "Action=CreateUser&UserName=carol";
+    let denied = s3_request_as(
+        "POST",
+        &format!("{base_url}/iam"),
+        body.as_bytes().to_vec(),
+        &access_key_id,
+        &secret,
+    )
+    .await;
+    assert_eq!(denied.status(), 403);
+}
