@@ -9,7 +9,7 @@ use axum::{
 
 use crate::api::authz::{check_bucket_access, get_principal};
 use crate::error::S3Error;
-use crate::iam::authz::filter_buckets_by_access;
+use crate::iam::authz::{authorize, filter_buckets_by_access};
 use crate::iam::policy::{parse_policy_json, policy_has_public_list, policy_has_public_read};
 use crate::iam::principal::Principal;
 use crate::server::AppState;
@@ -31,6 +31,16 @@ pub async fn list_buckets(
     } else if principal.is_anonymous {
         return Err(S3Error::access_denied("Access Denied"));
     } else {
+        authorize(
+            &state,
+            &principal,
+            "s3:ListAllMyBuckets",
+            "arn:aws:s3:::*",
+            None,
+            None,
+            None,
+        )
+        .await?;
         filter_buckets_by_access(&state, &principal, buckets).await
     };
 

@@ -92,5 +92,5 @@ async fn test_console_metrics_api() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body.get("storage_totals").is_some() || body.get("storage").is_some());
+    assert!(body.get("storageTotals").is_some());
 }

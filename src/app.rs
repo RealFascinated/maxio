@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::api::console::LoginRateLimiter;
+use crate::api::console::{LoginRateLimiter, RevokedSessions};
 use crate::auth::signing_key_cache::SigningKeyCache;
 use crate::config::{Config, MemoryCacheLimits, PoolSettings};
 use crate::db;
@@ -79,6 +79,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         storage,
         config: Arc::new(config),
         login_rate_limiter: Arc::new(LoginRateLimiter::new()),
+        revoked_sessions: Arc::new(RevokedSessions::new()),
         user_store,
         db_pool: pool,
         metrics,

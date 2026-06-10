@@ -5,7 +5,7 @@ use axum::routing::get;
 use axum::routing::post;
 use std::sync::Arc;
 
-use crate::api::console::{LoginRateLimiter, console_router};
+use crate::api::console::{LoginRateLimiter, RevokedSessions, console_router};
 use crate::api::cors::cors_middleware;
 use crate::api::iam::iam_handler;
 use crate::api::router::s3_router;
@@ -25,6 +25,7 @@ pub struct AppState {
     pub storage: Arc<dyn Storage>,
     pub config: Arc<Config>,
     pub login_rate_limiter: Arc<LoginRateLimiter>,
+    pub revoked_sessions: Arc<RevokedSessions>,
     pub user_store: Arc<dyn IamStore>,
     pub db_pool: Arc<DbPool>,
     pub metrics: Arc<MetricsRegistry>,

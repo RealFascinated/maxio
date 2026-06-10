@@ -172,7 +172,7 @@ async fn do_upsert_object(
     Ok(())
 }
 
-/// Load object metadata for GET/HEAD without tags, ACL, or checksum side tables.
+/// Load object metadata for GET/HEAD without tags or ACL side tables.
 pub async fn get_object_for_read(
     ctx: &DbContext,
     bucket_name: &str,
@@ -206,7 +206,19 @@ pub async fn get_object_for_read(
             other => db_err(other),
         })?;
 
-    let meta = row_into_read_meta(row);
+    let checksum: Option<(String, String)> = object_checksums::table
+        .filter(object_checksums::object_id.eq(row.id))
+        .select((object_checksums::algorithm, object_checksums::value))
+        .first(&mut conn)
+        .await
+        .optional()
+        .map_err(db_err)?;
+
+    let mut meta = row_into_read_meta(row);
+    if let Some((algo, value)) = checksum {
+        meta.checksum_algorithm = checksum_from_db(&algo);
+        meta.checksum_value = Some(value);
+    }
     ctx.object_read_cache()
         .insert(bucket_name, key, meta.clone());
     Ok(meta)
@@ -408,8 +420,8 @@ fn meta_for_read_cache(meta: &ObjectMeta) -> ObjectMeta {
         acl: None,
         version_id: meta.version_id.clone(),
         is_delete_marker: meta.is_delete_marker,
-        checksum_algorithm: None,
-        checksum_value: None,
+        checksum_algorithm: meta.checksum_algorithm,
+        checksum_value: meta.checksum_value.clone(),
         tags: None,
         part_sizes: meta.part_sizes.clone(),
     }

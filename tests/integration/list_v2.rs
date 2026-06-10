@@ -40,8 +40,9 @@ async fn test_list_objects_v2_continuation_token_pagination() {
     let page2 = s3_request(
         "GET",
         &format!(
-            "{}/{bucket}?list-type=2&max-keys=3&continuation-token={token}",
-            base_url
+            "{}/{bucket}?list-type=2&max-keys=3&continuation-token={}",
+            base_url,
+            url_encode_query_value(&token)
         ),
         vec![],
     )
@@ -50,12 +51,13 @@ async fn test_list_objects_v2_continuation_token_pagination() {
     let body2 = page2.text().await.unwrap();
     assert_eq!(body2.matches("<Key>").count(), 3);
 
+    let page3_token = extract_xml_tag(&body2, "NextContinuationToken").unwrap();
     let page3 = s3_request(
         "GET",
         &format!(
             "{}/{bucket}?list-type=2&max-keys=3&continuation-token={}",
             base_url,
-            extract_xml_tag(&body2, "NextContinuationToken").unwrap()
+            url_encode_query_value(&page3_token)
         ),
         vec![],
     )

@@ -14,6 +14,48 @@ use sha2::{Digest, Sha256};
 
 pub type HmacSha256 = Hmac<Sha256>;
 
+const S3_URI_ENCODE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+fn canonical_query_string(qs: &str) -> String {
+    if qs.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<(String, String)> = qs
+        .split('&')
+        .filter(|s| !s.is_empty())
+        .map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            let key = percent_encoding::percent_decode_str(parts.next().unwrap_or(""))
+                .decode_utf8_lossy()
+                .into_owned();
+            let val = percent_encoding::percent_decode_str(parts.next().unwrap_or(""))
+                .decode_utf8_lossy()
+                .into_owned();
+            (key, val)
+        })
+        .collect();
+    pairs.sort();
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                percent_encoding::utf8_percent_encode(k, S3_URI_ENCODE),
+                percent_encoding::utf8_percent_encode(v, S3_URI_ENCODE)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+pub fn url_encode_query_value(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, S3_URI_ENCODE).to_string()
+}
+
 pub const ACCESS_KEY: &str = "maxioadmin";
 pub const SECRET_KEY: &str = "maxioadmin";
 pub const REGION: &str = "us-east-1";
@@ -121,6 +163,7 @@ pub async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> A
         storage,
         config,
         login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
+        revoked_sessions: Arc::new(maxio::api::console::RevokedSessions::new()),
         user_store,
         db_pool: pool,
         metrics,
@@ -279,26 +322,7 @@ pub fn sign_request_with_creds(
         .map(|(k, v)| format!("{}:{}\n", k, v.trim()))
         .collect();
 
-    let canonical_qs = if query.is_empty() {
-        String::new()
-    } else {
-        let mut pairs: Vec<(String, String)> = query
-            .split('&')
-            .filter(|s| !s.is_empty())
-            .map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                let key = parts.next().unwrap_or("").to_string();
-                let val = parts.next().unwrap_or("").to_string();
-                (key, val)
-            })
-            .collect();
-        pairs.sort();
-        pairs
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join("&")
-    };
+    let canonical_qs = canonical_query_string(query);
 
     let canonical_request = format!(
         "{}\n{}\n{}\n{}\n{}\n{}",
@@ -380,26 +404,7 @@ pub fn sign_request_compact(
         .map(|(k, v)| format!("{}:{}\n", k, v.trim()))
         .collect();
 
-    let canonical_qs = if query.is_empty() {
-        String::new()
-    } else {
-        let mut pairs: Vec<(String, String)> = query
-            .split('&')
-            .filter(|s| !s.is_empty())
-            .map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                let key = parts.next().unwrap_or("").to_string();
-                let val = parts.next().unwrap_or("").to_string();
-                (key, val)
-            })
-            .collect();
-        pairs.sort();
-        pairs
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join("&")
-    };
+    let canonical_qs = canonical_query_string(query);
 
     let canonical_request = format!(
         "{}\n{}\n{}\n{}\n{}\n{}",

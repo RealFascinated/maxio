@@ -167,7 +167,10 @@ pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl In
     }
 }
 
-pub async fn logout(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(token) = extract_cookie(&headers) {
+        state.revoked_sessions.revoke(&token);
+    }
     let cookie = make_cookie("", 0, cookies_require_https(&state));
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert("Set-Cookie", cookie.parse().unwrap());

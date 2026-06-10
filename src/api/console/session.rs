@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use axum::http::HeaderMap;
@@ -23,6 +24,28 @@ struct Bucket {
 
 pub struct LoginRateLimiter {
     buckets: std::sync::Mutex<HashMap<String, Bucket>>,
+}
+
+pub struct RevokedSessions {
+    tokens: Mutex<HashSet<String>>,
+}
+
+impl RevokedSessions {
+    pub fn new() -> Self {
+        Self {
+            tokens: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub fn revoke(&self, token: &str) {
+        if !token.is_empty() {
+            self.tokens.lock().unwrap().insert(token.to_string());
+        }
+    }
+
+    pub fn is_revoked(&self, token: &str) -> bool {
+        self.tokens.lock().unwrap().contains(token)
+    }
 }
 
 impl LoginRateLimiter {
@@ -104,6 +127,9 @@ fn verify_token(token: &str, username: &str, secret_key: &str) -> bool {
 }
 
 pub(crate) async fn resolve_session_username(token: &str, state: &AppState) -> Option<String> {
+    if token.is_empty() || state.revoked_sessions.is_revoked(token) {
+        return None;
+    }
     if verify_token(token, crate::iam::ROOT_USERNAME, &state.config.secret_key) {
         return Some(crate::iam::ROOT_USERNAME.to_string());
     }

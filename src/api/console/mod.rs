@@ -9,7 +9,7 @@ mod objects;
 mod session;
 mod versions;
 
-pub use session::LoginRateLimiter;
+pub use session::{LoginRateLimiter, RevokedSessions};
 
 #[allow(unused_imports)]
 #[doc(hidden)]
