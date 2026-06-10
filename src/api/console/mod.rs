@@ -9,10 +9,14 @@ mod objects;
 mod session;
 mod versions;
 
-#[cfg(test)]
-mod tests;
-
 pub use session::LoginRateLimiter;
+
+#[allow(unused_imports)]
+#[doc(hidden)]
+pub use objects::{
+    folder_delete_stats, normalize_folder_prefix, normalize_presign_host,
+    parent_folder_prefix_for_deleted_object, preserve_empty_parent_folder_after_object_delete,
+};
 
 use auth::{
     auth_config, check, console_auth_middleware, console_csrf_middleware, login, logout,

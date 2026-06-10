@@ -1,34 +1,5 @@
 use crate::common::*;
 
-async fn console_login(base_url: &str) -> String {
-    let resp = client()
-        .post(&format!("{}/api/auth/login", base_url))
-        .json(&serde_json::json!({"accessKey": ACCESS_KEY, "secretKey": SECRET_KEY}))
-        .send()
-        .await
-        .unwrap();
-    if resp.status() != 200 {
-        let status = resp.status();
-        let body = resp.text().await.unwrap();
-        panic!("login failed with status {}: {}", status, body);
-    }
-    let set_cookie = resp
-        .headers()
-        .get("set-cookie")
-        .expect("login should set cookie")
-        .to_str()
-        .unwrap()
-        .to_string();
-    // Extract value from "maxio_session=VALUE; ..."
-    let value = set_cookie
-        .strip_prefix("maxio_session=")
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap();
-    value.to_string()
-}
-
 #[tokio::test]
 async fn test_console_mutation_allows_dev_loopback_origin_via_vite_proxy() {
     let base_url = start_server().await;

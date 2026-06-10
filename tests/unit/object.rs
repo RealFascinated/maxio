@@ -1,6 +1,8 @@
-use super::conditions::{ConditionalResult, check_conditions, etag_matches};
-use super::delete::parse_delete_objects_xml;
-use crate::storage::{BatchDeleteObject, ObjectMeta};
+use maxio::api::object::{
+    ConditionalResult, check_conditions, etag_matches, parse_delete_objects_xml,
+};
+use maxio::iam::{ROOT_CANONICAL_ID, ROOT_DISPLAY_NAME};
+use maxio::storage::{BatchDeleteObject, ObjectMeta};
 
 #[test]
 fn parse_delete_objects_xml_reads_version_id() {
@@ -43,35 +45,10 @@ fn make_meta(etag: &str, last_modified: &str) -> ObjectMeta {
         checksum_value: None,
         tags: None,
         part_sizes: None,
-        owner_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
-        owner_display_name: crate::iam::ROOT_DISPLAY_NAME.to_string(),
+        owner_id: ROOT_CANONICAL_ID.to_string(),
+        owner_display_name: ROOT_DISPLAY_NAME.to_string(),
         acl: None,
     }
-}
-
-#[test]
-fn test_etag_matches_exact_quoted() {
-    assert!(etag_matches("\"abc123\"", "\"abc123\""));
-}
-
-#[test]
-fn test_etag_matches_unquoted_header() {
-    assert!(etag_matches("abc123", "\"abc123\""));
-}
-
-#[test]
-fn test_etag_matches_wildcard() {
-    assert!(etag_matches("*", "\"anything\""));
-}
-
-#[test]
-fn test_etag_matches_comma_list() {
-    assert!(etag_matches("\"aaa\", \"bbb\", \"abc123\"", "\"abc123\""));
-}
-
-#[test]
-fn test_etag_no_match() {
-    assert!(!etag_matches("\"wrong\"", "\"abc123\""));
 }
 
 fn headers_with(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
@@ -86,21 +63,44 @@ fn headers_with(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
 }
 
 const ETAG: &str = "\"abc123\"";
-// A past date so objects modified "now" are always newer than it
 const OLD_DATE: &str = "Mon, 01 Jan 2024 00:00:00 GMT";
-// A future date so objects are always older
 const FUTURE_DATE: &str = "Thu, 01 Jan 2099 00:00:00 GMT";
 const LAST_MODIFIED: &str = "2025-06-01T12:00:00.000Z";
 
 #[test]
-fn test_if_match_passes_returns_none() {
+fn etag_matches_exact_quoted() {
+    assert!(etag_matches("\"abc123\"", "\"abc123\""));
+}
+
+#[test]
+fn etag_matches_unquoted_header() {
+    assert!(etag_matches("abc123", "\"abc123\""));
+}
+
+#[test]
+fn etag_matches_wildcard() {
+    assert!(etag_matches("*", "\"anything\""));
+}
+
+#[test]
+fn etag_matches_comma_list() {
+    assert!(etag_matches("\"aaa\", \"bbb\", \"abc123\"", "\"abc123\""));
+}
+
+#[test]
+fn etag_no_match() {
+    assert!(!etag_matches("\"wrong\"", "\"abc123\""));
+}
+
+#[test]
+fn if_match_passes_returns_none() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-match", ETAG)]);
     assert!(matches!(check_conditions(&h, &meta), None));
 }
 
 #[test]
-fn test_if_match_fails_returns_412() {
+fn if_match_fails_returns_412() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-match", "\"wrong\"")]);
     assert!(matches!(
@@ -110,7 +110,7 @@ fn test_if_match_fails_returns_412() {
 }
 
 #[test]
-fn test_if_none_match_hit_returns_304() {
+fn if_none_match_hit_returns_304() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-none-match", ETAG)]);
     assert!(matches!(
@@ -120,15 +120,14 @@ fn test_if_none_match_hit_returns_304() {
 }
 
 #[test]
-fn test_if_none_match_miss_returns_none() {
+fn if_none_match_miss_returns_none() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-none-match", "\"other\"")]);
     assert!(matches!(check_conditions(&h, &meta), None));
 }
 
 #[test]
-fn test_if_modified_since_not_modified_returns_304() {
-    // Object was last modified 2025-06-01; threshold is in the future → not modified
+fn if_modified_since_not_modified_returns_304() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-modified-since", FUTURE_DATE)]);
     assert!(matches!(
@@ -138,24 +137,21 @@ fn test_if_modified_since_not_modified_returns_304() {
 }
 
 #[test]
-fn test_if_modified_since_was_modified_returns_none() {
-    // Object was last modified 2025-06-01; threshold is in the past → was modified
+fn if_modified_since_was_modified_returns_none() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-modified-since", OLD_DATE)]);
     assert!(matches!(check_conditions(&h, &meta), None));
 }
 
 #[test]
-fn test_if_unmodified_since_unmodified_returns_none() {
-    // Object was last modified 2025-06-01; threshold is in the future → still matches
+fn if_unmodified_since_unmodified_returns_none() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-unmodified-since", FUTURE_DATE)]);
     assert!(matches!(check_conditions(&h, &meta), None));
 }
 
 #[test]
-fn test_if_unmodified_since_was_modified_returns_412() {
-    // Object was last modified 2025-06-01; threshold is in the past → modified after
+fn if_unmodified_since_was_modified_returns_412() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-unmodified-since", OLD_DATE)]);
     assert!(matches!(
@@ -165,16 +161,14 @@ fn test_if_unmodified_since_was_modified_returns_412() {
 }
 
 #[test]
-fn test_if_match_suppresses_if_unmodified_since() {
-    // If-Match passes → If-Unmodified-Since must be skipped even if it would fail
+fn if_match_suppresses_if_unmodified_since() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-match", ETAG), ("if-unmodified-since", OLD_DATE)]);
     assert!(matches!(check_conditions(&h, &meta), None));
 }
 
 #[test]
-fn test_if_none_match_suppresses_if_modified_since() {
-    // If-None-Match present but no match → If-Modified-Since must be skipped
+fn if_none_match_suppresses_if_modified_since() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[
         ("if-none-match", "\"other\""),
@@ -184,7 +178,7 @@ fn test_if_none_match_suppresses_if_modified_since() {
 }
 
 #[test]
-fn test_invalid_date_silently_ignored() {
+fn invalid_date_silently_ignored() {
     let meta = make_meta(ETAG, LAST_MODIFIED);
     let h = headers_with(&[("if-modified-since", "not-a-date")]);
     assert!(matches!(check_conditions(&h, &meta), None));

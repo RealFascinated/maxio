@@ -204,32 +204,3 @@ pub fn action_to_acl_permission(action: &str) -> Option<AclPermission> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::iam::principal::Principal;
-
-    #[test]
-    fn private_acl_only_owner() {
-        let acl = Acl::private("owner1", "owner");
-        let owner = Principal {
-            username: "alice".into(),
-            user_id: "owner1".into(),
-            display_name: "alice".into(),
-            canonical_id: "owner1".into(),
-            is_root: false,
-            is_anonymous: false,
-        };
-        assert!(acl_allows(&acl, &owner, AclPermission::Read));
-        let other = Principal {
-            username: "bob".into(),
-            user_id: "other".into(),
-            display_name: "bob".into(),
-            canonical_id: "other".into(),
-            is_root: false,
-            is_anonymous: false,
-        };
-        assert!(!acl_allows(&acl, &other, AclPermission::Read));
-    }
-}

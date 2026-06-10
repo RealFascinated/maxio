@@ -182,17 +182,3 @@ fn bucket_allowed_by_policy_or_acl(
     }
     false
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn arn_format() {
-        assert_eq!(bucket_arn("my-bucket"), "arn:aws:s3:::my-bucket");
-        assert_eq!(
-            object_arn("my-bucket", "path/file.txt"),
-            "arn:aws:s3:::my-bucket/path/file.txt"
-        );
-    }
-}

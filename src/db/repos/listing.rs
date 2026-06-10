@@ -13,7 +13,7 @@ use super::{db_err, get_conn, resolve_bucket_id};
 const DELIMITED_SCAN_BATCH: usize = 200;
 
 /// True when `key` is a direct file at `prefix` with `delimiter` (not a folder marker or nested path).
-pub(crate) fn delimited_direct_file(key: &str, prefix: &str, delimiter: &str) -> bool {
+pub fn delimited_direct_file(key: &str, prefix: &str, delimiter: &str) -> bool {
     if !key.starts_with(prefix) {
         return false;
     }
@@ -25,7 +25,7 @@ pub(crate) fn delimited_direct_file(key: &str, prefix: &str, delimiter: &str) ->
 }
 
 /// Common prefix for `key` at `prefix` depth, or `None` when the key is not a folder entry.
-pub(crate) fn delimited_common_prefix(key: &str, prefix: &str, delimiter: &str) -> Option<String> {
+pub fn delimited_common_prefix(key: &str, prefix: &str, delimiter: &str) -> Option<String> {
     if !key.starts_with(prefix) {
         return None;
     }
@@ -229,34 +229,4 @@ async fn has_keys_after(
 ) -> Result<bool, StorageError> {
     let (objects, _, _) = list_objects_page(ctx, bucket_name, prefix, after, 1, search).await?;
     Ok(!objects.is_empty())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn delimited_common_prefix_collapses_nested_keys() {
-        assert_eq!(
-            delimited_common_prefix("big-folder/item.txt", "", "/"),
-            Some("big-folder/".to_string())
-        );
-        assert_eq!(
-            delimited_common_prefix("other-folder/", "", "/"),
-            Some("other-folder/".to_string())
-        );
-        assert_eq!(delimited_common_prefix("nested/", "nested/", "/"), None);
-        assert_eq!(
-            delimited_common_prefix("nested/file.txt", "nested/", "/"),
-            None
-        );
-    }
-
-    #[test]
-    fn delimited_direct_file_matches_only_current_level() {
-        assert!(delimited_direct_file("a-file.txt", "", "/"));
-        assert!(!delimited_direct_file("folder/a-file.txt", "", "/"));
-        assert!(!delimited_direct_file("folder/", "", "/"));
-        assert!(delimited_direct_file("nested/file.txt", "nested/", "/"));
-    }
 }

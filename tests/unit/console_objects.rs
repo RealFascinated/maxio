@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-use crate::storage::blob::BlobStorage;
-use crate::storage::{
+use maxio::api::console::{
+    folder_delete_stats, normalize_folder_prefix, normalize_presign_host,
+    parent_folder_prefix_for_deleted_object, preserve_empty_parent_folder_after_object_delete,
+};
+use maxio::config::MemoryCacheLimits;
+use maxio::iam::Acl;
+use maxio::iam::{ROOT_CANONICAL_ID, ROOT_DISPLAY_NAME};
+use maxio::storage::blob::BlobStorage;
+use maxio::storage::{
     BucketMeta, ByteStream, MetadataStore, ObjectStorage, PgMetadataStore, Storage,
 };
 use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
-
-use super::objects::{
-    folder_delete_stats, normalize_folder_prefix, normalize_presign_host,
-    parent_folder_prefix_for_deleted_object, preserve_empty_parent_folder_after_object_delete,
-};
 
 async fn test_storage(
     data_dir: &str,
@@ -20,11 +22,11 @@ async fn test_storage(
     let postgres = Postgres::default().with_tag("18-alpine").start().await?;
     let port = postgres.get_host_port_ipv4(5432).await?;
     let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    crate::db::run_migrations(&database_url).await?;
-    let pool = crate::db::create_pool(&database_url, Default::default()).await?;
+    maxio::db::run_migrations(&database_url).await?;
+    let pool = maxio::db::create_pool(&database_url, Default::default()).await?;
     let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
         Arc::new(pool),
-        crate::config::MemoryCacheLimits::default(),
+        MemoryCacheLimits::default(),
     ));
     let blobs = BlobStorage::new(data_dir).await?;
     Ok((Arc::new(ObjectStorage::new(blobs, meta)), postgres))
@@ -37,12 +39,9 @@ async fn create_test_bucket(storage: &dyn Storage, bucket: &str) {
             created_at: "2026-05-18T00:00:00.000Z".to_string(),
             versioning: false,
             cors_rules: None,
-            owner_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
-            owner_display_name: crate::iam::ROOT_DISPLAY_NAME.to_string(),
-            acl: Some(crate::iam::Acl::private(
-                crate::iam::ROOT_CANONICAL_ID,
-                crate::iam::ROOT_DISPLAY_NAME,
-            )),
+            owner_id: ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(Acl::private(ROOT_CANONICAL_ID, ROOT_DISPLAY_NAME)),
             policy: None,
             public_read: false,
             public_list: false,
@@ -169,7 +168,7 @@ async fn deleting_last_console_file_preserves_parent_folder_marker() {
         .await
         .unwrap();
 
-    let objects = crate::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
+    let objects = maxio::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
         .await
         .unwrap();
     assert_eq!(objects.len(), 1);
@@ -199,7 +198,7 @@ async fn deleting_folder_marker_does_not_recreate_it() {
         .await
         .unwrap();
 
-    let objects = crate::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
+    let objects = maxio::storage::list_objects_all(storage.as_ref(), "bucket", "folder/")
         .await
         .unwrap();
     assert!(objects.is_empty());

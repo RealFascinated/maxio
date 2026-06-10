@@ -172,29 +172,3 @@ where
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn evicts_lru_when_at_capacity() {
-        let cache = MetricsLruCache::<&str, &str>::new(None, "test", 2);
-        cache.insert("first", "1");
-        cache.insert("second", "2");
-        cache.get(&"first");
-        cache.insert("third", "3");
-
-        assert_eq!(cache.get(&"first"), Some("1"));
-        assert_eq!(cache.get(&"second"), None);
-        assert_eq!(cache.get(&"third"), Some("3"));
-    }
-
-    #[test]
-    fn update_does_not_count_as_eviction() {
-        let cache = MetricsLruCache::<&str, &str>::new(None, "test", 2);
-        cache.insert("key", "v1");
-        cache.insert("key", "v2");
-        assert_eq!(cache.get(&"key"), Some("v2"));
-    }
-}

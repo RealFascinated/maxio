@@ -122,36 +122,3 @@ impl RollingCountWindow {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rolling_latency_averages_recent_samples() {
-        let window = RollingLatencyWindow::new(Duration::from_secs(15));
-        window.record(Duration::from_millis(100));
-        window.record(Duration::from_millis(200));
-        let avg = window.average_seconds().unwrap();
-        assert!((avg - 0.15).abs() < 0.001);
-    }
-
-    #[test]
-    fn rolling_bytes_window_computes_rate() {
-        let window = RollingBytesWindow::new(Duration::from_secs(10));
-        window.record(1_000);
-        window.record(2_000);
-        let rate = window.bytes_per_sec();
-        assert!((rate - 300.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn rolling_count_window_computes_ops_per_sec() {
-        let window = RollingCountWindow::new(Duration::from_secs(10));
-        window.record();
-        window.record();
-        window.record();
-        let rate = window.ops_per_sec();
-        assert!((rate - 0.3).abs() < 0.001);
-    }
-}

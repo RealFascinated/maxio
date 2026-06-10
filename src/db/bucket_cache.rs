@@ -63,39 +63,3 @@ impl BucketCache {
         self.map.get_mut(name, |entry| entry.cors_rules = rules);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_entry() -> CachedBucketEntry {
-        CachedBucketEntry {
-            id: Uuid::new_v4(),
-            versioning: false,
-            owner_id: "owner".into(),
-            owner_display_name: "Owner".into(),
-            policy: None,
-            acl: None,
-            cors_rules: vec![],
-        }
-    }
-
-    #[test]
-    fn caches_and_returns_put_context() {
-        let cache = BucketCache::new(None, 256);
-        let entry = sample_entry();
-        let id = entry.id;
-        cache.insert("bench", entry);
-
-        let cached = cache.get("bench").expect("entry");
-        assert_eq!(cached.id, id);
-    }
-
-    #[test]
-    fn updates_versioning_in_place() {
-        let cache = BucketCache::new(None, 256);
-        cache.insert("b", sample_entry());
-        cache.set_versioning("b", true);
-        assert!(cache.get("b").unwrap().versioning);
-    }
-}

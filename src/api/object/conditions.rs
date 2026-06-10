@@ -8,7 +8,7 @@ pub(super) fn to_http_date(iso: &str) -> String {
         .unwrap_or_else(|_| iso.to_string())
 }
 
-pub(crate) enum ConditionalResult {
+pub enum ConditionalResult {
     NotModified,
     PreconditionFailed,
 }
@@ -16,7 +16,7 @@ pub(crate) enum ConditionalResult {
 /// Returns true if `header_value` (the value of If-Match or If-None-Match)
 /// matches `object_etag`. Handles `*`, quoted/unquoted ETags, and
 /// comma-separated lists.
-pub(crate) fn etag_matches(header_value: &str, object_etag: &str) -> bool {
+pub fn etag_matches(header_value: &str, object_etag: &str) -> bool {
     let value = header_value.trim();
     if value == "*" {
         return true;
@@ -46,7 +46,7 @@ fn parse_object_date(iso: &str) -> Option<chrono::DateTime<chrono::FixedOffset>>
 /// Evaluate conditional request headers against object metadata, following
 /// S3/RFC 7232 precedence rules. Returns Some(result) if the request should
 /// be short-circuited, or None if it should proceed normally.
-pub(crate) fn check_conditions(
+pub fn check_conditions(
     headers: &HeaderMap,
     meta: &crate::storage::ObjectMeta,
 ) -> Option<ConditionalResult> {

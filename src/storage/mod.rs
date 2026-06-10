@@ -1,6 +1,6 @@
 pub mod blob;
 pub mod cache;
-mod hashing;
+pub mod hashing;
 pub mod metadata;
 pub mod object_storage;
 pub mod orphans;
@@ -322,33 +322,4 @@ pub enum StorageError {
     VersionNotFound(String),
     #[error("Checksum mismatch: {0}")]
     ChecksumMismatch(String),
-}
-
-#[cfg(test)]
-mod validation_tests {
-    use super::validate_bucket_name;
-
-    #[test]
-    fn rejects_path_like_bucket_names() {
-        for name in [
-            "../evil",
-            "a/b",
-            "ab",
-            "evil..bucket",
-            "Uppercase",
-            "a.-b",
-            "a-.b",
-            "192.168.0.1",
-        ] {
-            assert!(
-                validate_bucket_name(name).is_err(),
-                "{name} should be invalid"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_s3_style_bucket_name() {
-        assert!(validate_bucket_name("prod-logs.2026").is_ok());
-    }
 }

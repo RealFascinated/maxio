@@ -75,7 +75,7 @@ pub async fn delete_object(
 
 const DELETE_BODY_MAX: usize = 1024 * 1024;
 
-pub(crate) fn parse_delete_objects_xml(
+pub fn parse_delete_objects_xml(
     bytes: &[u8],
 ) -> Result<Vec<crate::storage::BatchDeleteObject>, S3Error> {
     let body_str = String::from_utf8_lossy(bytes);

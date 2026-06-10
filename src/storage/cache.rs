@@ -790,7 +790,7 @@ fn walk_bucket_dir(
     Ok(())
 }
 
-fn encode_index(
+pub fn encode_index(
     entries: &[(String, String, u64)],
     dirty: &HashSet<ObjectKey>,
 ) -> io::Result<Vec<u8>> {
@@ -830,7 +830,7 @@ fn write_string(buf: &mut Vec<u8>, value: &[u8], max_len: usize) -> io::Result<(
 
 type IndexEntries = (Vec<(String, String, u64)>, HashSet<ObjectKey>);
 
-fn decode_index(data: &[u8]) -> io::Result<IndexEntries> {
+pub fn decode_index(data: &[u8]) -> io::Result<IndexEntries> {
     let mut offset = 0;
     let magic = read_bytes(data, &mut offset, 4)?;
     if magic != INDEX_MAGIC {
@@ -918,65 +918,4 @@ fn read_string(data: &[u8], offset: &mut usize, max_len: usize) -> io::Result<St
             "cache index string is not valid UTF-8",
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn index_roundtrip() {
-        let entries = vec![
-            ("bucket-a".into(), "path/obj.txt".into(), 42u64),
-            ("bucket-b".into(), "folder/".into(), 0u64),
-        ];
-        let mut dirty = HashSet::new();
-        dirty.insert(("bucket-a".into(), "path/obj.txt".into()));
-        let data = encode_index(&entries, &dirty).unwrap();
-        let (decoded_entries, decoded_dirty) = decode_index(&data).unwrap();
-        assert_eq!(decoded_entries, entries);
-        assert_eq!(decoded_dirty, dirty);
-    }
-
-    #[tokio::test]
-    async fn scan_and_flush_dirty_after_restart() {
-        let cache_root = TempDir::new().unwrap();
-        let data_root = TempDir::new().unwrap();
-        let data_buckets = data_root.path().join("buckets");
-        tokio::fs::create_dir_all(&data_buckets).await.unwrap();
-
-        let cache_path = cache_root
-            .path()
-            .join("buckets")
-            .join("bucket-a")
-            .join("obj.txt");
-        tokio::fs::create_dir_all(cache_path.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::write(&cache_path, b"cached payload")
-            .await
-            .unwrap();
-
-        let layer = CacheLayer::new(
-            cache_root.path().to_str().unwrap(),
-            data_buckets.clone(),
-            1024 * 1024,
-            true,
-            Duration::from_secs(30),
-        )
-        .await
-        .unwrap();
-
-        let data_path = data_buckets.join("bucket-a").join("obj.txt");
-        assert!(
-            !tokio::fs::try_exists(&data_path).await.unwrap(),
-            "data dir should not have the object before flush"
-        );
-
-        layer.flush_dirty().await.unwrap();
-
-        let data = tokio::fs::read(&data_path).await.unwrap();
-        assert_eq!(data, b"cached payload");
-    }
 }

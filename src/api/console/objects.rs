@@ -299,7 +299,7 @@ pub async fn delete_object_api(
     }
 }
 
-pub(crate) fn parent_folder_prefix_for_deleted_object(key: &str) -> Option<String> {
+pub fn parent_folder_prefix_for_deleted_object(key: &str) -> Option<String> {
     if key.ends_with('/') {
         return None;
     }
@@ -308,7 +308,7 @@ pub(crate) fn parent_folder_prefix_for_deleted_object(key: &str) -> Option<Strin
         .filter(|prefix| !prefix.is_empty())
 }
 
-pub(crate) async fn preserve_empty_parent_folder_after_object_delete(
+pub async fn preserve_empty_parent_folder_after_object_delete(
     storage: &dyn Storage,
     bucket: &str,
     key: &str,
@@ -430,7 +430,7 @@ fn presign_scheme(headers: &HeaderMap) -> &'static str {
     }
 }
 
-pub(crate) fn normalize_presign_host(host: &str, scheme: &str) -> String {
+pub fn normalize_presign_host(host: &str, scheme: &str) -> String {
     let host = host.split(',').next().unwrap_or(host).trim();
     if scheme == "https" {
         host.trim_end_matches(":443").to_string()
@@ -559,7 +559,7 @@ pub struct FolderPreviewRequest {
     names: Vec<String>,
 }
 
-pub(crate) async fn folder_delete_stats(
+pub async fn folder_delete_stats(
     storage: &dyn Storage,
     bucket: &str,
     prefixes: &[String],
@@ -574,7 +574,7 @@ pub(crate) async fn folder_delete_stats(
     Ok((count, size_bytes))
 }
 
-pub(crate) fn normalize_folder_prefix(name: &str) -> Option<String> {
+pub fn normalize_folder_prefix(name: &str) -> Option<String> {
     let trimmed = name.trim().trim_matches('/');
     if trimmed.is_empty() {
         None

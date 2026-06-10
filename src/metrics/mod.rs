@@ -2,7 +2,7 @@ pub mod cache_name;
 mod console;
 mod process;
 mod prometheus;
-mod rolling;
+pub mod rolling;
 mod snapshot;
 
 #[allow(unused_imports)]

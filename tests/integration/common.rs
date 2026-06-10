@@ -138,6 +138,39 @@ pub async fn start_server() -> ServerHandle {
     start_server_with_async_meta(false).await
 }
 
+pub async fn start_server_with_metrics_token() -> ServerHandle {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap().to_string();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(&data_dir, &database_url).await;
+    let mut config = test_config(data_dir.clone(), database_url, "");
+    config.metrics_token = "metrics-test-token".into();
+
+    let state = test_app_state(storage, Arc::new(config)).await;
+
+    let app = server::build_router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{}", addr);
+
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    ServerHandle {
+        url: base_url,
+        _keep_alive: TestKeepAlive {
+            _dir: tmp,
+            _postgres: postgres,
+        },
+    }
+}
+
 pub async fn start_server_with_async_meta(async_meta_write: bool) -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
@@ -208,6 +241,17 @@ pub async fn start_server_with_default_buckets(default_buckets: &str) -> ServerH
 
 /// Sign a request with AWS Signature V4.
 pub fn sign_request(method: &str, url: &str, headers: &mut Vec<(String, String)>, body: &[u8]) {
+    sign_request_with_creds(method, url, headers, body, ACCESS_KEY, SECRET_KEY);
+}
+
+pub fn sign_request_with_creds(
+    method: &str,
+    url: &str,
+    headers: &mut Vec<(String, String)>,
+    body: &[u8],
+    access_key: &str,
+    secret_key: &str,
+) {
     let parsed = reqwest::Url::parse(url).unwrap();
     let host = parsed.host_str().unwrap();
     let port = parsed.port().unwrap();
@@ -269,7 +313,7 @@ pub fn sign_request(method: &str, url: &str, headers: &mut Vec<(String, String)>
         hex::encode(Sha256::digest(canonical_request.as_bytes()))
     );
 
-    let key = format!("AWS4{}", SECRET_KEY);
+    let key = format!("AWS4{}", secret_key);
     let mut mac = HmacSha256::new_from_slice(key.as_bytes()).unwrap();
     mac.update(date_stamp.as_bytes());
     let date_key = mac.finalize().into_bytes();
@@ -292,7 +336,7 @@ pub fn sign_request(method: &str, url: &str, headers: &mut Vec<(String, String)>
 
     let auth = format!(
         "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-        ACCESS_KEY, scope, signed_headers_str, signature
+        access_key, scope, signed_headers_str, signature
     );
     headers.push(("authorization".to_string(), auth));
 }
@@ -577,6 +621,90 @@ pub async fn s3_put_chunked(url: &str, data: &[u8]) -> reqwest::Response {
         .send()
         .await
         .unwrap()
+}
+
+pub async fn s3_request_as(
+    method: &str,
+    url: &str,
+    body: Vec<u8>,
+    access_key: &str,
+    secret_key: &str,
+) -> reqwest::Response {
+    let mut headers = Vec::new();
+    sign_request_with_creds(method, url, &mut headers, &body, access_key, secret_key);
+
+    let client = client();
+    let mut builder = match method {
+        "GET" => client.get(url),
+        "PUT" => client.put(url),
+        "HEAD" => client.head(url),
+        "DELETE" => client.delete(url),
+        "POST" => client.post(url),
+        _ => panic!("unsupported method"),
+    };
+
+    for (k, v) in &headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+
+    if !body.is_empty() {
+        builder = builder
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+    }
+
+    builder.send().await.unwrap()
+}
+
+pub async fn iam_action(base_url: &str, pairs: &[(&str, &str)]) -> reqwest::Response {
+    use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
+    const FORM: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
+    let body: String = pairs
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(k, FORM),
+                utf8_percent_encode(v, FORM)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    s3_request_as(
+        "POST",
+        &format!("{base_url}/iam"),
+        body.into_bytes(),
+        ACCESS_KEY,
+        SECRET_KEY,
+    )
+    .await
+}
+
+pub async fn console_login(base_url: &str) -> String {
+    let resp = client()
+        .post(format!("{base_url}/api/auth/login"))
+        .json(&serde_json::json!({"accessKey": ACCESS_KEY, "secretKey": SECRET_KEY}))
+        .send()
+        .await
+        .unwrap();
+    if resp.status() != 200 {
+        let status = resp.status();
+        let body = resp.text().await.unwrap();
+        panic!("login failed with status {status}: {body}");
+    }
+    let set_cookie = resp
+        .headers()
+        .get("set-cookie")
+        .expect("login should set cookie")
+        .to_str()
+        .unwrap();
+    set_cookie
+        .strip_prefix("maxio_session=")
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
 }
 
 pub fn extract_xml_tag(body: &str, tag: &str) -> Option<String> {

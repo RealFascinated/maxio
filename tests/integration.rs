@@ -8,6 +8,8 @@
 #[path = "integration/common.rs"]
 mod common;
 
+#[path = "integration/acl.rs"]
+mod acl;
 #[path = "integration/auth.rs"]
 mod auth;
 #[path = "integration/bucket.rs"]
@@ -16,6 +18,8 @@ mod bucket;
 mod chunked_upload;
 #[path = "integration/console.rs"]
 mod console;
+#[path = "integration/console_admin.rs"]
+mod console_admin;
 #[path = "integration/copy.rs"]
 mod copy;
 #[path = "integration/cors.rs"]
@@ -26,10 +30,18 @@ mod default_buckets;
 mod delete_objects;
 #[path = "integration/folder_marker.rs"]
 mod folder_marker;
+#[path = "integration/iam.rs"]
+mod iam;
+#[path = "integration/list_v2.rs"]
+mod list_v2;
+#[path = "integration/metrics.rs"]
+mod metrics;
 #[path = "integration/multipart.rs"]
 mod multipart;
 #[path = "integration/object.rs"]
 mod object;
+#[path = "integration/policy.rs"]
+mod policy;
 #[path = "integration/presigned.rs"]
 mod presigned;
 #[path = "integration/range.rs"]
@@ -42,3 +54,5 @@ mod storage;
 mod tagging;
 #[path = "integration/upload_part_copy.rs"]
 mod upload_part_copy;
+#[path = "integration/versioning.rs"]
+mod versioning;
