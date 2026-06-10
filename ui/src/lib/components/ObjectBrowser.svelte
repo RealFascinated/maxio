@@ -14,6 +14,7 @@
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import Share2 from 'lucide-svelte/icons/share-2'
   import Check from 'lucide-svelte/icons/check'
+  import Minus from 'lucide-svelte/icons/minus'
   import FolderPlus from 'lucide-svelte/icons/folder-plus'
   import History from 'lucide-svelte/icons/history'
   import Eye from 'lucide-svelte/icons/eye'
@@ -53,7 +54,6 @@
   let pendingDelete = $state<string | null>(null)
   let showBulkDeleteConfirm = $state(false)
   let selectedKeys = $state<Set<string>>(new Set())
-  let selectAllCheckbox = $state<HTMLInputElement | null>(null)
   let createFolderInput = $state<HTMLInputElement | null>(null)
   let sentinelEl = $state<HTMLDivElement | undefined>()
 
@@ -179,11 +179,6 @@
     selectedKeys = new Set()
   })
 
-  $effect(() => {
-    if (selectAllCheckbox) {
-      selectAllCheckbox.indeterminate = someFilesSelected && !allFilesSelected
-    }
-  })
   const prefixes = $derived.by(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -206,6 +201,15 @@
     { label: '7 days', seconds: 604800 },
   ]
 
+  const objectCheckboxLabelClass =
+    'flex h-full w-full cursor-pointer items-center justify-center'
+  const objectCheckboxBoxClass =
+    'flex size-4 shrink-0 items-center justify-center rounded-sm border peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-coollabs peer-focus-visible:ring-offset-2 dark:peer-focus-visible:ring-warning dark:peer-focus-visible:ring-offset-base'
+  const objectCheckboxUncheckedClass =
+    'border-neutral-400 bg-white dark:border-neutral-700 dark:bg-coolgray-100'
+  const objectCheckboxCheckedClass =
+    'border-coollabs bg-coollabs dark:border-warning dark:bg-warning'
+  const objectCheckboxIconClass = 'pointer-events-none shrink-0 text-white dark:text-base'
 
   function notifyPrefix() {
     onPrefixChange?.(prefix, breadcrumbs)
@@ -439,16 +443,26 @@
     <Table.Root>
       <Table.Header>
         <Table.Row>
-          <Table.Head class="w-10">
+          <Table.Head class="w-10 p-0">
             {#if files.length > 0}
-              <input
-                bind:this={selectAllCheckbox}
-                type="checkbox"
-                class="size-4 cursor-pointer rounded-sm border border-neutral-400 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 dark:border-neutral-600 dark:bg-coolgray-100 dark:focus-visible:ring-warning"
-                checked={allFilesSelected}
-                aria-label={allFilesSelected ? 'Deselect all objects' : 'Select all objects'}
-                onchange={toggleSelectAll}
-              />
+              <label class={objectCheckboxLabelClass}>
+                <input
+                  type="checkbox"
+                  class="peer sr-only"
+                  checked={allFilesSelected}
+                  aria-label={allFilesSelected ? 'Deselect all objects' : 'Select all objects'}
+                  onchange={toggleSelectAll}
+                />
+                <span
+                  class="{objectCheckboxBoxClass} {allFilesSelected || someFilesSelected ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
+                >
+                  {#if allFilesSelected}
+                    <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+                  {:else if someFilesSelected}
+                    <Minus class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+                  {/if}
+                </span>
+              </label>
             {/if}
           </Table.Head>
           <Table.Head>Name</Table.Head>
@@ -478,17 +492,28 @@
           <Table.Row
             class="cursor-pointer"
             data-state={selectedKeys.has(file.key) ? 'selected' : undefined}
-            onclick={() => (detailFile = file)}
+            onclick={(e) => {
+              if ((e.target as HTMLElement).closest('[data-object-select]')) return
+              detailFile = file
+            }}
           >
-            <Table.Cell>
-              <input
-                type="checkbox"
-                class="size-4 cursor-pointer rounded-sm border border-neutral-400 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 dark:border-neutral-600 dark:bg-coolgray-100 dark:focus-visible:ring-warning"
-                checked={selectedKeys.has(file.key)}
-                aria-label={`Select ${objectLabel(file.key)}`}
-                onclick={(e) => e.stopPropagation()}
-                onchange={() => toggleSelect(file.key)}
-              />
+            <Table.Cell class="w-10 p-0" data-object-select>
+              <label class={objectCheckboxLabelClass}>
+                <input
+                  type="checkbox"
+                  class="peer sr-only"
+                  checked={selectedKeys.has(file.key)}
+                  aria-label={`Select ${objectLabel(file.key)}`}
+                  onchange={() => toggleSelect(file.key)}
+                />
+                <span
+                  class="{objectCheckboxBoxClass} {selectedKeys.has(file.key) ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
+                >
+                  {#if selectedKeys.has(file.key)}
+                    <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+                  {/if}
+                </span>
+              </label>
             </Table.Cell>
             <Table.Cell>
               <span class="flex items-center gap-2">
