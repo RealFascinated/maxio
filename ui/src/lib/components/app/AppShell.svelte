@@ -23,7 +23,9 @@
   import Menu from "lucide-svelte/icons/menu";
   import { Sonner } from "$lib/components/ui/sonner";
   import { checkAuth, logout, type AuthCheckResponse } from "$lib/api/auth";
-  import { authKeys } from "$lib/api/keys";
+  import { listBuckets } from "$lib/api/buckets";
+  import { authKeys, bucketKeys } from "$lib/api/keys";
+  import { formatBytes } from "$lib/format-bytes";
   import { queryClient } from "$lib/query/client";
 
   const authQuery = createQuery(() => ({
@@ -51,6 +53,18 @@
   let isDark = $state(true);
   let pendingPrefix = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
+
+  const bucketsQuery = createQuery(() => ({
+    queryKey: bucketKeys.list(),
+    queryFn: listBuckets,
+    enabled: !!selectedBucket,
+  }));
+
+  const bucketStats = $derived(
+    selectedBucket
+      ? bucketsQuery.data?.buckets.find((b) => b.name === selectedBucket)
+      : undefined,
+  );
 
   $effect(() => {
     if (objectBrowserRef && pendingPrefix) {
@@ -351,7 +365,10 @@
       </header>
 
       {#if selectedBucket}
-        <div class="flex h-14 shrink-0 items-center gap-2 px-6">
+        <div
+          class="flex min-h-14 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-6 py-2"
+          style="border-color: var(--cool-sidebar-border);"
+        >
           <button
             type="button"
             onclick={() => {
@@ -418,6 +435,25 @@
               {/if}
             </ol>
           </nav>
+          {#if currentView === "objects" && bucketStats && (bucketStats.objectCount !== null || bucketStats.sizeBytes !== null)}
+            <div
+              class="flex w-full shrink-0 items-center gap-2 pl-6 text-sm text-muted-foreground sm:ml-auto sm:w-auto sm:pl-0"
+              aria-label="Bucket statistics"
+            >
+              {#if bucketStats.objectCount !== null}
+                <span class="tabular-nums">
+                  <span class="font-medium text-foreground">{bucketStats.objectCount.toLocaleString()}</span>
+                  {bucketStats.objectCount === 1 ? "object" : "objects"}
+                </span>
+              {/if}
+              {#if bucketStats.objectCount !== null && bucketStats.sizeBytes !== null}
+                <span class="text-neutral-300 dark:text-neutral-600" aria-hidden="true">·</span>
+              {/if}
+              {#if bucketStats.sizeBytes !== null}
+                <span class="font-medium tabular-nums text-foreground">{formatBytes(bucketStats.sizeBytes)}</span>
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
       <div class="flex-1 overflow-auto p-6">
