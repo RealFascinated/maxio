@@ -327,6 +327,10 @@
           onToggleCollapsed={toggleSidebarCollapsed}
           onThemeChange={applyTheme}
           onCycleTheme={cycleTheme}
+          onGoHome={() => {
+            goHome();
+            mobileMenuOpen = false;
+          }}
           onLogout={handleLogout}
         />
       </div>
@@ -343,6 +347,7 @@
       onToggleCollapsed={toggleSidebarCollapsed}
       onThemeChange={applyTheme}
       onCycleTheme={cycleTheme}
+      onGoHome={goHome}
       onLogout={handleLogout}
     />
 
@@ -360,8 +365,16 @@
         >
           <Menu class="size-5" />
         </button>
-        <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
-        <span class="text-xl font-bold tracking-tight text-foreground">MaxIO</span>
+        <button
+          type="button"
+          onclick={goHome}
+          class="flex items-center gap-2 rounded-sm transition-colors hover:text-coollabs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:hover:text-warning dark:focus-visible:ring-warning"
+          aria-label="Go to buckets"
+          title="Buckets"
+        >
+          <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
+          <span class="text-xl font-bold tracking-tight text-foreground">MaxIO</span>
+        </button>
       </header>
 
       {#if selectedBucket}

@@ -18,6 +18,7 @@
     onToggleCollapsed: () => void
     onThemeChange: (mode: ThemeMode) => void
     onCycleTheme: () => void
+    onGoHome: () => void
     onLogout: () => void
   }
 
@@ -32,6 +33,7 @@
     onToggleCollapsed,
     onThemeChange,
     onCycleTheme,
+    onGoHome,
     onLogout,
   }: Props = $props()
 
@@ -79,12 +81,21 @@
     class:px-4={!isCollapsed}
     class:justify-center={isCollapsed}
   >
-    <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
-    {#if !isCollapsed}
-      <span class="ml-2 text-2xl font-bold tracking-tight text-foreground whitespace-nowrap">
-        MaxIO
-      </span>
-    {/if}
+    <button
+      type="button"
+      onclick={onGoHome}
+      class="flex min-w-0 items-center rounded-sm text-left transition-colors hover:text-coollabs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:hover:text-warning dark:focus-visible:ring-warning"
+      class:justify-center={isCollapsed}
+      aria-label="Go to buckets"
+      title="Buckets"
+    >
+      <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
+      {#if !isCollapsed}
+        <span class="ml-2 text-2xl font-bold tracking-tight text-foreground whitespace-nowrap">
+          MaxIO
+        </span>
+      {/if}
+    </button>
   </header>
 
   <div class="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2" role="list">
