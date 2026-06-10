@@ -29,7 +29,9 @@
     queryFn: fetchMetrics,
     refetchInterval: 1_000,
     staleTime: 0,
-    notifyOnChangeProps: 'all',
+    // Polling dashboard: structural sharing keeps the same `data` reference when
+    // values are deeply equal, and Svelte won't re-render plain nested objects.
+    structuralSharing: false,
   }))
 
   let peakThroughput = $state(0)
