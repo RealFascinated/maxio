@@ -28,6 +28,8 @@
     queryKey: metricsKeys.snapshot(),
     queryFn: fetchMetrics,
     refetchInterval: 1_000,
+    staleTime: 0,
+    notifyOnChangeProps: 'all',
   }))
 
   let peakThroughput = $state(0)
