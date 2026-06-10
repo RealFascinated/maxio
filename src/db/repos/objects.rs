@@ -179,7 +179,7 @@ pub async fn get_object_for_read(
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
     match ctx.object_read_cache().lookup(bucket_name, key) {
-        ReadCacheLookup::Hit(meta) => return Ok(meta),
+        ReadCacheLookup::Hit(meta) => return Ok(*meta),
         ReadCacheLookup::Absent => return Err(StorageError::NotFound(key.to_string())),
         ReadCacheLookup::Miss => {}
     }
