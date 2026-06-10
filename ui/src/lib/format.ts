@@ -45,7 +45,7 @@ export function formatLatency(seconds: number | null | undefined): { value: stri
 }
 
 export function formatIops(value: number): string {
-  return Math.max(0, Math.round(value)).toLocaleString()
+  return parseFloat(Math.max(0, value).toFixed(1)).toLocaleString()
 }
 
 export function hitRate(hits: number, misses: number): string {
