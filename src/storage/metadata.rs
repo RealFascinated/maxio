@@ -141,6 +141,10 @@ pub trait MetadataStore: Send + Sync {
         &self,
         upload_id: &str,
     ) -> Result<MultipartUploadMeta, StorageError>;
+    async fn load_multipart_session(
+        &self,
+        upload_id: &str,
+    ) -> Result<(MultipartUploadMeta, Vec<PartMeta>), StorageError>;
     async fn abort_multipart_upload(&self, upload_id: &str) -> Result<(), StorageError>;
     async fn upsert_part(&self, upload_id: &str, part: &PartMeta) -> Result<(), StorageError>;
     async fn list_parts(&self, upload_id: &str) -> Result<Vec<PartMeta>, StorageError>;

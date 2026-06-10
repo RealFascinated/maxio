@@ -13,6 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter}
 
 pub const IO_BUFFER_SIZE: usize = 256 * 1024;
 pub(crate) const SMALL_OBJECT_THRESHOLD: u64 = 256 * 1024;
+const SMALL_WRITE_READ_CHUNK: usize = 8192;
 
 pub struct BlobStorage {
     pub(crate) buckets_dir: PathBuf,
@@ -266,6 +267,19 @@ impl BlobStorage {
         Ok(())
     }
 
+    async fn ensure_object_parent_dir(&self, obj_path: &Path) -> Result<(), StorageError> {
+        let parent = obj_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let needs_create = !self.known_dirs.lock().unwrap().contains(&parent);
+        if needs_create {
+            fs::create_dir_all(&parent).await?;
+            self.known_dirs.lock().unwrap().insert(parent);
+        }
+        Ok(())
+    }
+
     pub async fn write_flat_object_temp(
         &self,
         bucket: &str,
@@ -275,18 +289,62 @@ impl BlobStorage {
     ) -> Result<WrittenPayload, StorageError> {
         let write_base = self.write_buckets_dir()?;
         let obj_path = object_path_in(write_base, bucket, key);
+        self.ensure_object_parent_dir(&obj_path).await?;
 
-        // Ensure parent directory exists. The `known_dirs` cache avoids the syscall on
-        // repeat writes to the same directory (common for flat keys and same-prefix keys).
-        let parent = obj_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-        if !self.known_dirs.lock().unwrap().contains(&parent) {
-            fs::create_dir_all(&parent).await?;
-            self.known_dirs.lock().unwrap().insert(parent);
+        let mut chunk = [0u8; SMALL_WRITE_READ_CHUNK];
+        let mut prefix = Vec::with_capacity(SMALL_WRITE_READ_CHUNK);
+        loop {
+            let n = body.read(&mut chunk).await?;
+            if n == 0 {
+                break;
+            }
+            prefix.extend_from_slice(&chunk[..n]);
+            if prefix.len() as u64 > SMALL_OBJECT_THRESHOLD {
+                return self
+                    .write_flat_object_temp_streaming(obj_path, prefix, body, checksum)
+                    .await;
+            }
         }
 
+        self.write_flat_object_temp_buffered(obj_path, prefix, checksum)
+            .await
+    }
+
+    async fn write_flat_object_temp_buffered(
+        &self,
+        obj_path: PathBuf,
+        data: Vec<u8>,
+        checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+    ) -> Result<WrittenPayload, StorageError> {
+        let size = data.len() as u64;
+        let (etag, checksum_algorithm, checksum_value) = digest_flat_write(&data, checksum)?;
+
+        let write_path = temp_sibling_path(&obj_path);
+        let mut tmp_guard = TempPathGuard::new(write_path.clone());
+        fs::write(&write_path, &data)
+            .await
+            .map_err(StorageError::Io)?;
+
+        tmp_guard.disarm();
+        self.record_drive_write();
+
+        Ok(WrittenPayload {
+            size,
+            etag,
+            checksum_algorithm,
+            checksum_value,
+            tmp_path: write_path,
+            final_path: obj_path,
+        })
+    }
+
+    async fn write_flat_object_temp_streaming(
+        &self,
+        obj_path: PathBuf,
+        mut prefix: Vec<u8>,
+        mut body: ByteStream,
+        checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+    ) -> Result<WrittenPayload, StorageError> {
         let write_path = temp_sibling_path(&obj_path);
         let mut tmp_guard = TempPathGuard::new(write_path.clone());
 
@@ -299,36 +357,30 @@ impl BlobStorage {
         let mut size: u64 = 0;
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
 
+        let mut update = |slice: &[u8]| {
+            hasher.update(slice);
+            if let Some(ref mut ch) = checksum_hasher {
+                ch.update(slice);
+            }
+            size += slice.len() as u64;
+        };
+
+        update(&prefix);
+        writer.write_all(&prefix).await?;
+        prefix.clear();
+
         loop {
             let n = body.read(&mut buf).await?;
             if n == 0 {
                 break;
             }
-            hasher.update(&buf[..n]);
-            if let Some(ref mut ch) = checksum_hasher {
-                ch.update(&buf[..n]);
-            }
-            size += n as u64;
+            update(&buf[..n]);
             writer.write_all(&buf[..n]).await?;
         }
         writer.flush().await?;
 
-        let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
-
-        let (checksum_algorithm, checksum_value) = if let Some((algo, expected)) = checksum {
-            let computed = checksum_hasher.unwrap().finalize_base64();
-            if let Some(expected_val) = expected {
-                if computed != expected_val {
-                    return Err(StorageError::ChecksumMismatch(format!(
-                        "expected {}, got {}",
-                        expected_val, computed
-                    )));
-                }
-            }
-            (Some(algo), Some(computed))
-        } else {
-            (None, None)
-        };
+        let (etag, checksum_algorithm, checksum_value) =
+            finalize_flat_write_hashes(hasher, checksum_hasher, checksum)?;
 
         tmp_guard.disarm();
         self.record_drive_write();
@@ -351,6 +403,10 @@ impl BlobStorage {
         fs::rename(tmp_payload, final_payload)
             .await
             .map_err(StorageError::Io)
+    }
+
+    pub async fn remove_published_payload(path: &Path) -> Result<(), StorageError> {
+        remove_file_if_exists(path).await
     }
 
     pub async fn open_object(
@@ -628,29 +684,44 @@ impl BlobStorage {
         }
         let tmp_obj_path = temp_sibling_path(&obj_path);
         let mut tmp_obj_guard = TempPathGuard::new(tmp_obj_path.clone());
-        let out = fs::File::create(&tmp_obj_path).await?;
-        let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, out);
-        let mut total_size = 0u64;
-        let mut etag_hasher = EtagMd5::new();
-        let mut buf = vec![0u8; IO_BUFFER_SIZE];
 
-        for part in parts {
+        let (total_size, etag) = if parts.len() == 1 {
+            let part = &parts[0];
             let part_path = self.part_path(bucket, upload_id, part.part_number);
-            let part_file = fs::File::open(&part_path).await?;
-            let mut part_stream = BufReader::with_capacity(IO_BUFFER_SIZE, part_file);
-            total_size += stream_to_writer(&mut part_stream, &mut writer, &mut buf).await?;
-
+            fs::rename(&part_path, &tmp_obj_path)
+                .await
+                .map_err(StorageError::Io)?;
             let raw_md5 = hex::decode(part.etag.trim_matches('"'))
                 .map_err(|_| StorageError::InvalidKey("invalid part etag".into()))?;
+            let mut etag_hasher = EtagMd5::new();
             etag_hasher.update(&raw_md5);
-        }
-        writer.flush().await?;
+            let etag = format!("\"{}-1\"", hex::encode(etag_hasher.finalize()));
+            (part.size, etag)
+        } else {
+            let out = fs::File::create(&tmp_obj_path).await?;
+            let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, out);
+            let mut total_size = 0u64;
+            let mut etag_hasher = EtagMd5::new();
+            let mut buf = vec![0u8; IO_BUFFER_SIZE];
 
-        let etag = format!(
-            "\"{}-{}\"",
-            hex::encode(etag_hasher.finalize()),
-            parts.len()
-        );
+            for part in parts {
+                let part_path = self.part_path(bucket, upload_id, part.part_number);
+                let part_file = fs::File::open(&part_path).await?;
+                let mut part_stream = BufReader::with_capacity(IO_BUFFER_SIZE, part_file);
+                total_size += stream_to_writer(&mut part_stream, &mut writer, &mut buf).await?;
+
+                let raw_md5 = hex::decode(part.etag.trim_matches('"'))
+                    .map_err(|_| StorageError::InvalidKey("invalid part etag".into()))?;
+                etag_hasher.update(&raw_md5);
+            }
+            writer.flush().await?;
+            let etag = format!(
+                "\"{}-{}\"",
+                hex::encode(etag_hasher.finalize()),
+                parts.len()
+            );
+            (total_size, etag)
+        };
 
         tmp_obj_guard.disarm();
         self.record_drive_write();
@@ -856,6 +927,45 @@ async fn sweep_buckets_dir(buckets_dir: &Path) -> u64 {
     }
 
     temp_removed
+}
+
+fn digest_flat_write(
+    data: &[u8],
+    checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+) -> Result<(String, Option<ChecksumAlgorithm>, Option<String>), StorageError> {
+    let mut hasher = EtagMd5::new();
+    hasher.update(data);
+    let checksum_hasher = checksum
+        .as_ref()
+        .map(|(algo, _)| ChecksumHasher::new(*algo))
+        .map(|mut ch| {
+            ch.update(data);
+            ch
+        });
+    finalize_flat_write_hashes(hasher, checksum_hasher, checksum)
+}
+
+fn finalize_flat_write_hashes(
+    hasher: EtagMd5,
+    checksum_hasher: Option<ChecksumHasher>,
+    checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+) -> Result<(String, Option<ChecksumAlgorithm>, Option<String>), StorageError> {
+    let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
+    let (checksum_algorithm, checksum_value) = if let Some((algo, expected)) = checksum {
+        let computed = checksum_hasher.unwrap().finalize_base64();
+        if let Some(expected_val) = expected {
+            if computed != expected_val {
+                return Err(StorageError::ChecksumMismatch(format!(
+                    "expected {}, got {}",
+                    expected_val, computed
+                )));
+            }
+        }
+        (Some(algo), Some(computed))
+    } else {
+        (None, None)
+    };
+    Ok((etag, checksum_algorithm, checksum_value))
 }
 
 fn temp_sibling_path(path: &Path) -> PathBuf {

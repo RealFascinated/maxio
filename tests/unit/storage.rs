@@ -462,3 +462,78 @@ async fn assemble_multipart_streams_five_gib_sparse_parts() {
 
     let _ = tokio::fs::remove_file(&written.tmp_path).await;
 }
+
+#[tokio::test]
+async fn blob_small_flat_write_uses_buffered_path() {
+    let data_root = TempDir::new().unwrap();
+    let blobs = BlobStorage::new(data_root.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let payload = vec![0xAB; 4096];
+    let written = blobs
+        .write_flat_object_temp(
+            "bucket-a",
+            "small.bin",
+            Box::pin(std::io::Cursor::new(payload.clone())),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(written.size, 4096);
+    let data = tokio::fs::read(&written.tmp_path).await.unwrap();
+    assert_eq!(data, payload);
+    let _ = tokio::fs::remove_file(&written.tmp_path).await;
+}
+
+#[tokio::test]
+async fn assemble_multipart_single_part_renames_without_copy() {
+    let data_root = TempDir::new().unwrap();
+    let blobs = BlobStorage::new(data_root.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let bucket = "bucket-a";
+    let upload_id = "upload-1";
+    let payload = b"single-part-payload".to_vec();
+
+    blobs.ensure_upload_dir(bucket, upload_id).await.unwrap();
+    let (etag, size, _, _) = blobs
+        .write_part(
+            bucket,
+            upload_id,
+            1,
+            Box::pin(std::io::Cursor::new(payload.clone())),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(size, payload.len() as u64);
+
+    let part_path = blobs.part_path(bucket, upload_id, 1);
+    assert!(tokio::fs::try_exists(&part_path).await.unwrap());
+
+    let part_meta = PartMeta {
+        part_number: 1,
+        etag,
+        size: payload.len() as u64,
+        last_modified: "2025-01-01T00:00:00.000Z".to_string(),
+        checksum_algorithm: None,
+        checksum_value: None,
+    };
+    let written = blobs
+        .assemble_multipart_temp(
+            bucket,
+            "obj.bin",
+            upload_id,
+            std::slice::from_ref(&part_meta),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(written.size, payload.len() as u64);
+    assert!(!tokio::fs::try_exists(&part_path).await.unwrap());
+    let data = tokio::fs::read(&written.tmp_path).await.unwrap();
+    assert_eq!(data, payload);
+    let _ = tokio::fs::remove_file(&written.tmp_path).await;
+}

@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "bash scripts/dev.sh",
-    "bench": "cargo build --release && MAXIO_DATABASE_URL=\"${MAXIO_DATABASE_URL:-postgres://maxio:maxio@127.0.0.1:5432/maxio}\" bash tests/bench.sh",
-    "bench:quick": "cargo build --release && MAXIO_DATABASE_URL=\"${MAXIO_DATABASE_URL:-postgres://maxio:maxio@127.0.0.1:5432/maxio}\" bash tests/bench.sh --duration=10s --scenarios=put-small,get-small,mixed",
+    "bench": "cargo build --release && bash tests/bench.sh",
+    "bench:quick": "cargo build --release && bash tests/bench.sh --duration=10s --scenarios=put-small,get-small,mixed",
+    "bench:profile": "bash tests/profile.sh --scenarios=put-small,put-med,put-large,get-small,mixed",
     "bench:remote": "bash tests/bench-remote.sh"
   }
 }

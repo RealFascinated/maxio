@@ -139,6 +139,7 @@ pub fn test_config(data_dir: String, database_url: String, default_buckets: &str
         cache_flush_interval: 30,
         object_read_cache_max_entries: 262_144,
         bucket_cache_max_entries: 10_000,
+        multipart_cache_max_entries: 32_768,
         signing_key_cache_max_entries: 10_000,
         iam_cache_max_entries: 10_000,
         public_url: None,

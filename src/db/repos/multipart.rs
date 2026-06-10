@@ -3,6 +3,7 @@ use crate::db::schema::{multipart_parts, multipart_uploads};
 use crate::storage::{MultipartUploadMeta, PartMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel_async::RunQueryDsl;
 
 use super::{
@@ -26,6 +27,100 @@ type MultipartUploadListRow = (
     Option<String>,
 );
 
+fn multipart_db_err(upload_id: &str, e: DieselError) -> StorageError {
+    match e {
+        DieselError::DatabaseError(DatabaseErrorKind::ForeignKeyViolation, _) => {
+            StorageError::UploadNotFound(upload_id.to_string())
+        }
+        other => db_err(other),
+    }
+}
+
+async fn load_multipart_upload_row(
+    conn: &mut diesel_async::AsyncPgConnection,
+    upload_id: &str,
+) -> Result<
+    (
+        String,
+        String,
+        String,
+        chrono::DateTime<Utc>,
+        Option<String>,
+    ),
+    StorageError,
+> {
+    multipart_uploads::table
+        .inner_join(crate::db::schema::buckets::table)
+        .filter(multipart_uploads::upload_id.eq(upload_id))
+        .select((
+            crate::db::schema::buckets::name,
+            multipart_uploads::key,
+            multipart_uploads::content_type,
+            multipart_uploads::initiated,
+            multipart_uploads::checksum_algorithm,
+        ))
+        .first(conn)
+        .await
+        .map_err(|e| match e {
+            DieselError::NotFound => StorageError::UploadNotFound(upload_id.to_string()),
+            other => db_err(other),
+        })
+}
+
+fn row_to_multipart_meta(
+    upload_id: &str,
+    row: (
+        String,
+        String,
+        String,
+        chrono::DateTime<Utc>,
+        Option<String>,
+    ),
+) -> MultipartUploadMeta {
+    MultipartUploadMeta {
+        upload_id: upload_id.to_string(),
+        bucket: row.0,
+        key: row.1,
+        content_type: row.2,
+        initiated: format_ts(row.3),
+        checksum_algorithm: row.4.and_then(|s| checksum_from_db(&s)),
+    }
+}
+
+async fn load_parts_rows(
+    conn: &mut diesel_async::AsyncPgConnection,
+    upload_id: &str,
+) -> Result<Vec<PartMeta>, StorageError> {
+    let rows: Vec<PartRow> = multipart_parts::table
+        .filter(multipart_parts::upload_id.eq(upload_id))
+        .order(multipart_parts::part_number.asc())
+        .select((
+            multipart_parts::part_number,
+            multipart_parts::etag,
+            multipart_parts::size,
+            multipart_parts::last_modified,
+            multipart_parts::checksum_algorithm,
+            multipart_parts::checksum_value,
+        ))
+        .load(conn)
+        .await
+        .map_err(db_err)?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(part_number, etag, size, last_modified, algo, value)| PartMeta {
+                part_number: part_number as u32,
+                etag,
+                size: size as u64,
+                last_modified: format_ts(last_modified),
+                checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
+                checksum_value: value,
+            },
+        )
+        .collect())
+}
+
 pub async fn insert_multipart_upload(
     ctx: &DbContext,
     meta: &MultipartUploadMeta,
@@ -46,6 +141,8 @@ pub async fn insert_multipart_upload(
         .execute(&mut conn)
         .await
         .map_err(db_err)?;
+
+    ctx.multipart_cache().insert_upload(meta.clone());
     Ok(())
 }
 
@@ -53,38 +150,39 @@ pub async fn get_multipart_upload(
     ctx: &DbContext,
     upload_id: &str,
 ) -> Result<MultipartUploadMeta, StorageError> {
-    let mut conn = get_conn(ctx.pool()).await?;
-    let row: (
-        String,
-        String,
-        String,
-        chrono::DateTime<Utc>,
-        Option<String>,
-    ) = multipart_uploads::table
-        .inner_join(crate::db::schema::buckets::table)
-        .filter(multipart_uploads::upload_id.eq(upload_id))
-        .select((
-            crate::db::schema::buckets::name,
-            multipart_uploads::key,
-            multipart_uploads::content_type,
-            multipart_uploads::initiated,
-            multipart_uploads::checksum_algorithm,
-        ))
-        .first(&mut conn)
-        .await
-        .map_err(|e| match e {
-            diesel::result::Error::NotFound => StorageError::UploadNotFound(upload_id.to_string()),
-            other => db_err(other),
-        })?;
+    if let Some(meta) = ctx.multipart_cache().get_upload(upload_id) {
+        return Ok(meta);
+    }
 
-    Ok(MultipartUploadMeta {
-        upload_id: upload_id.to_string(),
-        bucket: row.0,
-        key: row.1,
-        content_type: row.2,
-        initiated: format_ts(row.3),
-        checksum_algorithm: row.4.and_then(|s| checksum_from_db(&s)),
-    })
+    ctx.multipart_cache().record_upload_miss();
+    let mut conn = get_conn(ctx.pool()).await?;
+    let row = load_multipart_upload_row(&mut conn, upload_id).await?;
+    let meta = row_to_multipart_meta(upload_id, row);
+    ctx.multipart_cache().insert_upload(meta.clone());
+    Ok(meta)
+}
+
+/// Load upload metadata and all parts using one pool connection.
+pub async fn load_multipart_session(
+    ctx: &DbContext,
+    upload_id: &str,
+) -> Result<(MultipartUploadMeta, Vec<PartMeta>), StorageError> {
+    if let (Some(meta), Some(parts)) = (
+        ctx.multipart_cache().get_upload(upload_id),
+        ctx.multipart_cache().list_parts(upload_id),
+    ) {
+        return Ok((meta, parts));
+    }
+
+    ctx.multipart_cache().record_upload_miss();
+    ctx.multipart_cache().record_parts_miss();
+    let mut conn = get_conn(ctx.pool()).await?;
+    let row = load_multipart_upload_row(&mut conn, upload_id).await?;
+    let meta = row_to_multipart_meta(upload_id, row);
+    let parts = load_parts_rows(&mut conn, upload_id).await?;
+    ctx.multipart_cache()
+        .install_session(meta.clone(), parts.clone());
+    Ok((meta, parts))
 }
 
 pub async fn abort_multipart_upload(ctx: &DbContext, upload_id: &str) -> Result<(), StorageError> {
@@ -98,6 +196,7 @@ pub async fn abort_multipart_upload(ctx: &DbContext, upload_id: &str) -> Result<
     if deleted == 0 {
         return Err(StorageError::UploadNotFound(upload_id.to_string()));
     }
+    ctx.multipart_cache().remove(upload_id);
     Ok(())
 }
 
@@ -107,18 +206,6 @@ pub async fn upsert_part(
     part: &PartMeta,
 ) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-
-    let exists = diesel::select(diesel::dsl::exists(
-        multipart_uploads::table.filter(multipart_uploads::upload_id.eq(upload_id)),
-    ))
-    .get_result::<bool>(&mut conn)
-    .await
-    .map_err(db_err)?;
-
-    if !exists {
-        return Err(StorageError::UploadNotFound(upload_id.to_string()));
-    }
-
     let last_modified = parse_ts(&part.last_modified)?;
 
     diesel::insert_into(multipart_parts::table)
@@ -142,49 +229,33 @@ pub async fn upsert_part(
         ))
         .execute(&mut conn)
         .await
-        .map_err(db_err)?;
+        .map_err(|e| multipart_db_err(upload_id, e))?;
+
+    ctx.multipart_cache().upsert_part(upload_id, part.clone());
     Ok(())
 }
 
 pub async fn list_parts(ctx: &DbContext, upload_id: &str) -> Result<Vec<PartMeta>, StorageError> {
+    if let Some(parts) = ctx.multipart_cache().list_parts(upload_id) {
+        return Ok(parts);
+    }
+
+    ctx.multipart_cache().record_parts_miss();
     let mut conn = get_conn(ctx.pool()).await?;
-
-    let rows: Vec<PartRow> = multipart_parts::table
-        .filter(multipart_parts::upload_id.eq(upload_id))
-        .order(multipart_parts::part_number.asc())
-        .select((
-            multipart_parts::part_number,
-            multipart_parts::etag,
-            multipart_parts::size,
-            multipart_parts::last_modified,
-            multipart_parts::checksum_algorithm,
-            multipart_parts::checksum_value,
-        ))
-        .load(&mut conn)
-        .await
-        .map_err(db_err)?;
-
-    Ok(rows
-        .into_iter()
-        .map(
-            |(part_number, etag, size, last_modified, algo, value)| PartMeta {
-                part_number: part_number as u32,
-                etag,
-                size: size as u64,
-                last_modified: format_ts(last_modified),
-                checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
-                checksum_value: value,
-            },
-        )
-        .collect())
+    let parts = load_parts_rows(&mut conn, upload_id).await?;
+    if let Ok(row) = load_multipart_upload_row(&mut conn, upload_id).await {
+        let meta = row_to_multipart_meta(upload_id, row);
+        ctx.multipart_cache().install_session(meta, parts.clone());
+    }
+    Ok(parts)
 }
 
 pub async fn list_multipart_uploads(
     ctx: &DbContext,
-    bucket_name: &str,
+    bucket: &str,
 ) -> Result<Vec<MultipartUploadMeta>, StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
-    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
+    let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket).await?;
 
     let rows: Vec<MultipartUploadListRow> = multipart_uploads::table
         .filter(multipart_uploads::bucket_id.eq(bucket_id))
@@ -205,7 +276,7 @@ pub async fn list_multipart_uploads(
         .map(
             |(upload_id, key, content_type, initiated, algo)| MultipartUploadMeta {
                 upload_id,
-                bucket: bucket_name.to_string(),
+                bucket: bucket.to_string(),
                 key,
                 content_type,
                 initiated: format_ts(initiated),
@@ -241,5 +312,6 @@ pub async fn cleanup_stale_uploads(
     .await
     .map_err(db_err)?;
 
+    ctx.multipart_cache().remove_many(&stale_ids);
     Ok(removed as u64)
 }

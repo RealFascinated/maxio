@@ -5,6 +5,7 @@ pub const SIGNING_KEY: &str = "signing_key";
 pub const IAM_ACCESS_KEY: &str = "iam_access_key";
 pub const IAM_USER: &str = "iam_user";
 pub const IAM_POLICIES: &str = "iam_policies";
+pub const MULTIPART_SESSION: &str = "multipart_session";
 
 pub const ALL: &[&str] = &[
     OBJECT_DISK,
@@ -14,6 +15,7 @@ pub const ALL: &[&str] = &[
     IAM_ACCESS_KEY,
     IAM_USER,
     IAM_POLICIES,
+    MULTIPART_SESSION,
 ];
 
 pub fn display_name(name: &str) -> &'static str {
@@ -25,6 +27,7 @@ pub fn display_name(name: &str) -> &'static str {
         IAM_ACCESS_KEY => "IAM access key",
         IAM_USER => "IAM user",
         IAM_POLICIES => "IAM policies",
+        MULTIPART_SESSION => "Multipart session",
         _ => "Unknown",
     }
 }

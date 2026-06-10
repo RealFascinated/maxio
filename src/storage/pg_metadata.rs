@@ -462,6 +462,17 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
+    async fn load_multipart_session(
+        &self,
+        upload_id: &str,
+    ) -> Result<(MultipartUploadMeta, Vec<PartMeta>), StorageError> {
+        meta_op!(
+            self,
+            "load_multipart_session",
+            repos::load_multipart_session(&self.ctx, upload_id).await
+        )
+    }
+
     async fn abort_multipart_upload(&self, upload_id: &str) -> Result<(), StorageError> {
         meta_op!(
             self,

@@ -1,6 +1,8 @@
 /target
 /data
-/ui/dist
+/bench-profile
+/.postgres-socket
+/ui/dist 
 /ui/node_modules
 .DS_Store
 

@@ -96,6 +96,14 @@ pub struct Config {
     #[arg(long, env = "MAXIO_BUCKET_CACHE_MAX_ENTRIES", default_value = "10000")]
     pub bucket_cache_max_entries: usize,
 
+    /// Max in-flight multipart session cache entries (MAXIO_MULTIPART_CACHE_MAX_ENTRIES).
+    #[arg(
+        long,
+        env = "MAXIO_MULTIPART_CACHE_MAX_ENTRIES",
+        default_value = "32768"
+    )]
+    pub multipart_cache_max_entries: usize,
+
     /// Max signing key cache entries (MAXIO_SIGNING_KEY_CACHE_MAX_ENTRIES).
     #[arg(
         long,
@@ -161,6 +169,7 @@ impl From<&Config> for PoolSettings {
 pub struct MemoryCacheLimits {
     pub object_read_max_entries: usize,
     pub bucket_max_entries: usize,
+    pub multipart_max_entries: usize,
     pub signing_key_max_entries: usize,
     pub iam_max_entries: usize,
 }
@@ -170,6 +179,7 @@ impl Default for MemoryCacheLimits {
         Self {
             object_read_max_entries: 262_144,
             bucket_max_entries: 10_000,
+            multipart_max_entries: 32_768,
             signing_key_max_entries: 10_000,
             iam_max_entries: 10_000,
         }
@@ -181,6 +191,7 @@ impl From<&Config> for MemoryCacheLimits {
         Self {
             object_read_max_entries: config.object_read_cache_max_entries,
             bucket_max_entries: config.bucket_cache_max_entries,
+            multipart_max_entries: config.multipart_cache_max_entries,
             signing_key_max_entries: config.signing_key_cache_max_entries,
             iam_max_entries: config.iam_cache_max_entries,
         }

@@ -95,18 +95,14 @@ impl ObjectStorage {
             return Ok(result);
         }
 
-        // Sync path: commit metadata first, then rename bytes into place.
-        self.meta
-            .upsert_object(bucket, &object_meta, put_ctx)
-            .await?;
-        if let Err(e) =
-            BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await
-        {
-            let _ = self.meta.delete_object_meta(bucket, key).await;
-            return Err(e);
-        }
+        // Sync path: publish bytes first, then commit metadata before returning.
+        BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await?;
         if let Some(ref m) = self.metrics {
             m.record_drive_write_op();
+        }
+        if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {
+            let _ = BlobStorage::remove_published_payload(&written.final_path).await;
+            return Err(e);
         }
 
         if versioned {
@@ -491,16 +487,12 @@ impl ObjectStorage {
             ));
         }
 
-        let upload_meta = self.meta.get_multipart_upload(upload_id).await?;
+        let (upload_meta, listed_parts) = self.meta.load_multipart_session(upload_id).await?;
         if upload_meta.bucket != bucket {
             return Err(StorageError::UploadNotFound(upload_id.to_string()));
         }
 
-        // list_parts returns rows already ordered by part_number; build a map for O(1) lookup.
-        let all_parts: HashMap<u32, PartMeta> = self
-            .meta
-            .list_parts(upload_id)
-            .await?
+        let all_parts: HashMap<u32, PartMeta> = listed_parts
             .into_iter()
             .map(|p| (p.part_number, p))
             .collect();
