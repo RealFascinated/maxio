@@ -11,9 +11,8 @@
 
   interface Props {
     bucket: string
-    onBack: () => void
   }
-  let { bucket, onBack }: Props = $props()
+  let { bucket }: Props = $props()
   let pendingConfirmation = $state<{
     title: string
     description: string

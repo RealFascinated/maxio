@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { goto } from '$app/navigation'
   import { createInfiniteQuery, createMutation, createQuery } from '@tanstack/svelte-query'
   import * as Table from '$lib/components/ui/table'
   import { Button } from '$lib/components/ui/button'
@@ -32,15 +33,13 @@
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
   import { displayName } from '$lib/utils'
+  import { bucketObjectsUrl } from '$lib/navigation'
 
   interface Props {
     bucket: string
-    onBack: () => void
-    onPrefixChange?: (prefix: string, breadcrumbs: { label: string; prefix: string }[]) => void
+    prefix?: string
   }
-  let { bucket, onBack, onPrefixChange }: Props = $props()
-
-  let prefix = $state('')
+  let { bucket, prefix = '' }: Props = $props()
   let searchInput = $state('')
   let searchQuery = $state('')
   let fileInput: HTMLInputElement | undefined = $state()
@@ -66,6 +65,15 @@
     if (showCreateFolder && createFolderInput) {
       queueMicrotask(() => createFolderInput?.focus())
     }
+  })
+
+  $effect(() => {
+    prefix
+    clearSearch()
+    selectedKeys = new Set()
+    detailFile = null
+    previewFile = null
+    shareMenuKey = null
   })
 
   $effect(() => {
@@ -307,31 +315,13 @@
     'border-coollabs bg-coollabs dark:border-warning dark:bg-warning'
   const objectCheckboxIconClass = 'pointer-events-none shrink-0 text-white dark:text-base'
 
-  function notifyPrefix() {
-    onPrefixChange?.(prefix, breadcrumbs)
-  }
-
   function clearSearch() {
     searchInput = ''
     searchQuery = ''
   }
 
-  export function navigateTo(newPrefix: string) {
-    prefix = newPrefix
-    clearSearch()
-    notifyPrefix()
-  }
-
-  export function goUp() {
-    if (!prefix) {
-      onBack()
-      return
-    }
-    const trimmed = prefix.slice(0, -1)
-    const lastSlash = trimmed.lastIndexOf('/')
-    prefix = lastSlash >= 0 ? trimmed.slice(0, lastSlash + 1) : ''
-    clearSearch()
-    notifyPrefix()
+  function navigateTo(newPrefix: string) {
+    goto(bucketObjectsUrl(bucket, newPrefix))
   }
 
   function objectLabel(key: string): string {
@@ -347,19 +337,6 @@
     }
     return displayName(folderPrefix)
   }
-
-  let breadcrumbs = $derived.by(() => {
-    const parts = prefix.split('/').filter(Boolean)
-    const crumbs: { label: string; prefix: string }[] = [
-      { label: bucket, prefix: '' },
-    ]
-    let acc = ''
-    for (const part of parts) {
-      acc += part + '/'
-      crumbs.push({ label: part, prefix: acc })
-    }
-    return crumbs
-  })
 
   function uploadProgressMessage(files: File[], currentFile: File, pct: number): string {
     if (files.length === 1) return `Uploading ${currentFile.name} · ${pct}%`

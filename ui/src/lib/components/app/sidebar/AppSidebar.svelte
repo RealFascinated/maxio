@@ -103,9 +103,9 @@
       <SidebarNavItem
         label={item.label}
         icon={item.icon}
+        href={item.href}
         active={item.active}
         collapsed={isCollapsed}
-        onSelect={item.onSelect}
       />
     {/each}
   </div>

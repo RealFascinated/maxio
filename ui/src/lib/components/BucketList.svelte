@@ -18,15 +18,15 @@
   import { createBucket as createBucketApi, deleteBucket as deleteBucketApi, listBuckets } from '$lib/api/buckets'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
+  import { goto } from '$app/navigation'
   import { formatBytes } from '$lib/format-bytes'
   import { formatDate } from '$lib/format'
+  import { routes } from '$lib/navigation'
 
   interface Props {
-    onSelect: (bucket: string) => void
-    onSettings: (bucket: string) => void
     canCreateBucket?: boolean
   }
-  let { onSelect, onSettings, canCreateBucket = true }: Props = $props()
+  let { canCreateBucket = true }: Props = $props()
 
   let showCreate = $state(false)
   let newBucketName = $state('')
@@ -178,7 +178,10 @@
       </Table.Header>
       <Table.Body>
         {#each filteredBuckets as bucket}
-          <Table.Row class="cursor-pointer" onclick={() => onSelect(bucket.name)}>
+          <Table.Row
+            class="cursor-pointer"
+            onclick={() => goto(routes.bucket(bucket.name))}
+          >
             <Table.Cell class="font-medium">{bucket.name}</Table.Cell>
             <Table.Cell class="text-muted-foreground tabular-nums">
               {#if bucket.objectCount !== null}
@@ -206,13 +209,14 @@
               {#if bucket.canManageSettings || bucket.canDelete}
                 <div class="flex items-center gap-4">
                   {#if bucket.canManageSettings}
-                    <button
+                    <a
+                      href={routes.bucketSettings(bucket.name)}
                       class="text-muted-foreground hover:text-foreground transition-colors"
-                      onclick={(e: Event) => { e.stopPropagation(); onSettings(bucket.name) }}
+                      onclick={(e: Event) => e.stopPropagation()}
                       title="Bucket settings"
                     >
                       <Settings class="size-4" />
-                    </button>
+                    </a>
                   {/if}
                   {#if bucket.canDelete}
                     <button

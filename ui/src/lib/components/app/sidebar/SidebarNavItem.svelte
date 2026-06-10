@@ -4,23 +4,25 @@
   interface Props {
     label: string
     icon: LucideIcon
+    href: string
     active?: boolean
     collapsed?: boolean
-    onSelect: () => void
+    onNavigate?: () => void
   }
 
   let {
     label,
     icon: Icon,
+    href,
     active = false,
     collapsed = false,
-    onSelect,
+    onNavigate,
   }: Props = $props()
 </script>
 
-<button
-  type="button"
-  onclick={onSelect}
+<a
+  {href}
+  onclick={onNavigate}
   class="flex min-h-7 w-full items-center rounded-sm py-1 text-left text-sm font-medium transition-colors overflow-hidden"
   class:gap-3={!collapsed}
   class:px-2={!collapsed}
@@ -41,4 +43,4 @@
   {#if !collapsed}
     <span class="whitespace-nowrap">{label}</span>
   {/if}
-</button>
+</a>
