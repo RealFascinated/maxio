@@ -231,7 +231,7 @@
   <div class="flex items-center justify-between gap-4">
     <div class="flex items-center gap-2">
       <Users class="size-5 text-coollabs dark:text-warning" />
-      <h2 class="text-lg font-semibold">IAM Users</h2>
+      <h1>IAM Users</h1>
     </div>
     <Button variant="brand" onclick={() => (showCreate = true)}>
       <Plus class="size-4" />

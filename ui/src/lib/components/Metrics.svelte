@@ -47,7 +47,7 @@
   <div class="flex items-center justify-between gap-4">
     <div class="flex items-center gap-3">
       <BarChart2 class="size-6 text-coollabs dark:text-warning" />
-      <h1 class="text-2xl font-bold dark:text-white">Metrics</h1>
+      <h1>Metrics</h1>
     </div>
     {#if metricsQuery.data}
       <div

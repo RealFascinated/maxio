@@ -106,7 +106,7 @@
   <div class="flex items-center justify-between gap-4">
     <div class="flex items-center gap-2">
       <Database class="size-5 text-coollabs dark:text-warning" />
-      <h2 class="text-lg font-semibold">Buckets</h2>
+      <h1>Buckets</h1>
     </div>
     {#if canCreateBucket}
       <Button variant="brand" onclick={() => (showCreate = true)}>

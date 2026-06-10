@@ -55,7 +55,7 @@
 <div class="mx-auto max-w-6xl space-y-6">
   <div class="flex items-center gap-3">
     <Settings class="size-6 text-coollabs dark:text-warning" />
-    <h1 class="text-2xl font-bold dark:text-white">Settings</h1>
+    <h1>Settings</h1>
   </div>
 
   <Card.Root>

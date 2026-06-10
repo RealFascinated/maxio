@@ -200,7 +200,7 @@ body.preview-open {
   }
 
   h1 {
-    @apply text-3xl font-bold text-black dark:text-white;
+    @apply text-2xl font-bold text-black dark:text-white;
   }
   h2 {
     @apply text-xl font-bold text-black dark:text-white;
