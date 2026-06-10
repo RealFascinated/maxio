@@ -268,3 +268,78 @@ async fn test_put_object_response_headers() {
     assert!(resp.headers().contains_key("etag"));
     assert!(resp.headers().contains_key("last-modified"));
 }
+
+#[tokio::test]
+async fn test_async_meta_immediate_get_after_put() {
+    let base_url = start_server_with_async_meta(true).await;
+
+    s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
+
+    let data = b"kopia-read-after-write".to_vec();
+    let resp = s3_request(
+        "PUT",
+        &format!("{}/mybucket/async-meta.txt", base_url),
+        data.clone(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = s3_request(
+        "GET",
+        &format!("{}/mybucket/async-meta.txt", base_url),
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "GET must succeed before Postgres commit"
+    );
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(body.as_ref(), b"kopia-read-after-write");
+}
+
+#[tokio::test]
+async fn test_async_meta_delete_before_db_commit() {
+    let base_url = start_server_with_async_meta(true).await;
+
+    s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/mybucket/ephemeral.txt", base_url),
+        b"gone".to_vec(),
+    )
+    .await;
+
+    let resp = s3_request(
+        "DELETE",
+        &format!("{}/mybucket/ephemeral.txt", base_url),
+        vec![],
+    )
+    .await;
+    assert_eq!(resp.status(), 204);
+
+    let resp = s3_request(
+        "GET",
+        &format!("{}/mybucket/ephemeral.txt", base_url),
+        vec![],
+    )
+    .await;
+    assert_eq!(resp.status(), 404);
+
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    let resp = s3_request(
+        "GET",
+        &format!("{}/mybucket/ephemeral.txt", base_url),
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "stale async metadata commit must not resurrect deleted object"
+    );
+}

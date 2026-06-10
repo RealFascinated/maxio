@@ -54,8 +54,15 @@ async fn read_aws_chunk<R: tokio::io::AsyncRead + Unpin>(
     let chunk_size = usize::from_str_radix(size_str.trim(), 16)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunk size"))?;
     if chunk_size == 0 {
+        // AWS spec: `0;chunk-signature=…\r\n\r\n`. Some clients omit the final CRLF;
+        // accept EOF here (matches the pre-streaming decoder).
         let mut crlf = [0u8; 2];
-        reader.read_exact(&mut crlf).await?;
+        if reader.read_exact(&mut crlf).await.is_ok() && crlf != [b'\r', b'\n'] {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid chunk terminator",
+            ));
+        }
         return Ok((None, reader));
     }
     let mut chunk = vec![0u8; chunk_size];

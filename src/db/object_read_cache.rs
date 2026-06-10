@@ -12,9 +12,23 @@ fn bucket_prefix(bucket: &str) -> String {
     format!("{bucket}\0")
 }
 
+#[derive(Debug, Clone)]
+enum ReadCacheValue {
+    Meta(ObjectMeta),
+    Absent,
+}
+
+/// Result of a read-cache lookup before hitting Postgres.
+#[derive(Debug, Clone)]
+pub enum ReadCacheLookup {
+    Hit(ObjectMeta),
+    Absent,
+    Miss,
+}
+
 /// In-memory cache of current-object read metadata for GET/HEAD hot paths.
 pub struct ObjectReadCache {
-    map: MetricsLruCache<String, ObjectMeta>,
+    map: MetricsLruCache<String, ReadCacheValue>,
 }
 
 impl ObjectReadCache {
@@ -24,8 +38,19 @@ impl ObjectReadCache {
         }
     }
 
+    pub fn lookup(&self, bucket: &str, key: &str) -> ReadCacheLookup {
+        match self.map.get(&cache_key(bucket, key)) {
+            Some(ReadCacheValue::Meta(meta)) => ReadCacheLookup::Hit(meta),
+            Some(ReadCacheValue::Absent) => ReadCacheLookup::Absent,
+            None => ReadCacheLookup::Miss,
+        }
+    }
+
     pub fn get(&self, bucket: &str, key: &str) -> Option<ObjectMeta> {
-        self.map.get(&cache_key(bucket, key))
+        match self.lookup(bucket, key) {
+            ReadCacheLookup::Hit(meta) => Some(meta),
+            _ => None,
+        }
     }
 
     pub fn record_miss(&self) {
@@ -33,7 +58,19 @@ impl ObjectReadCache {
     }
 
     pub fn insert(&self, bucket: &str, key: &str, meta: ObjectMeta) {
-        self.map.insert(cache_key(bucket, key), meta);
+        self.map
+            .insert(cache_key(bucket, key), ReadCacheValue::Meta(meta));
+    }
+
+    pub fn mark_absent(&self, bucket: &str, key: &str) {
+        self.map
+            .insert(cache_key(bucket, key), ReadCacheValue::Absent);
+    }
+
+    pub fn mark_absent_many(&self, bucket: &str, keys: &[String]) {
+        for key in keys {
+            self.mark_absent(bucket, key);
+        }
     }
 
     pub fn remove(&self, bucket: &str, key: &str) {
@@ -80,9 +117,32 @@ mod tests {
         let meta = sample_meta("obj.txt");
         cache.insert("bench", "obj.txt", meta.clone());
 
-        let cached = cache.get("bench", "obj.txt").expect("entry");
-        assert_eq!(cached.key, meta.key);
-        assert_eq!(cached.etag, meta.etag);
+        assert!(matches!(
+            cache.lookup("bench", "obj.txt"),
+            ReadCacheLookup::Hit(hit) if hit.key == meta.key && hit.etag == meta.etag
+        ));
+    }
+
+    #[test]
+    fn absent_tombstone_skips_db() {
+        let cache = ObjectReadCache::new(None, 256);
+        cache.mark_absent("bench", "gone.txt");
+        assert!(matches!(
+            cache.lookup("bench", "gone.txt"),
+            ReadCacheLookup::Absent
+        ));
+    }
+
+    #[test]
+    fn insert_clears_absent_tombstone() {
+        let cache = ObjectReadCache::new(None, 256);
+        cache.mark_absent("bench", "obj.txt");
+        let meta = sample_meta("obj.txt");
+        cache.insert("bench", "obj.txt", meta.clone());
+        assert!(matches!(
+            cache.lookup("bench", "obj.txt"),
+            ReadCacheLookup::Hit(hit) if hit.key == meta.key
+        ));
     }
 
     #[test]
@@ -90,7 +150,7 @@ mod tests {
         let cache = ObjectReadCache::new(None, 256);
         cache.insert("b", "k", sample_meta("k"));
         cache.remove("b", "k");
-        assert!(cache.get("b", "k").is_none());
+        assert!(matches!(cache.lookup("b", "k"), ReadCacheLookup::Miss));
     }
 
     #[test]
@@ -99,12 +159,17 @@ mod tests {
         cache.insert("b1", "a", sample_meta("a"));
         cache.insert("b1", "b", sample_meta("b"));
         cache.insert("b2", "c", sample_meta("c"));
+        cache.mark_absent("b1", "missing");
 
         cache.remove_bucket("b1");
 
-        assert!(cache.get("b1", "a").is_none());
-        assert!(cache.get("b1", "b").is_none());
-        assert!(cache.get("b2", "c").is_some());
+        assert!(matches!(cache.lookup("b1", "a"), ReadCacheLookup::Miss));
+        assert!(matches!(cache.lookup("b1", "b"), ReadCacheLookup::Miss));
+        assert!(matches!(
+            cache.lookup("b1", "missing"),
+            ReadCacheLookup::Miss
+        ));
+        assert!(matches!(cache.lookup("b2", "c"), ReadCacheLookup::Hit(_)));
     }
 
     #[test]
@@ -115,8 +180,14 @@ mod tests {
         cache.get("b", "first");
         cache.insert("b", "third", sample_meta("third"));
 
-        assert!(cache.get("b", "first").is_some());
-        assert!(cache.get("b", "second").is_none());
-        assert!(cache.get("b", "third").is_some());
+        assert!(matches!(
+            cache.lookup("b", "first"),
+            ReadCacheLookup::Hit(_)
+        ));
+        assert!(matches!(cache.lookup("b", "second"), ReadCacheLookup::Miss));
+        assert!(matches!(
+            cache.lookup("b", "third"),
+            ReadCacheLookup::Hit(_)
+        ));
     }
 }

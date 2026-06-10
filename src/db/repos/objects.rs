@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::db::DbContext;
+use crate::db::object_read_cache::ReadCacheLookup;
 use crate::db::schema::{object_acl_grants, object_checksums, object_tags, objects};
 use crate::iam::Acl;
 use crate::storage::{ObjectMeta, StorageError};
@@ -34,6 +35,46 @@ pub(super) async fn upsert_object_conn(
     do_upsert_object(conn, bucket_id, meta, last_modified).await?;
     write_through_read_cache(ctx, bucket_name, meta);
     Ok(())
+}
+
+fn staged_write_still_current(
+    ctx: &DbContext,
+    bucket_name: &str,
+    key: &str,
+    last_modified: &str,
+) -> bool {
+    match ctx.object_read_cache().lookup(bucket_name, key) {
+        ReadCacheLookup::Absent => false,
+        ReadCacheLookup::Hit(cached) => cached.last_modified == last_modified,
+        ReadCacheLookup::Miss => true,
+    }
+}
+
+pub fn defer_object_upsert(
+    ctx: &DbContext,
+    bucket_name: &str,
+    meta: &ObjectMeta,
+    put_ctx: Option<PutBucketContext>,
+) {
+    write_through_read_cache(ctx, bucket_name, meta);
+
+    let ctx = ctx.clone();
+    let bucket_name = bucket_name.to_string();
+    let meta = meta.clone();
+    let staged_at = meta.last_modified.clone();
+    tokio::spawn(async move {
+        if !staged_write_still_current(&ctx, &bucket_name, &meta.key, &staged_at) {
+            return;
+        }
+        if let Err(e) = upsert_object(&ctx, &bucket_name, &meta, put_ctx.as_ref()).await {
+            tracing::warn!(
+                bucket = %bucket_name,
+                key = %meta.key,
+                error = %e,
+                "async metadata write failed"
+            );
+        }
+    });
 }
 
 pub async fn upsert_object(
@@ -137,8 +178,10 @@ pub async fn get_object_for_read(
     bucket_name: &str,
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
-    if let Some(meta) = ctx.object_read_cache().get(bucket_name, key) {
-        return Ok(meta);
+    match ctx.object_read_cache().lookup(bucket_name, key) {
+        ReadCacheLookup::Hit(meta) => return Ok(meta),
+        ReadCacheLookup::Absent => return Err(StorageError::NotFound(key.to_string())),
+        ReadCacheLookup::Miss => {}
     }
 
     ctx.object_read_cache().record_miss();
@@ -156,7 +199,10 @@ pub async fn get_object_for_read(
         .first(&mut conn)
         .await
         .map_err(|e| match e {
-            diesel::result::Error::NotFound => StorageError::NotFound(key.to_string()),
+            diesel::result::Error::NotFound => {
+                ctx.object_read_cache().mark_absent(bucket_name, key);
+                StorageError::NotFound(key.to_string())
+            }
             other => db_err(other),
         })?;
 
@@ -204,7 +250,7 @@ pub async fn delete_object(
     .execute(&mut conn)
     .await
     .map_err(db_err)?;
-    ctx.object_read_cache().remove(bucket_name, key);
+    ctx.object_read_cache().mark_absent(bucket_name, key);
     Ok(())
 }
 
@@ -230,7 +276,7 @@ pub async fn delete_objects_by_keys(
     .await
     .map_err(db_err)?;
 
-    ctx.object_read_cache().remove_many(bucket_name, keys);
+    ctx.object_read_cache().mark_absent_many(bucket_name, keys);
     Ok(deleted_keys)
 }
 

@@ -30,7 +30,6 @@ pub async fn delete_object(
             .await;
     }
 
-    multipart::ensure_bucket_exists(&state, &bucket).await?;
     check_object_access(&state, &principal, &bucket, &key, "s3:DeleteObject").await?;
 
     // Permanent version deletion
@@ -40,6 +39,9 @@ pub async fn delete_object(
             .delete_object_version(&bucket, &key, version_id)
             .await
             .map_err(|e| match e {
+                StorageError::NotFound(ref msg) if msg == &bucket => {
+                    S3Error::no_such_bucket(&bucket)
+                }
                 StorageError::VersionNotFound(_) => S3Error::no_such_version(version_id),
                 _ => S3Error::internal(e),
             })?;
@@ -56,7 +58,10 @@ pub async fn delete_object(
         .storage
         .delete_object(&bucket, &key)
         .await
-        .map_err(|e| S3Error::internal(e))?;
+        .map_err(|e| match e {
+            StorageError::NotFound(ref msg) if msg == &bucket => S3Error::no_such_bucket(&bucket),
+            _ => S3Error::internal(e),
+        })?;
 
     let mut builder = Response::builder().status(StatusCode::NO_CONTENT);
     if let Some(vid) = &result.version_id {

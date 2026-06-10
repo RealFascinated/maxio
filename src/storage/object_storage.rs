@@ -87,22 +87,7 @@ impl ObjectStorage {
                 checksum_value: written.checksum_value,
             };
 
-            let meta = Arc::clone(&self.meta);
-            let bucket_owned = bucket.to_string();
-            let put_ctx = put_ctx.cloned();
-            tokio::spawn(async move {
-                if let Err(e) = meta
-                    .upsert_object(&bucket_owned, &object_meta, put_ctx.as_ref())
-                    .await
-                {
-                    tracing::warn!(
-                        bucket = %bucket_owned,
-                        key = %object_meta.key,
-                        error = %e,
-                        "async metadata write failed"
-                    );
-                }
-            });
+            self.meta.defer_object_upsert(bucket, &object_meta, put_ctx);
 
             self.blobs
                 .complete_object_write(bucket, key, &written.final_path, written.size)
@@ -300,8 +285,12 @@ impl ObjectStorage {
             });
         }
 
-        self.meta.delete_object_meta(bucket, key).await?;
-        self.blobs.unlink_object(bucket, key).await?;
+        let (meta_result, blob_result) = tokio::join!(
+            self.meta.delete_object_meta(bucket, key),
+            self.blobs.unlink_object(bucket, key),
+        );
+        meta_result?;
+        blob_result?;
         Ok(DeleteResult {
             version_id: None,
             is_delete_marker: false,

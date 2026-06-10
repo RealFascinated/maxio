@@ -54,6 +54,14 @@ pub async fn start_postgres() -> (testcontainers::ContainerAsync<Postgres>, Stri
 }
 
 pub async fn create_storage(data_dir: &str, database_url: &str) -> Arc<dyn Storage> {
+    create_storage_with_async_meta(data_dir, database_url, false).await
+}
+
+pub async fn create_storage_with_async_meta(
+    data_dir: &str,
+    database_url: &str,
+    async_meta_write: bool,
+) -> Arc<dyn Storage> {
     maxio::db::run_migrations(database_url).await.unwrap();
     let pool = maxio::db::create_pool(database_url, Default::default())
         .await
@@ -63,7 +71,11 @@ pub async fn create_storage(data_dir: &str, database_url: &str) -> Arc<dyn Stora
         maxio::config::MemoryCacheLimits::default(),
     ));
     let blobs = BlobStorage::new(data_dir).await.unwrap();
-    Arc::new(ObjectStorage::new(blobs, meta))
+    let mut storage = ObjectStorage::new(blobs, meta);
+    if async_meta_write {
+        storage = storage.with_async_meta_write();
+    }
+    Arc::new(storage)
 }
 
 pub fn test_config(data_dir: String, database_url: String, default_buckets: &str) -> Config {
@@ -123,11 +135,16 @@ pub async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> A
 
 /// Spin up a test server on a random port.
 pub async fn start_server() -> ServerHandle {
+    start_server_with_async_meta(false).await
+}
+
+pub async fn start_server_with_async_meta(async_meta_write: bool) -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
     let (postgres, database_url) = start_postgres().await;
-    let storage = create_storage(&data_dir, &database_url).await;
-    let config = test_config(data_dir.clone(), database_url, "");
+    let storage = create_storage_with_async_meta(&data_dir, &database_url, async_meta_write).await;
+    let mut config = test_config(data_dir.clone(), database_url, "");
+    config.async_meta_write = async_meta_write;
 
     let state = test_app_state(storage, Arc::new(config)).await;
 
@@ -546,7 +563,7 @@ pub async fn s3_put_chunked(url: &str, data: &[u8]) -> reqwest::Response {
     );
     chunked_body.extend_from_slice(data);
     chunked_body.extend_from_slice(b"\r\n");
-    chunked_body.extend_from_slice(format!("0;chunk-signature={}\r\n", chunk_sig).as_bytes());
+    chunked_body.extend_from_slice(format!("0;chunk-signature={}\r\n\r\n", chunk_sig).as_bytes());
 
     client()
         .put(url)

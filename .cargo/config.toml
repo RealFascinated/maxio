@@ -1,0 +1,16 @@
+# Homebrew libpq is keg-only on macOS — rustc needs an explicit search path.
+# Override with PQ_LIB_DIR / PQ_INCLUDE_DIR if libpq lives elsewhere.
+
+[target.aarch64-apple-darwin]
+rustflags = ["-L", "/opt/homebrew/opt/libpq/lib"]
+
+[target.aarch64-apple-darwin.env]
+PQ_LIB_DIR = "/opt/homebrew/opt/libpq/lib"
+PQ_INCLUDE_DIR = "/opt/homebrew/opt/libpq/include"
+
+[target.x86_64-apple-darwin]
+rustflags = ["-L", "/usr/local/opt/libpq/lib"]
+
+[target.x86_64-apple-darwin.env]
+PQ_LIB_DIR = "/usr/local/opt/libpq/lib"
+PQ_INCLUDE_DIR = "/usr/local/opt/libpq/include"
