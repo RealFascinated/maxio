@@ -570,6 +570,21 @@ async fn test_console_delete_folder() {
     let session = console_login(&base_url).await;
 
     let resp = client()
+        .post(format!(
+            "{}/api/buckets/folder-del-bucket/folders/preview",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .json(&serde_json::json!({ "names": ["photos/"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let preview: serde_json::Value = resp.json().await.unwrap();
+    assert!(preview["count"].as_u64().unwrap() >= 3);
+    assert!(preview["sizeBytes"].as_u64().unwrap() > 0);
+
+    let resp = client()
         .delete(format!(
             "{}/api/buckets/folder-del-bucket/folders",
             base_url

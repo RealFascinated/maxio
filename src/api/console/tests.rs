@@ -9,8 +9,8 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
 use super::objects::{
-    normalize_folder_prefix, normalize_presign_host, parent_folder_prefix_for_deleted_object,
-    preserve_empty_parent_folder_after_object_delete,
+    folder_delete_stats, normalize_folder_prefix, normalize_presign_host,
+    parent_folder_prefix_for_deleted_object, preserve_empty_parent_folder_after_object_delete,
 };
 
 async fn test_storage(
@@ -97,6 +97,54 @@ fn parent_folder_prefix_ignores_root_files_and_folder_markers() {
         parent_folder_prefix_for_deleted_object("a/b/file.txt"),
         Some("a/b/".to_string())
     );
+}
+
+#[tokio::test]
+async fn folder_delete_stats_counts_nested_objects() {
+    let temp = tempfile::tempdir().unwrap();
+    let (storage, _pg) = test_storage(temp.path().to_str().unwrap()).await.unwrap();
+    create_test_bucket(storage.as_ref(), "bucket").await;
+
+    storage
+        .put_object(
+            "bucket",
+            "photos/",
+            "application/x-directory",
+            Box::pin(tokio::io::empty()),
+            None,
+        )
+        .await
+        .unwrap();
+    storage
+        .put_object(
+            "bucket",
+            "photos/vacation.jpg",
+            "image/jpeg",
+            bytes(b"photo-data"),
+            None,
+        )
+        .await
+        .unwrap();
+    storage
+        .put_object(
+            "bucket",
+            "photos/nested/note.txt",
+            "text/plain",
+            bytes(b"note"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (count, size_bytes) = folder_delete_stats(
+        storage.as_ref(),
+        "bucket",
+        &[String::from("photos/")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(count, 3);
+    assert_eq!(size_bytes, 15);
 }
 
 #[tokio::test]

@@ -27,7 +27,7 @@
   import { isPreviewable } from '$lib/preview'
   import { toast } from '$lib/toast'
   import { objectKeys, settingsKeys } from '$lib/api/keys'
-  import { createFolder as createFolderApi, deleteFolder as deleteFolderApi, deleteFolders as deleteFoldersApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, presignObject, uploadObject, type S3File } from '$lib/api/objects'
+  import { createFolder as createFolderApi, deleteFolder as deleteFolderApi, deleteFolders as deleteFoldersApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, previewFolderDelete, presignObject, uploadObject, type FolderDeletePreview, type S3File } from '$lib/api/objects'
   import { getVersioning } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
@@ -54,6 +54,8 @@
   let pendingDelete = $state<string | null>(null)
   let pendingDeletePrefix = $state<string | null>(null)
   let showBulkDeleteConfirm = $state(false)
+  let folderDeletePreview = $state<FolderDeletePreview | null>(null)
+  let folderDeletePreviewLoading = $state(false)
   let selectedKeys = $state<Set<string>>(new Set())
   let createFolderInput = $state<HTMLInputElement | null>(null)
   let sentinelEl = $state<HTMLDivElement | undefined>()
@@ -219,6 +221,14 @@
   const selectedCount = $derived(selectedKeys.size)
   const selectedFolderCount = $derived(prefixes.filter((p) => selectedKeys.has(p)).length)
   const selectedObjectCount = $derived(fileKeys.filter((k) => selectedKeys.has(k)).length)
+  const selectedFolderPrefixes = $derived(prefixes.filter((p) => selectedKeys.has(p)))
+  const selectedObjectStats = $derived.by(() => {
+    const selected = files.filter((file) => selectedKeys.has(file.key))
+    return {
+      count: selected.length,
+      sizeBytes: selected.reduce((sum, file) => sum + file.size, 0),
+    }
+  })
   const allSelected = $derived(selectableKeys.length > 0 && selectableKeys.every((key) => selectedKeys.has(key)))
   const someSelected = $derived(selectableKeys.some((key) => selectedKeys.has(key)))
 
@@ -226,6 +236,40 @@
     prefix
     searchQuery
     selectedKeys = new Set()
+  })
+
+  $effect(() => {
+    const folderPrefixes = pendingDeletePrefix
+      ? [pendingDeletePrefix]
+      : showBulkDeleteConfirm
+        ? selectedFolderPrefixes
+        : []
+
+    if (folderPrefixes.length === 0) {
+      folderDeletePreview = null
+      folderDeletePreviewLoading = false
+      return
+    }
+
+    let cancelled = false
+    folderDeletePreview = null
+    folderDeletePreviewLoading = true
+
+    previewFolderDelete(bucket, folderPrefixes)
+      .then((preview) => {
+        if (!cancelled) folderDeletePreview = preview
+      })
+      .catch((err) => {
+        console.error('previewFolderDelete failed:', err)
+        if (!cancelled) folderDeletePreview = null
+      })
+      .finally(() => {
+        if (!cancelled) folderDeletePreviewLoading = false
+      })
+
+    return () => {
+      cancelled = true
+    }
   })
 
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
@@ -368,21 +412,47 @@
     showBulkDeleteConfirm = true
   }
 
+  function deleteStatsPhrase(count: number, sizeBytes: number): string {
+    const objects = count === 1 ? '1 object' : `${count.toLocaleString()} objects`
+    return `${objects} (${formatBytes(sizeBytes)})`
+  }
+
+  function deleteStatsSuffix(
+    folderPreview: FolderDeletePreview | null,
+    extraCount: number,
+    extraSizeBytes: number,
+  ): string {
+    if (folderDeletePreviewLoading) return ' Counting objects…'
+    if (!folderPreview && extraCount === 0) return ''
+    const count = (folderPreview?.count ?? 0) + extraCount
+    const sizeBytes = (folderPreview?.sizeBytes ?? 0) + extraSizeBytes
+    return ` This will delete ${deleteStatsPhrase(count, sizeBytes)}.`
+  }
+
   function bulkDeleteDescription(): string {
     const folders = selectedFolderCount
     const objects = selectedObjectCount
+    const extraCount = objects
+    const extraSizeBytes = selectedObjectStats.sizeBytes
     if (folders > 0 && objects > 0) {
-      return `This will permanently delete ${folders === 1 ? '1 folder' : `${folders} folders`} (and everything inside ${folders === 1 ? 'it' : 'them'}) and ${objects === 1 ? '1 object' : `${objects} objects`}.`
+      return `This will permanently delete ${folders === 1 ? '1 folder' : `${folders} folders`} (and everything inside ${folders === 1 ? 'it' : 'them'}) and ${objects === 1 ? '1 object' : `${objects} objects`}.${deleteStatsSuffix(folderDeletePreview, extraCount, extraSizeBytes)}`
     }
     if (folders > 0) {
-      return folders === 1
-        ? `This will permanently delete the folder "${prefixLabel([...selectedKeys].find((k) => prefixes.includes(k))!).replace(/\/$/, '')}" and everything inside it.`
+      const base = folders === 1
+        ? `This will permanently delete the folder "${prefixLabel(selectedFolderPrefixes[0]).replace(/\/$/, '')}" and everything inside it.`
         : `This will permanently delete ${folders} folders and everything inside them.`
+      return `${base}${deleteStatsSuffix(folderDeletePreview, 0, 0)}`
     }
     if (objects === 1) {
       return `This will delete "${displayName([...selectedKeys].find((k) => fileKeys.includes(k))!)}" from this bucket.`
     }
     return `This will permanently delete ${objects} objects from this bucket.`
+  }
+
+  function singleFolderDeleteDescription(folderPrefix: string): string {
+    const label = prefixLabel(folderPrefix).replace(/\/$/, '')
+    const base = `This will permanently delete the folder "${label}" and everything inside it.`
+    return `${base}${deleteStatsSuffix(folderDeletePreview, 0, 0)}`
   }
 
   function bulkDeleteTitle(): string {
@@ -805,7 +875,7 @@
     description={bulkDeleteDescription()}
     confirmLabel={bulkDeleteLabel()}
     confirmVariant="destructive"
-    loading={deleteSelectionMutation.isPending}
+    loading={deleteSelectionMutation.isPending || (selectedFolderCount > 0 && folderDeletePreviewLoading)}
     onClose={() => (showBulkDeleteConfirm = false)}
     onConfirm={confirmBulkDelete}
   />
@@ -815,10 +885,10 @@
   <ConfirmDialog
     open
     title="Delete folder?"
-    description={`This will permanently delete the folder "${prefixLabel(pendingDeletePrefix).replace(/\/$/, '')}" and everything inside it.`}
+    description={singleFolderDeleteDescription(pendingDeletePrefix)}
     confirmLabel="Delete folder"
     confirmVariant="destructive"
-    loading={deleteFolderMutation.isPending}
+    loading={deleteFolderMutation.isPending || folderDeletePreviewLoading}
     onClose={() => (pendingDeletePrefix = null)}
     onConfirm={confirmPendingFolderDelete}
   />

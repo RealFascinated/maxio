@@ -83,6 +83,18 @@ export async function createFolder(bucket: string, name: string): Promise<{ ok: 
   })
 }
 
+export interface FolderDeletePreview {
+  count: number
+  sizeBytes: number
+}
+
+export async function previewFolderDelete(bucket: string, names: string[]): Promise<FolderDeletePreview> {
+  return apiFetch<FolderDeletePreview>(`/api/buckets/${encodeURIComponent(bucket)}/folders/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ names }),
+  })
+}
+
 export async function deleteFolder(bucket: string, name: string): Promise<{ ok: boolean; deleted: number }> {
   return apiFetch<{ ok: boolean; deleted: number }>(`/api/buckets/${encodeURIComponent(bucket)}/folders`, {
     method: 'DELETE',

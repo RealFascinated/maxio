@@ -612,6 +612,26 @@ pub struct CreateFolderRequest {
     name: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct FolderPreviewRequest {
+    names: Vec<String>,
+}
+
+pub(crate) async fn folder_delete_stats(
+    storage: &dyn Storage,
+    bucket: &str,
+    prefixes: &[String],
+) -> Result<(usize, u64), crate::storage::StorageError> {
+    let mut count = 0usize;
+    let mut size_bytes = 0u64;
+    for prefix in prefixes {
+        let objects = crate::storage::list_objects_all(storage, bucket, prefix).await?;
+        count += objects.len();
+        size_bytes += objects.iter().map(|obj| obj.size).sum::<u64>();
+    }
+    Ok((count, size_bytes))
+}
+
 pub(crate) fn normalize_folder_prefix(name: &str) -> Option<String> {
     let trimmed = name.trim().trim_matches('/');
     if trimmed.is_empty() {
@@ -660,6 +680,71 @@ pub async fn create_folder(
 }
 
 const CONSOLE_DELETE_FOLDER_BATCH: usize = 1000;
+
+pub async fn preview_folder_delete(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<FolderPreviewRequest>,
+) -> impl IntoResponse {
+    let prefixes: Vec<String> = body
+        .names
+        .iter()
+        .filter_map(|name| normalize_folder_prefix(name))
+        .collect();
+    if prefixes.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "At least one folder name is required"})),
+        )
+            .into_response();
+    }
+
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
+        return resp;
+    }
+    for prefix in &prefixes {
+        if let Err(resp) =
+            console_object_check(&state, &session, &bucket, prefix, "s3:DeleteObject").await
+        {
+            return resp;
+        }
+    }
+
+    match state.storage.head_bucket(&bucket).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Bucket not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
+
+    match folder_delete_stats(state.storage.as_ref(), &bucket, &prefixes).await {
+        Ok((count, size_bytes)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "count": count,
+                "sizeBytes": size_bytes,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
 
 pub async fn delete_folder(
     State(state): State<AppState>,
