@@ -1,0 +1,54 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust-production:
+        dependency-type: production
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      rust-dev:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  - package-ecosystem: bun
+    directory: /ui
+    schedule:
+      interval: weekly
+    groups:
+      svelte:
+        patterns:
+          - "@sveltejs/*"
+          - "svelte"
+          - "svelte-*"
+      tailwind:
+        patterns:
+          - "@tailwindcss/*"
+          - "tailwind*"
+      ui-other:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns:
+          - "*"
