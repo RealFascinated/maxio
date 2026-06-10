@@ -814,19 +814,6 @@ impl BlobStorage {
     }
 }
 
-async fn prune_empty_dirs_up(mut dir: PathBuf, stop_at: &Path) {
-    while dir != stop_at {
-        match fs::remove_dir(&dir).await {
-            Ok(()) => {}
-            Err(_) => break,
-        }
-        dir = match dir.parent() {
-            Some(parent) => parent.to_path_buf(),
-            None => break,
-        };
-    }
-}
-
 fn collect_subdirs_post_order(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;

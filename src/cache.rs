@@ -144,25 +144,6 @@ where
         false
     }
 
-    pub fn remove_many(&self, keys: &[K]) -> u64 {
-        if keys.is_empty() {
-            return 0;
-        }
-        if let Ok(mut map) = self.inner.write() {
-            let mut removed = 0u64;
-            for key in keys {
-                if map.pop(key).is_some() {
-                    removed += 1;
-                }
-            }
-            if removed > 0 {
-                self.sync_entries(map.len());
-            }
-            return removed;
-        }
-        0
-    }
-
     pub fn remove_where<F>(&self, mut pred: F) -> u64
     where
         F: FnMut(&K) -> bool,

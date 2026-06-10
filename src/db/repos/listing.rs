@@ -216,7 +216,6 @@ pub async fn list_objects_delimited_page(
     Ok(DelimitedListPage {
         files,
         prefixes: prefix_set.into_iter().collect(),
-        is_truncated: next_continuation.is_some(),
         next_continuation,
     })
 }

@@ -166,7 +166,6 @@ async fn test_list_objects_delimited_page_skips_dense_folders() {
             .collect::<Vec<_>>(),
         vec!["a-file.txt", "z-file.txt"]
     );
-    assert!(!page.is_truncated);
     assert!(page.next_continuation.is_none());
 
     let _postgres = postgres;

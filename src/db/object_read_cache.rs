@@ -46,13 +46,6 @@ impl ObjectReadCache {
         }
     }
 
-    pub fn get(&self, bucket: &str, key: &str) -> Option<ObjectMeta> {
-        match self.lookup(bucket, key) {
-            ReadCacheLookup::Hit(meta) => Some(meta),
-            _ => None,
-        }
-    }
-
     pub fn record_miss(&self) {
         self.map.record_miss();
     }
@@ -71,15 +64,6 @@ impl ObjectReadCache {
         for key in keys {
             self.mark_absent(bucket, key);
         }
-    }
-
-    pub fn remove(&self, bucket: &str, key: &str) {
-        self.map.remove(&cache_key(bucket, key));
-    }
-
-    pub fn remove_many(&self, bucket: &str, keys: &[String]) {
-        let keys: Vec<String> = keys.iter().map(|key| cache_key(bucket, key)).collect();
-        self.map.remove_many(&keys);
     }
 
     pub fn remove_bucket(&self, bucket: &str) {
@@ -146,14 +130,6 @@ mod tests {
     }
 
     #[test]
-    fn remove_evicts_entry() {
-        let cache = ObjectReadCache::new(None, 256);
-        cache.insert("b", "k", sample_meta("k"));
-        cache.remove("b", "k");
-        assert!(matches!(cache.lookup("b", "k"), ReadCacheLookup::Miss));
-    }
-
-    #[test]
     fn remove_bucket_purges_all_keys_for_bucket() {
         let cache = ObjectReadCache::new(None, 256);
         cache.insert("b1", "a", sample_meta("a"));
@@ -177,7 +153,7 @@ mod tests {
         let cache = ObjectReadCache::new(None, 2);
         cache.insert("b", "first", sample_meta("first"));
         cache.insert("b", "second", sample_meta("second"));
-        cache.get("b", "first");
+        let _ = cache.lookup("b", "first");
         cache.insert("b", "third", sample_meta("third"));
 
         assert!(matches!(

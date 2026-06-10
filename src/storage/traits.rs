@@ -17,7 +17,6 @@ pub struct ListPage {
 pub struct DelimitedListPage {
     pub files: Vec<ObjectMeta>,
     pub prefixes: Vec<String>,
-    pub is_truncated: bool,
     pub next_continuation: Option<String>,
 }
 
