@@ -48,6 +48,24 @@ export async function deleteObject(bucket: string, key: string): Promise<{ ok: b
   return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(key)}`, { method: 'DELETE' })
 }
 
+export interface DeleteObjectsResult {
+  deleted: number
+  failed: string[]
+}
+
+export async function deleteObjects(bucket: string, keys: string[]): Promise<DeleteObjectsResult> {
+  const failed: string[] = []
+  for (const key of keys) {
+    try {
+      await deleteObject(bucket, key)
+    } catch (err) {
+      console.error('deleteObject failed:', key, err)
+      failed.push(key)
+    }
+  }
+  return { deleted: keys.length - failed.length, failed }
+}
+
 export async function createFolder(bucket: string, name: string): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/folders`, {
     method: 'POST',

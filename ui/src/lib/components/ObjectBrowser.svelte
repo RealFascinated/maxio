@@ -26,7 +26,7 @@
   import { isPreviewable } from '$lib/preview'
   import { toast } from '$lib/toast'
   import { objectKeys, settingsKeys } from '$lib/api/keys'
-  import { createFolder as createFolderApi, deleteObject as deleteObjectApi, downloadUrl, listObjects, presignObject, uploadObject, type S3File } from '$lib/api/objects'
+  import { createFolder as createFolderApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, presignObject, uploadObject, type S3File } from '$lib/api/objects'
   import { getVersioning } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
@@ -51,6 +51,9 @@
   let versionKey = $state<string | null>(null)
   let previewFile = $state<S3File | null>(null)
   let pendingDelete = $state<string | null>(null)
+  let showBulkDeleteConfirm = $state(false)
+  let selectedKeys = $state<Set<string>>(new Set())
+  let selectAllCheckbox = $state<HTMLInputElement | null>(null)
   let createFolderInput = $state<HTMLInputElement | null>(null)
   let sentinelEl = $state<HTMLDivElement | undefined>()
 
@@ -130,6 +133,26 @@
     mutationFn: (key: string) => deleteObjectApi(bucket, key),
     onSuccess: (_data, key) => {
       toast.success(`"${displayName(key)}" deleted`)
+      selectedKeys = new Set([...selectedKeys].filter((k) => k !== key))
+      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+    },
+  }))
+
+  const deleteObjectsMutation = createMutation(() => ({
+    mutationFn: (keys: string[]) => deleteObjectsApi(bucket, keys),
+    onSuccess: (result) => {
+      if (result.deleted > 0) {
+        toast.success(result.deleted === 1 ? '1 object deleted' : `${result.deleted} objects deleted`)
+      }
+      if (result.failed.length > 0) {
+        toast.error(
+          result.failed.length === 1
+            ? `Failed to delete "${displayName(result.failed[0])}"`
+            : `Failed to delete ${result.failed.length} objects`,
+        )
+      }
+      selectedKeys = new Set(result.failed)
+      showBulkDeleteConfirm = false
       queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
     },
   }))
@@ -145,6 +168,22 @@
   }))
 
   const files = $derived(objectsQuery.data?.pages.flatMap((page) => page.files) ?? [])
+  const fileKeys = $derived(files.map((file) => file.key))
+  const selectedCount = $derived(selectedKeys.size)
+  const allFilesSelected = $derived(fileKeys.length > 0 && fileKeys.every((key) => selectedKeys.has(key)))
+  const someFilesSelected = $derived(fileKeys.some((key) => selectedKeys.has(key)))
+
+  $effect(() => {
+    prefix
+    searchQuery
+    selectedKeys = new Set()
+  })
+
+  $effect(() => {
+    if (selectAllCheckbox) {
+      selectAllCheckbox.indeterminate = someFilesSelected && !allFilesSelected
+    }
+  })
   const prefixes = $derived.by(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -253,6 +292,36 @@
     }
   }
 
+  function toggleSelect(key: string) {
+    const next = new Set(selectedKeys)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    selectedKeys = next
+  }
+
+  function toggleSelectAll() {
+    if (allFilesSelected) {
+      selectedKeys = new Set()
+      return
+    }
+    selectedKeys = new Set(fileKeys)
+  }
+
+  function requestBulkDelete() {
+    if (selectedCount === 0) return
+    showBulkDeleteConfirm = true
+  }
+
+  async function confirmBulkDelete() {
+    if (selectedCount === 0) return
+    try {
+      await deleteObjectsMutation.mutateAsync([...selectedKeys])
+    } catch (err) {
+      console.error('deleteObjects failed:', err)
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete objects')
+    }
+  }
+
   function toggleShareMenu(key: string, e: MouseEvent) {
     e.stopPropagation()
     if (shareMenuKey === key) {
@@ -319,6 +388,17 @@
     <Button variant="outline" class="h-8" onclick={() => (showCreateFolder = true)}>
       <FolderPlus class="size-4 mr-1" /> New Folder
     </Button>
+    {#if selectedCount > 0}
+      <Button
+        variant="destructive"
+        class="h-8"
+        onclick={requestBulkDelete}
+        disabled={deleteObjectsMutation.isPending}
+      >
+        <Trash2 class="size-4 mr-1" />
+        Delete {selectedCount === 1 ? '1 object' : `${selectedCount} objects`}
+      </Button>
+    {/if}
     <div class="relative min-w-[12rem] flex-1 max-w-sm">
       <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
@@ -359,6 +439,18 @@
     <Table.Root>
       <Table.Header>
         <Table.Row>
+          <Table.Head class="w-10">
+            {#if files.length > 0}
+              <input
+                bind:this={selectAllCheckbox}
+                type="checkbox"
+                class="size-4 cursor-pointer rounded-sm border border-neutral-400 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 dark:border-neutral-600 dark:bg-coolgray-100 dark:focus-visible:ring-warning"
+                checked={allFilesSelected}
+                aria-label={allFilesSelected ? 'Deselect all objects' : 'Select all objects'}
+                onchange={toggleSelectAll}
+              />
+            {/if}
+          </Table.Head>
           <Table.Head>Name</Table.Head>
           <Table.Head class="w-48">Type</Table.Head>
           <Table.Head class="w-28 text-right">Size</Table.Head>
@@ -369,6 +461,7 @@
       <Table.Body>
         {#each prefixes as p}
           <Table.Row class="cursor-pointer" onclick={() => navigateTo(p)}>
+            <Table.Cell></Table.Cell>
             <Table.Cell>
               <span class="flex items-center gap-2">
                 <Folder class="size-4 shrink-0 text-muted-foreground" />
@@ -382,7 +475,17 @@
           </Table.Row>
         {/each}
         {#each files as file}
-          <Table.Row>
+          <Table.Row data-state={selectedKeys.has(file.key) ? 'selected' : undefined}>
+            <Table.Cell>
+              <input
+                type="checkbox"
+                class="size-4 cursor-pointer rounded-sm border border-neutral-400 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 dark:border-neutral-600 dark:bg-coolgray-100 dark:focus-visible:ring-warning"
+                checked={selectedKeys.has(file.key)}
+                aria-label={`Select ${objectLabel(file.key)}`}
+                onclick={(e) => e.stopPropagation()}
+                onchange={() => toggleSelect(file.key)}
+              />
+            </Table.Cell>
             <Table.Cell>
               <span class="flex items-center gap-2">
                 <FileIcon class="size-4 shrink-0 text-muted-foreground" />
@@ -438,7 +541,7 @@
           </Table.Row>
           {#if versionKey === file.key}
             <Table.Row>
-              <Table.Cell colspan={5} class="p-0">
+              <Table.Cell colspan={6} class="p-0">
                 <div class="p-2">
                   <VersionHistory
                     {bucket}
@@ -521,11 +624,26 @@
   <ConfirmDialog
     open
     title="Delete object?"
-    description={`This will delete \"${displayName(pendingDelete)}\" from this bucket.`}
+    description={`This will delete "${displayName(pendingDelete)}" from this bucket.`}
     confirmLabel="Delete object"
     confirmVariant="destructive"
     loading={deleteObjectMutation.isPending}
     onClose={() => (pendingDelete = null)}
     onConfirm={confirmPendingDelete}
+  />
+{/if}
+
+{#if showBulkDeleteConfirm}
+  <ConfirmDialog
+    open
+    title={selectedCount === 1 ? 'Delete object?' : `Delete ${selectedCount} objects?`}
+    description={selectedCount === 1
+      ? `This will delete "${displayName([...selectedKeys][0])}" from this bucket.`
+      : `This will permanently delete ${selectedCount} objects from this bucket.`}
+    confirmLabel={selectedCount === 1 ? 'Delete object' : `Delete ${selectedCount} objects`}
+    confirmVariant="destructive"
+    loading={deleteObjectsMutation.isPending}
+    onClose={() => (showBulkDeleteConfirm = false)}
+    onConfirm={confirmBulkDelete}
   />
 {/if}
