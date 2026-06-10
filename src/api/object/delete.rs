@@ -96,11 +96,11 @@ pub(crate) fn parse_delete_objects_xml(
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(e)) if in_key => {
-                current_key = e.unescape().unwrap_or_default().into_owned();
+                current_key = e.decode().unwrap_or_default().into_owned();
                 in_key = false;
             }
             Ok(quick_xml::events::Event::Text(e)) if in_version_id => {
-                current_version_id = Some(e.unescape().unwrap_or_default().into_owned());
+                current_version_id = Some(e.decode().unwrap_or_default().into_owned());
                 in_version_id = false;
             }
             Ok(quick_xml::events::Event::End(e)) => match e.name().as_ref() {
@@ -134,7 +134,7 @@ pub(crate) fn parse_delete_objects_xml(
                 }
                 Ok(quick_xml::events::Event::Text(e)) if in_key => {
                     objects.push(crate::storage::BatchDeleteObject {
-                        key: e.unescape().unwrap_or_default().into_owned(),
+                        key: e.decode().unwrap_or_default().into_owned(),
                         version_id: None,
                     });
                     in_key = false;

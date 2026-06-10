@@ -73,7 +73,7 @@ pub(super) async fn put_object_tagging(
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(e)) => {
-                let text = e.unescape().unwrap_or_default().into_owned();
+                let text = e.decode().unwrap_or_default().into_owned();
                 if in_key {
                     current_key = Some(text);
                     in_key = false;

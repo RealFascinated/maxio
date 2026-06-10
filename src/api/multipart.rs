@@ -286,7 +286,7 @@ fn parse_complete_parts(xml: &str) -> Result<Vec<(u32, String)>, S3Error> {
             Ok(quick_xml::events::Event::Text(e)) => {
                 if in_part_number {
                     let value = e
-                        .unescape()
+                        .decode()
                         .map_err(|_| S3Error::malformed_xml())?
                         .into_owned();
                     part_number = Some(
@@ -297,7 +297,7 @@ fn parse_complete_parts(xml: &str) -> Result<Vec<(u32, String)>, S3Error> {
                     in_part_number = false;
                 } else if in_etag {
                     let value = e
-                        .unescape()
+                        .decode()
                         .map_err(|_| S3Error::malformed_xml())?
                         .into_owned();
                     let normalized = if value.starts_with('"') && value.ends_with('"') {

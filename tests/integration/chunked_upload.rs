@@ -1,4 +1,4 @@
-use hmac::Mac;
+use hmac::{KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::common::*;

@@ -2,14 +2,14 @@ import Home from 'lucide-svelte/icons/home'
 import UsersIcon from 'lucide-svelte/icons/users'
 import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
 import Settings from 'lucide-svelte/icons/settings'
-import type { Component } from 'svelte'
+import type { LucideIcon } from '$lib/lucide'
 
 export type AppView = 'objects' | 'settings' | 'users' | 'metrics' | 'serverSettings'
 
 export interface SidebarNavEntry {
   id: string
   label: string
-  icon: Component
+  icon: LucideIcon
   active: boolean
   onSelect: () => void
 }
@@ -30,7 +30,7 @@ export interface NavHandlers {
 interface NavItemDef {
   id: string
   label: string
-  icon: Component
+  icon: LucideIcon
   visible?: (ctx: NavContext) => boolean
   isActive: (ctx: NavContext) => boolean
   onSelect: (handlers: NavHandlers) => () => void

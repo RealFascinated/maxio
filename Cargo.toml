@@ -20,13 +20,13 @@ http = "1"
 bytes = "1"
 
 # XML
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.40", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Auth / crypto
-hmac = "0.12"
-sha2 = { version = "0.10", features = ["asm"] }
+hmac = "0.13"
+sha2 = "0.11"
 hex = "0.4"
 
 # Logging
@@ -54,21 +54,21 @@ base64 = "0.22"
 # Embedded UI assets
 rust-embed = "8"
 mime_guess = "2"
-rand = "0.10.0"
+rand = "0.10.1"
 
 # Metrics
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 
 # Database
-diesel = { version = "2.2", features = ["postgres", "chrono", "uuid", "serde_json"] }
-diesel-async = { version = "0.6", features = ["postgres", "deadpool", "async-connection-wrapper", "tokio"] }
-diesel_migrations = "2.2"
+diesel = { version = "2.3", features = ["postgres", "chrono", "uuid", "serde_json"] }
+diesel-async = { version = "0.9", features = ["postgres", "deadpool", "async-connection-wrapper", "tokio"] }
+diesel_migrations = "2.3"
 deadpool-diesel = "0.6"
 async-trait = "0.1"
-lru = "0.12"
+lru = "0.18"
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 tempfile = "3"
-testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["postgres"] }
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

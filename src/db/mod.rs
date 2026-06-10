@@ -7,10 +7,11 @@ pub mod schema;
 pub use bucket_cache::{BucketCache, CachedBucketEntry};
 pub use context::DbContext;
 
+use diesel::connection::CacheSize;
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
 use diesel_async::pooled_connection::deadpool::Pool;
 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
-use diesel_async::{AsyncConnection, AsyncPgConnection, CacheSize, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use futures::FutureExt;
 

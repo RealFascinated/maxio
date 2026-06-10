@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::TryStreamExt;
-use hmac::Mac;
+use hmac::{KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::auth::signature_v4;

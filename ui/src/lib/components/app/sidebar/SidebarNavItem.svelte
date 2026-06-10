@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { Component } from 'svelte'
+  import type { LucideIcon } from '$lib/lucide'
 
   interface Props {
     label: string
-    icon: Component
+    icon: LucideIcon
     active?: boolean
     collapsed?: boolean
     onSelect: () => void

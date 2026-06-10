@@ -3,7 +3,6 @@
   import * as Table from '$lib/components/ui/table'
   import { Button } from '$lib/components/ui/button'
   import { Callout } from '$lib/components/ui/callout'
-  import { Badge } from '$lib/components/ui/badge'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { Dialog } from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
@@ -206,7 +205,7 @@
   </div>
 
   {#if usersQuery.isError}
-    <Callout variant="destructive">
+    <Callout type="danger">
       Failed to load users. Check the server console for details.
     </Callout>
   {:else if usersQuery.isPending}
@@ -233,7 +232,7 @@
               <Table.Cell>
                 <div class="flex flex-wrap gap-1">
                   {#each user.accessKeys as key (key.accessKeyId)}
-                    <Badge variant="secondary" class="font-mono text-xs">{key.accessKeyId}</Badge>
+                    <span class="rounded-sm bg-neutral-100 px-1.5 py-0.5 font-mono text-xs dark:bg-coolgray-200">{key.accessKeyId}</span>
                   {:else}
                     <span class="text-xs text-muted-foreground">None</span>
                   {/each}
@@ -249,7 +248,7 @@
                     >{policyName}</button>
                   {/each}
                   {#each user.attachedPolicies as arn}
-                    <Badge variant="outline" class="font-mono text-xs">{arn.split('/').pop()}</Badge>
+                    <span class="rounded-sm border border-neutral-200 px-1.5 py-0.5 font-mono text-xs dark:border-coolgray-300">{arn.split('/').pop()}</span>
                   {/each}
                 </div>
               </Table.Cell>
@@ -330,7 +329,7 @@
 
 <Dialog bind:open={showKeySecretDialog} title="New access key">
   {#if newKeySecret}
-    <Callout variant="warning" class="mb-4">
+    <Callout type="warning" class="mb-4">
       Copy the secret now — it will not be shown again.
     </Callout>
     <div class="space-y-3 font-mono text-sm">
@@ -387,7 +386,7 @@
   title="Delete user?"
   description={userToDelete ? `Remove IAM user "${userToDelete}" and all access keys.` : ''}
   confirmLabel="Delete"
-  variant="destructive"
+  confirmVariant="destructive"
   onConfirm={async () => {
     if (!userToDelete) return
     try {
@@ -399,7 +398,7 @@
       userToDelete = null
     }
   }}
-  onCancel={() => (userToDelete = null)}
+  onClose={() => (userToDelete = null)}
 />
 
 <ConfirmDialog
@@ -407,7 +406,7 @@
   title="Delete access key?"
   description={keyToDelete ? `Revoke key ${keyToDelete.accessKeyId}?` : ''}
   confirmLabel="Delete"
-  variant="destructive"
+  confirmVariant="destructive"
   onConfirm={async () => {
     if (!keyToDelete) return
     try {
@@ -419,7 +418,7 @@
       keyToDelete = null
     }
   }}
-  onCancel={() => (keyToDelete = null)}
+  onClose={() => (keyToDelete = null)}
 />
 
 <ConfirmDialog
@@ -427,7 +426,7 @@
   title="Delete inline policy?"
   description={policyToDelete ? `Remove policy "${policyToDelete.policyName}"?` : ''}
   confirmLabel="Delete"
-  variant="destructive"
+  confirmVariant="destructive"
   onConfirm={async () => {
     if (!policyToDelete) return
     try {
@@ -440,5 +439,5 @@
       policyToDelete = null
     }
   }}
-  onCancel={() => (policyToDelete = null)}
+  onClose={() => (policyToDelete = null)}
 />
