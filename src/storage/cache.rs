@@ -451,12 +451,14 @@ impl CacheLayer {
     pub async fn mark_clean(&self, bucket: &str, key: &str, size: u64) {
         let entry_key = (bucket.to_string(), key.to_string());
         self.record_access_inner(bucket, key, size).await;
-        let mut dirty = self.dirty.lock().await;
-        if dirty.remove(&entry_key) {
-            let bytes = {
-                let lru = self.lru.lock().await;
-                lru.entries.get(&entry_key).map(|(_, s)| *s).unwrap_or(size)
-            };
+        // Look up size from lru before taking dirty, preserving the lru→dirty lock
+        // order used everywhere else and preventing an AB-BA deadlock with
+        // reserve_space/sync_gauges/recalc_dirty_bytes which all take lru then dirty.
+        let bytes = {
+            let lru = self.lru.lock().await;
+            lru.entries.get(&entry_key).map(|(_, s)| *s).unwrap_or(size)
+        };
+        if self.dirty.lock().await.remove(&entry_key) {
             self.dirty_bytes.fetch_sub(bytes, Ordering::Relaxed);
         }
     }
