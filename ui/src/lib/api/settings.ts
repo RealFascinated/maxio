@@ -61,3 +61,24 @@ export async function setLifecycle(bucket: string, rules: LifecycleRule[]): Prom
     body: JSON.stringify({ rules }),
   })
 }
+
+export interface BucketPolicyResponse {
+  document: string | null
+}
+
+export async function getBucketPolicy(bucket: string): Promise<BucketPolicyResponse> {
+  return apiFetch<BucketPolicyResponse>(`/api/buckets/${encodeURIComponent(bucket)}/policy`)
+}
+
+export async function putBucketPolicy(bucket: string, document: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/policy`, {
+    method: 'PUT',
+    body: JSON.stringify({ document }),
+  })
+}
+
+export async function deleteBucketPolicy(bucket: string): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/policy`, {
+    method: 'DELETE',
+  })
+}

@@ -27,22 +27,12 @@
   } from '$lib/api/users'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
+  import { PolicyEditor } from '$lib/components/policy'
+  import { defaultIdentityPolicy } from '$lib/policy/defaults'
+  import { validatePolicyText, isPolicyValid, blockingPolicyIssue } from '$lib/policy/validation'
   import { jsonDocumentText, tryPrettyJson } from '$lib/preview'
 
-  const defaultPolicyDocument = JSON.stringify(
-    {
-      Version: '2012-10-17',
-      Statement: [
-        {
-          Effect: 'Allow',
-          Action: ['s3:ListBucket', 's3:GetObject'],
-          Resource: ['arn:aws:s3:::my-bucket', 'arn:aws:s3:::my-bucket/*'],
-        },
-      ],
-    },
-    null,
-    2,
-  )
+  const defaultPolicyDocument = defaultIdentityPolicy()
 
   let showCreate = $state(false)
   let newPolicyName = $state('')
@@ -126,10 +116,9 @@
   async function handleCreatePolicy() {
     const name = newPolicyName.trim()
     if (!name) return
-    try {
-      JSON.parse(newPolicyDocument)
-    } catch {
-      toast.error('Policy document must be valid JSON')
+    const validation = validatePolicyText(newPolicyDocument, 'identity')
+    if (!isPolicyValid(validation)) {
+      toast.error(blockingPolicyIssue(validation.issues, 'Policy document must be valid JSON'))
       return
     }
     try {
@@ -336,14 +325,7 @@
         disabled={createPolicyMutation.isPending}
       />
     </div>
-    <div class="space-y-1.5">
-      <Label for="newPolicyDoc">Policy document (JSON)</Label>
-      <textarea
-        id="newPolicyDoc"
-        bind:value={newPolicyDocument}
-        class="input-cool h-80 w-full resize-none overflow-auto rounded-sm bg-background p-3 font-mono text-xs"
-      ></textarea>
-    </div>
+    <PolicyEditor variant="identity" bind:value={newPolicyDocument} />
   </form>
   {#snippet footer()}
     <Button
@@ -393,15 +375,7 @@
           </Button>
         </div>
       </div>
-      <div class="space-y-1.5">
-        <Label for="policyDocView">Policy document</Label>
-        <textarea
-          id="policyDocView"
-          readonly
-          value={policyViewer.document}
-          class="input-cool h-80 w-full resize-none overflow-auto rounded-sm bg-background p-3 font-mono text-xs"
-        ></textarea>
-      </div>
+      <PolicyEditor variant="identity" value={policyViewer.document} readonly />
     </div>
   {/if}
   {#snippet footer()}

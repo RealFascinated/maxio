@@ -5,10 +5,13 @@ use axum::{
     response::IntoResponse,
 };
 
+use crate::api::bucket::apply_bucket_policy;
+use crate::error::S3Error;
 use crate::server::AppState;
 use crate::storage::{LifecycleRule, VersioningState};
 
 use super::access::console_bucket_check;
+use super::error::s3_error_to_response;
 use super::session::ConsoleSession;
 
 pub async fn get_versioning(
@@ -200,7 +203,82 @@ pub async fn set_public(
                 .into_response();
         }
     };
-    match state.storage.put_bucket_policy(&bucket, &policy).await {
+    match apply_bucket_policy(&state, &bucket, &policy).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => s3_error_to_response(e),
+    }
+}
+
+pub async fn get_policy(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:GetBucketPolicy").await {
+        return resp;
+    }
+
+    match state.storage.get_bucket_policy(&bucket).await {
+        Ok(policy) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "document": policy })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetPolicyRequest {
+    document: String,
+}
+
+pub async fn set_policy(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<SetPolicyRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:PutBucketPolicy").await {
+        return resp;
+    }
+
+    match apply_bucket_policy(&state, &bucket, &body.document).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => s3_error_to_response(e),
+    }
+}
+
+pub async fn delete_policy(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:DeleteBucketPolicy").await
+    {
+        return resp;
+    }
+
+    let existing = match state.storage.get_bucket_policy(&bucket).await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    if existing.is_none() {
+        return s3_error_to_response(S3Error::no_such_bucket_policy());
+    }
+
+    match state.storage.delete_bucket_policy(&bucket).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -10,7 +10,9 @@ use axum::{
 use crate::api::authz::{check_bucket_access, get_principal};
 use crate::error::S3Error;
 use crate::iam::authz::{authorize, filter_buckets_by_access};
-use crate::iam::policy::{parse_policy_json, policy_has_public_list, policy_has_public_read};
+use crate::iam::policy::{
+    policy_has_public_list, policy_has_public_read, validate_bucket_policy_for_put,
+};
 use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::lifecycle::{lifecycle_rules_from_xml, lifecycle_rules_to_xml};
@@ -490,16 +492,33 @@ async fn put_bucket_policy(
         .await
         .map_err(S3Error::internal)?;
     let policy_str = String::from_utf8_lossy(&body_bytes).trim().to_string();
-    parse_policy_json(&policy_str).map_err(|e| S3Error::invalid_argument(&e))?;
-    state
-        .storage
-        .put_bucket_policy(&bucket, &policy_str)
-        .await
-        .map_err(S3Error::internal)?;
+    apply_bucket_policy(&state, &bucket, &policy_str).await?;
     Ok(Response::builder()
         .status(StatusCode::NO_CONTENT)
         .body(Body::empty())
         .unwrap())
+}
+
+/// Validate and store a bucket policy document (shared by S3 and console handlers).
+pub async fn apply_bucket_policy(
+    state: &AppState,
+    bucket: &str,
+    policy_str: &str,
+) -> Result<(), S3Error> {
+    match state.storage.head_bucket(bucket).await {
+        Ok(true) => {}
+        Ok(false) => return Err(S3Error::no_such_bucket(bucket)),
+        Err(StorageError::InvalidKey(_)) => return Err(S3Error::no_such_bucket(bucket)),
+        Err(e) => return Err(S3Error::internal(e)),
+    }
+    validate_bucket_policy_for_put(policy_str, bucket)
+        .map_err(|e| S3Error::malformed_policy(&e))?;
+    state
+        .storage
+        .put_bucket_policy(bucket, policy_str)
+        .await
+        .map_err(S3Error::internal)?;
+    Ok(())
 }
 
 pub async fn get_bucket_policy(
@@ -527,6 +546,14 @@ async fn delete_bucket_policy(
     principal: Principal,
 ) -> Result<Response<Body>, S3Error> {
     check_bucket_access(&state, &principal, &bucket, "s3:DeleteBucketPolicy").await?;
+    let existing = state
+        .storage
+        .get_bucket_policy(&bucket)
+        .await
+        .map_err(S3Error::internal)?;
+    if existing.is_none() {
+        return Err(S3Error::no_such_bucket_policy());
+    }
     state
         .storage
         .delete_bucket_policy(&bucket)

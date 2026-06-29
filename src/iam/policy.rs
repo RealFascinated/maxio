@@ -59,6 +59,101 @@ pub fn parse_policy_json(json: &str) -> Result<PolicyDocument, String> {
     parse_policy_document(&raw)
 }
 
+fn is_supported_policy_version(version: &str) -> bool {
+    version == "2012-10-17" || version == "2008-10-17"
+}
+
+fn validate_principal_for_bucket_policy(principal: &Option<PrincipalSpec>) -> Result<(), String> {
+    let Some(principal) = principal else {
+        return Err("bucket policy statement requires Principal".into());
+    };
+    match principal {
+        PrincipalSpec::Star(s) if s == "*" => Ok(()),
+        PrincipalSpec::Star(_) => Err("invalid Principal format".into()),
+        PrincipalSpec::Map(map) => {
+            if map.star {
+                return Ok(());
+            }
+            if map.aws.is_empty() {
+                return Err("Principal.AWS must not be empty".into());
+            }
+            for arn in &map.aws {
+                if arn == "*" {
+                    continue;
+                }
+                if arn.starts_with("arn:aws:iam::") || arn.starts_with("arn:aws:sts::") {
+                    continue;
+                }
+                return Err(format!("invalid Principal ARN: {arn}"));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Whether a bucket policy Resource element may refer to `bucket`.
+pub fn resource_allowed_for_bucket(resource: &str, bucket: &str) -> bool {
+    if resource == "*" {
+        return true;
+    }
+    const PREFIX: &str = "arn:aws:s3:::";
+    if !resource.starts_with(PREFIX) {
+        return false;
+    }
+    let rest = &resource[PREFIX.len()..];
+    if rest.is_empty() {
+        return false;
+    }
+    let bucket_part = rest.split('/').next().unwrap_or(rest);
+    if bucket_part == bucket {
+        return true;
+    }
+    glob_match(bucket_part, bucket)
+}
+
+/// Validate a bucket policy document before PutBucketPolicy.
+pub fn validate_bucket_policy_for_put(json: &str, bucket: &str) -> Result<PolicyDocument, String> {
+    let raw: PolicyDocumentRaw =
+        serde_json::from_str(json).map_err(|e| format!("invalid policy JSON: {e}"))?;
+
+    if !is_supported_policy_version(&raw.version) {
+        return Err(format!(
+            "unsupported policy Version: {} (expected 2012-10-17 or 2008-10-17)",
+            raw.version
+        ));
+    }
+
+    if raw.statement.is_empty() {
+        return Err("policy must contain at least one Statement".into());
+    }
+
+    for (i, stmt) in raw.statement.iter().enumerate() {
+        validate_principal_for_bucket_policy(&stmt.principal)
+            .map_err(|e| format!("Statement[{i}]: {e}"))?;
+
+        if stmt.action.is_empty() {
+            return Err(format!("Statement[{i}]: Action must not be empty"));
+        }
+        if stmt.resource.is_empty() {
+            return Err(format!("Statement[{i}]: Resource must not be empty"));
+        }
+        for resource in &stmt.resource {
+            if !resource_allowed_for_bucket(resource, bucket) {
+                return Err(format!(
+                    "Statement[{i}]: Resource {resource} is not allowed for bucket {bucket}"
+                ));
+            }
+        }
+        if let Some(condition) = &stmt.condition {
+            if !condition.is_object() {
+                return Err(format!("Statement[{i}]: Condition must be a JSON object"));
+            }
+        }
+    }
+
+    parse_policy_document(&raw)
+}
+
 /// Evaluate whether `principal` may perform `action` on `resource`.
 pub fn evaluate(
     principal: &Principal,
@@ -112,7 +207,7 @@ fn eval_document(
 
     for stmt in &doc.statements {
         if is_bucket_policy {
-            if !principal_matches(&stmt.principal, principal) {
+            if stmt.principal.is_none() || !principal_matches(&stmt.principal, principal) {
                 continue;
             }
         } else if stmt.principal.is_some() {
@@ -305,7 +400,9 @@ pub fn merge_public_access_policy(
         version: "2012-10-17".to_string(),
         statement: statements,
     };
-    serde_json::to_string(&doc).map_err(|e| e.to_string())
+    let json = serde_json::to_string(&doc).map_err(|e| e.to_string())?;
+    validate_bucket_policy_for_put(&json, bucket)?;
+    Ok(json)
 }
 
 pub fn policy_has_public_read(policy_json: Option<&str>) -> bool {

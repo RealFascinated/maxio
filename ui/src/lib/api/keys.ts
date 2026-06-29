@@ -36,6 +36,7 @@ export const settingsKeys = {
   publicAccess: (bucket: string) => [...settingsKeys.all, 'public', bucket] as const,
   cors: (bucket: string) => [...settingsKeys.all, 'cors', bucket] as const,
   lifecycle: (bucket: string) => [...settingsKeys.all, 'lifecycle', bucket] as const,
+  policy: (bucket: string) => [...settingsKeys.all, 'policy', bucket] as const,
 }
 
 export const userKeys = {

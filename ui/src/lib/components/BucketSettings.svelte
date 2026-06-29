@@ -7,17 +7,23 @@
   import { Input } from '$lib/components/ui/input'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { bucketKeys, settingsKeys } from '$lib/api/keys'
+  import { PolicyEditor } from '$lib/components/policy'
   import {
+    deleteBucketPolicy,
+    getBucketPolicy,
     getCors,
     getLifecycle,
     getPublicAccess,
     getVersioning,
+    putBucketPolicy,
     setCors,
     setLifecycle,
     setPublicAccess,
     setVersioning,
     type LifecycleRule,
   } from '$lib/api/settings'
+  import { defaultBucketPolicy } from '$lib/policy/defaults'
+  import { validatePolicyText, isPolicyValid, blockingPolicyIssue } from '$lib/policy/validation'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
 
@@ -49,6 +55,19 @@
     queryKey: settingsKeys.lifecycle(bucket),
     queryFn: () => getLifecycle(bucket),
   }))
+  const policyQuery = createQuery(() => ({
+    queryKey: settingsKeys.policy(bucket),
+    queryFn: () => getBucketPolicy(bucket),
+  }))
+
+  let policyDocument = $state('')
+  let policyDirty = $state(false)
+
+  $effect(() => {
+    if (policyDirty || policyQuery.isPending) return
+    const doc = policyQuery.data?.document
+    policyDocument = doc ? doc : defaultBucketPolicy(bucket)
+  })
 
   let newRuleId = $state('')
   let newRulePrefix = $state('')
@@ -75,6 +94,8 @@
     mutationFn: (next: { read: boolean; list: boolean }) => setPublicAccess(bucket, next.read, next.list),
     onSuccess: (_data, next) => {
       queryClient.invalidateQueries({ queryKey: settingsKeys.publicAccess(bucket) })
+      queryClient.invalidateQueries({ queryKey: settingsKeys.policy(bucket) })
+      policyDirty = false
       toast.success(next.read !== publicRead ? (next.read ? 'Public read enabled' : 'Public read disabled') : (next.list ? 'Public listing enabled' : 'Public listing disabled'))
     },
   }))
@@ -94,6 +115,64 @@
       toast.success('Lifecycle rules updated')
     },
   }))
+
+  const policyMutation = createMutation(() => ({
+    mutationFn: (document: string) => putBucketPolicy(bucket, document),
+    onSuccess: () => {
+      policyDirty = false
+      queryClient.invalidateQueries({ queryKey: settingsKeys.policy(bucket) })
+      queryClient.invalidateQueries({ queryKey: settingsKeys.publicAccess(bucket) })
+      toast.success('Bucket policy saved')
+    },
+  }))
+
+  const deletePolicyMutation = createMutation(() => ({
+    mutationFn: () => deleteBucketPolicy(bucket),
+    onSuccess: () => {
+      policyDirty = false
+      policyDocument = defaultBucketPolicy(bucket)
+      queryClient.invalidateQueries({ queryKey: settingsKeys.policy(bucket) })
+      queryClient.invalidateQueries({ queryKey: settingsKeys.publicAccess(bucket) })
+      toast.success('Bucket policy deleted')
+    },
+  }))
+
+  async function saveBucketPolicy() {
+    const validation = validatePolicyText(policyDocument, 'bucket', bucket)
+    if (!isPolicyValid(validation)) {
+      toast.error(blockingPolicyIssue(validation.issues, 'Invalid bucket policy'))
+      return
+    }
+    try {
+      await policyMutation.mutateAsync(policyDocument)
+    } catch (err) {
+      console.error('saveBucketPolicy failed:', err)
+      toastApiError(err, 'Failed to save bucket policy')
+    }
+  }
+
+  function requestDeleteBucketPolicy() {
+    pendingConfirmation = {
+      title: 'Delete bucket policy?',
+      description: 'Remove the entire bucket policy document? Public access toggles will no longer apply until a new policy is saved.',
+      confirmLabel: 'Delete policy',
+      destructive: true,
+      action: async () => {
+        try {
+          await deletePolicyMutation.mutateAsync()
+          pendingConfirmation = null
+        } catch (err) {
+          console.error('deleteBucketPolicy failed:', err)
+          toastApiError(err, 'Failed to delete bucket policy')
+        }
+      },
+    }
+  }
+
+  function onPolicyChange(value: string) {
+    policyDocument = value
+    policyDirty = true
+  }
 
   function formatRuleActions(rule: LifecycleRule): string {
     const parts: string[] = []
@@ -265,7 +344,7 @@
 </script>
 
 <div class="flex flex-col gap-6 max-w-2xl">
-  {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError || lifecycleQuery.isError}
+  {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError || lifecycleQuery.isError || policyQuery.isError}
     <Callout type="danger">Failed to load bucket settings</Callout>
   {/if}
 
@@ -372,6 +451,44 @@
   </div>
 
   <div class="flex flex-col gap-4">
+    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">Bucket policy</h3>
+    <p class="text-sm text-muted-foreground">
+      Resource-based policy for this bucket. Public read/list toggles above merge into this document.
+    </p>
+
+    {#if policyQuery.isPending}
+      <p class="text-sm text-muted-foreground">Loading bucket policy…</p>
+    {:else}
+      <PolicyEditor
+        variant="bucket"
+        buckets={[bucket]}
+        value={policyDocument}
+        onchange={onPolicyChange}
+      />
+      <div class="flex flex-wrap gap-2">
+        <Button
+          variant="highlighted"
+          size="sm"
+          onclick={saveBucketPolicy}
+          disabled={policyMutation.isPending || !policyDirty}
+        >
+          {policyMutation.isPending ? 'Saving…' : 'Save policy'}
+        </Button>
+        {#if policyQuery.data?.document}
+          <Button
+            variant="destructive"
+            size="sm"
+            onclick={requestDeleteBucketPolicy}
+            disabled={deletePolicyMutation.isPending}
+          >
+            Delete policy
+          </Button>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <div class="flex flex-col gap-4">
     <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">Lifecycle</h3>
     <p class="text-sm text-muted-foreground">
       Automatically delete objects when they exceed an age threshold. Rules run on an hourly sweep.
@@ -456,7 +573,7 @@
     description={pendingConfirmation.description}
     confirmLabel={pendingConfirmation.confirmLabel}
     confirmVariant={pendingConfirmation.destructive ? 'destructive' : 'highlighted'}
-    loading={versioningMutation.isPending || publicMutation.isPending || corsMutation.isPending || lifecycleMutation.isPending}
+    loading={versioningMutation.isPending || publicMutation.isPending || corsMutation.isPending || lifecycleMutation.isPending || policyMutation.isPending || deletePolicyMutation.isPending}
     onClose={() => (pendingConfirmation = null)}
     onConfirm={pendingConfirmation.action}
   />

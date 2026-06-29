@@ -115,3 +115,55 @@ fn deny_overrides_allow() {
         AuthDecision::Deny
     );
 }
+
+#[test]
+fn validate_bucket_policy_requires_principal() {
+    use maxio::iam::policy::validate_bucket_policy_for_put;
+
+    let policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::b/*"]}]}"#;
+    let err = validate_bucket_policy_for_put(policy, "b").unwrap_err();
+    assert!(err.contains("Principal"));
+}
+
+#[test]
+fn validate_bucket_policy_rejects_other_bucket_resource() {
+    use maxio::iam::policy::validate_bucket_policy_for_put;
+
+    let policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::other/*"]}]}"#;
+    let err = validate_bucket_policy_for_put(policy, "my-bucket").unwrap_err();
+    assert!(err.contains("not allowed"));
+}
+
+#[test]
+fn bucket_policy_skips_statement_without_principal() {
+    let doc = parse_policy_document(&PolicyDocumentRaw {
+        version: "2012-10-17".into(),
+        statement: vec![StatementRaw {
+            sid: None,
+            effect: "Allow".to_string(),
+            action: vec!["s3:GetObject".to_string()],
+            resource: vec!["arn:aws:s3:::my-bucket/*".to_string()],
+            principal: None,
+            condition: None,
+        }],
+    })
+    .unwrap();
+    let p = Principal {
+        username: "anon".into(),
+        user_id: String::new(),
+        display_name: String::new(),
+        canonical_id: String::new(),
+        is_root: false,
+        is_anonymous: true,
+    };
+    assert_eq!(
+        evaluate(
+            &p,
+            "s3:GetObject",
+            "arn:aws:s3:::my-bucket/file.txt",
+            &[],
+            Some(&doc),
+        ),
+        AuthDecision::NoMatch
+    );
+}

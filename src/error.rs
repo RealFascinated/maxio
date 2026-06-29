@@ -32,6 +32,7 @@ pub enum S3ErrorCode {
     NoSuchCORSConfiguration,
     NoSuchLifecycleConfiguration,
     NoSuchBucketPolicy,
+    MalformedPolicy,
     PreconditionFailed,
     SignatureDoesNotMatch,
 }
@@ -61,6 +62,7 @@ impl S3ErrorCode {
             Self::NoSuchCORSConfiguration => "NoSuchCORSConfiguration",
             Self::NoSuchLifecycleConfiguration => "NoSuchLifecycleConfiguration",
             Self::NoSuchBucketPolicy => "NoSuchBucketPolicy",
+            Self::MalformedPolicy => "MalformedPolicy",
             Self::SignatureDoesNotMatch => "SignatureDoesNotMatch",
         }
     }
@@ -278,6 +280,14 @@ impl S3Error {
         Self {
             code: S3ErrorCode::NoSuchBucketPolicy,
             message: "The bucket policy does not exist".into(),
+            resource: None,
+        }
+    }
+
+    pub fn malformed_policy(msg: &str) -> Self {
+        Self {
+            code: S3ErrorCode::MalformedPolicy,
+            message: msg.to_string(),
             resource: None,
         }
     }

@@ -38,6 +38,9 @@
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
   import { formatDate } from '$lib/format'
+  import { PolicyEditor } from '$lib/components/policy'
+  import { defaultIdentityPolicy } from '$lib/policy/defaults'
+  import { validatePolicyText, isPolicyValid, blockingPolicyIssue } from '$lib/policy/validation'
   import { jsonDocumentText, tryPrettyJson } from '$lib/preview'
 
   let showCreate = $state(false)
@@ -255,20 +258,7 @@
     policyEditor = {
       username: user.username,
       policyName: 'inline-policy',
-      document: JSON.stringify(
-        {
-          Version: '2012-10-17',
-          Statement: [
-            {
-              Effect: 'Allow',
-              Action: ['s3:ListBucket', 's3:GetObject'],
-              Resource: ['arn:aws:s3:::my-bucket', 'arn:aws:s3:::my-bucket/*'],
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+      document: defaultIdentityPolicy(),
     }
     showPolicyDialog = true
   }
@@ -312,10 +302,9 @@
 
   async function savePolicy() {
     if (!policyEditor) return
-    try {
-      JSON.parse(policyEditor.document)
-    } catch {
-      toast.error('Policy document must be valid JSON')
+    const validation = validatePolicyText(policyEditor.document, 'identity')
+    if (!isPolicyValid(validation)) {
+      toast.error(blockingPolicyIssue(validation.issues, 'Policy document must be valid JSON'))
       return
     }
     try {
@@ -623,14 +612,7 @@
         <Label for="policyName">Policy name</Label>
         <Input id="policyName" bind:value={policyEditor.policyName} />
       </div>
-      <div class="space-y-1.5">
-        <Label for="policyDoc">Policy document (JSON)</Label>
-        <textarea
-          id="policyDoc"
-          bind:value={policyEditor.document}
-          class="input-cool h-80 w-full resize-none overflow-auto rounded-sm bg-background p-3 font-mono text-xs"
-        ></textarea>
-      </div>
+      <PolicyEditor variant="identity" bind:value={policyEditor.document} />
     </div>
   {/if}
   {#snippet footer()}
