@@ -62,7 +62,14 @@ pub const REGION: &str = "us-east-1";
 
 pub struct ServerHandle {
     url: String,
+    data_dir: String,
     _keep_alive: TestKeepAlive,
+}
+
+impl ServerHandle {
+    pub fn data_dir(&self) -> &str {
+        &self.data_dir
+    }
 }
 
 pub struct TestKeepAlive {
@@ -208,6 +215,7 @@ pub async fn start_server_with_metrics_token() -> ServerHandle {
 
     ServerHandle {
         url: base_url,
+        data_dir,
         _keep_alive: TestKeepAlive {
             _dir: tmp,
             _postgres: postgres,
@@ -241,6 +249,7 @@ pub async fn start_server_with_async_meta(async_meta_write: bool) -> ServerHandl
 
     ServerHandle {
         url: base_url,
+        data_dir,
         _keep_alive: TestKeepAlive {
             _dir: tmp,
             _postgres: postgres,
@@ -276,6 +285,7 @@ pub async fn start_server_with_default_buckets(default_buckets: &str) -> ServerH
 
     ServerHandle {
         url: base_url,
+        data_dir,
         _keep_alive: TestKeepAlive {
             _dir: tmp,
             _postgres: postgres,
@@ -687,9 +697,17 @@ pub async fn iam_action(base_url: &str, pairs: &[(&str, &str)]) -> reqwest::Resp
 }
 
 pub async fn console_login(base_url: &str) -> String {
+    console_login_with_creds(base_url, ACCESS_KEY, SECRET_KEY).await
+}
+
+pub async fn console_login_with_creds(
+    base_url: &str,
+    access_key: &str,
+    secret_key: &str,
+) -> String {
     let resp = client()
         .post(format!("{base_url}/api/auth/login"))
-        .json(&serde_json::json!({"accessKey": ACCESS_KEY, "secretKey": SECRET_KEY}))
+        .json(&serde_json::json!({"accessKey": access_key, "secretKey": secret_key}))
         .send()
         .await
         .unwrap();

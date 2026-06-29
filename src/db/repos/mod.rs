@@ -1,5 +1,7 @@
 mod buckets;
+mod console_list_sort;
 mod iam;
+mod lifecycle;
 mod listing;
 mod multipart;
 mod objects;
@@ -8,6 +10,7 @@ mod versions;
 
 pub use buckets::*;
 pub use iam::*;
+pub use lifecycle::*;
 pub use listing::*;
 pub use multipart::*;
 pub use objects::*;

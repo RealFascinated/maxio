@@ -32,11 +32,17 @@ pub async fn get_object(
         return acl::handle_object_get_acl(state, bucket, key, params, principal).await;
     }
     if params.contains_key("tagging") {
-        return get_object_tagging(State(state), Path((bucket, key))).await;
+        return get_object_tagging(State(state), Path((bucket, key)), Extension(principal)).await;
     }
 
     if params.contains_key("uploadId") {
-        return multipart::list_parts(State(state), Path((bucket, key)), Query(params)).await;
+        return multipart::list_parts(
+            State(state),
+            Path((bucket, key)),
+            Query(params),
+            Extension(principal),
+        )
+        .await;
     }
 
     check_object_access(&state, &principal, &bucket, &key, "s3:GetObject").await?;
@@ -209,6 +215,13 @@ pub async fn head_object(
     headers: HeaderMap,
     Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
+    if params.contains_key("acl") {
+        return acl::handle_object_get_acl(state, bucket, key, params, principal).await;
+    }
+    if params.contains_key("tagging") {
+        return get_object_tagging(State(state), Path((bucket, key)), Extension(principal)).await;
+    }
+
     check_object_access(&state, &principal, &bucket, &key, "s3:GetObject").await?;
     let meta = if let Some(version_id) = params.get("versionId") {
         state

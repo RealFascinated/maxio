@@ -140,6 +140,13 @@ pub async fn filter_buckets_by_access(
 
     let mut out = Vec::new();
     for b in buckets {
+        if !principal.is_anonymous
+            && (principal.canonical_id == b.owner_id || principal.user_id == b.owner_id)
+        {
+            out.push(b);
+            continue;
+        }
+
         let bucket_policy = b.policy.as_deref().and_then(|j| parse_policy_json(j).ok());
         let arn = bucket_arn(&b.name);
 

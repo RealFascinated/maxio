@@ -1,0 +1,1 @@
+ALTER TABLE buckets ADD COLUMN versioning_suspended BOOLEAN NOT NULL DEFAULT FALSE;

@@ -30,6 +30,8 @@ pub enum S3ErrorCode {
     EntityTooSmall,
     ExpiredPresignedUrl,
     NoSuchCORSConfiguration,
+    NoSuchLifecycleConfiguration,
+    NoSuchBucketPolicy,
     PreconditionFailed,
     SignatureDoesNotMatch,
 }
@@ -57,6 +59,8 @@ impl S3ErrorCode {
             Self::ExpiredPresignedUrl => "AccessDenied",
             Self::PreconditionFailed => "PreconditionFailed",
             Self::NoSuchCORSConfiguration => "NoSuchCORSConfiguration",
+            Self::NoSuchLifecycleConfiguration => "NoSuchLifecycleConfiguration",
+            Self::NoSuchBucketPolicy => "NoSuchBucketPolicy",
             Self::SignatureDoesNotMatch => "SignatureDoesNotMatch",
         }
     }
@@ -71,7 +75,9 @@ impl S3ErrorCode {
             | Self::NoSuchKey
             | Self::NoSuchUpload
             | Self::NoSuchVersion
-            | Self::NoSuchCORSConfiguration => StatusCode::NOT_FOUND,
+            | Self::NoSuchCORSConfiguration
+            | Self::NoSuchLifecycleConfiguration
+            | Self::NoSuchBucketPolicy => StatusCode::NOT_FOUND,
             Self::BucketAlreadyOwnedByYou | Self::BucketNotEmpty => StatusCode::CONFLICT,
             Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
             Self::InvalidRange => StatusCode::RANGE_NOT_SATISFIABLE,
@@ -260,6 +266,22 @@ impl S3Error {
         }
     }
 
+    pub fn no_such_lifecycle_configuration() -> Self {
+        Self {
+            code: S3ErrorCode::NoSuchLifecycleConfiguration,
+            message: "The lifecycle configuration does not exist".into(),
+            resource: None,
+        }
+    }
+
+    pub fn no_such_bucket_policy() -> Self {
+        Self {
+            code: S3ErrorCode::NoSuchBucketPolicy,
+            message: "The bucket policy does not exist".into(),
+            resource: None,
+        }
+    }
+
     pub fn precondition_failed() -> Self {
         Self {
             code: S3ErrorCode::PreconditionFailed,
@@ -273,6 +295,7 @@ impl IntoResponse for S3Error {
     fn into_response(self) -> Response {
         let resource = self.resource.as_deref().unwrap_or("");
         let request_id = uuid::Uuid::new_v4();
+        let host_id = crate::server::s3_host_id();
         let xml = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
              <Error>\
@@ -280,11 +303,13 @@ impl IntoResponse for S3Error {
              <Message>{}</Message>\
              <Resource>{}</Resource>\
              <RequestId>{}</RequestId>\
+             <HostId>{}</HostId>\
              </Error>",
             self.code.as_str(),
             quick_xml::escape::escape(&self.message),
             quick_xml::escape::escape(resource),
             request_id,
+            quick_xml::escape::escape(host_id),
         );
 
         let status = self.code.status_code();

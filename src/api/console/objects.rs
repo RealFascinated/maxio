@@ -14,7 +14,7 @@ use crate::server::AppState;
 use crate::storage::{BatchDeleteObject, Storage};
 
 use super::access::{console_bucket_check, console_object_check};
-use super::session::ConsoleSession;
+use super::session::{ConsoleSession, session_signing_credentials};
 
 type HmacSha256 = hmac::Hmac<Sha256>;
 
@@ -28,6 +28,8 @@ pub struct ListObjectsParams {
     start_after: Option<String>,
     max_keys: Option<usize>,
     q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
 }
 
 fn console_list_file_json(obj: &crate::storage::ObjectMeta) -> serde_json::Value {
@@ -92,6 +94,8 @@ pub async fn list_objects(
             params.start_after.as_deref(),
             max_keys,
             search,
+            crate::db::repos::ConsoleListSort::parse(params.sort.as_deref()),
+            crate::db::repos::SortOrder::parse(params.order.as_deref()),
         )
         .await
     {
@@ -299,6 +303,113 @@ pub async fn delete_object_api(
     }
 }
 
+pub async fn delete_objects_api(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<DeleteObjectsRequest>,
+) -> impl IntoResponse {
+    let keys: Vec<String> = body
+        .keys
+        .into_iter()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .collect();
+    if keys.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "At least one object key is required"})),
+        )
+            .into_response();
+    }
+
+    if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
+        return resp;
+    }
+    for key in &keys {
+        if let Err(resp) =
+            console_object_check(&state, &session, &bucket, key, "s3:DeleteObject").await
+        {
+            return resp;
+        }
+    }
+
+    match state.storage.head_bucket(&bucket).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Bucket not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    }
+
+    let mut deleted = 0usize;
+    let mut failed = Vec::new();
+    let mut succeeded_keys = Vec::new();
+
+    for chunk in keys.chunks(CONSOLE_DELETE_FOLDER_BATCH) {
+        let batch: Vec<BatchDeleteObject> = chunk
+            .iter()
+            .map(|key| BatchDeleteObject {
+                key: key.clone(),
+                version_id: None,
+            })
+            .collect();
+
+        match state.storage.delete_objects_batch(&bucket, &batch).await {
+            Ok(results) => {
+                for (obj, outcome) in results {
+                    match outcome {
+                        Ok(_) => {
+                            deleted += 1;
+                            succeeded_keys.push(obj.key);
+                        }
+                        Err(_) => failed.push(obj.key),
+                    }
+                }
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    for key in &succeeded_keys {
+        if let Err(e) =
+            preserve_empty_parent_folder_after_object_delete(state.storage.as_ref(), &bucket, key)
+                .await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "deleted": deleted,
+            "failed": failed,
+        })),
+    )
+        .into_response()
+}
+
 pub fn parent_folder_prefix_for_deleted_object(key: &str) -> Option<String> {
     if key.ends_with('/') {
         return None;
@@ -471,13 +582,20 @@ pub async fn presign_object(
 
     let expires_secs = params.expires.unwrap_or(3600).min(604800);
 
+    let Some((access_key, secret_key)) = session_signing_credentials(&state, &session).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Not authenticated"})),
+        )
+            .into_response();
+    };
+
     let (scheme, host) = presign_endpoint(&headers, &state.config);
 
     let now = chrono::Utc::now();
     let date_stamp = now.format("%Y%m%d").to_string();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let region = "us-east-1";
-    let access_key = &state.config.access_key;
 
     let credential = format!("{}/{}/{}/s3/aws4_request", access_key, date_stamp, region);
 
@@ -527,8 +645,7 @@ pub async fn presign_object(
         amz_date, scope, canonical_hash
     );
 
-    let signing_key =
-        signature_v4::derive_signing_key(&state.config.secret_key, &date_stamp, region);
+    let signing_key = signature_v4::derive_signing_key(&secret_key, &date_stamp, region);
 
     let mut mac = HmacSha256::new_from_slice(&signing_key).unwrap();
     mac.update(string_to_sign.as_bytes());
@@ -557,6 +674,11 @@ pub struct CreateFolderRequest {
 #[derive(serde::Deserialize)]
 pub struct FolderPreviewRequest {
     names: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeleteObjectsRequest {
+    keys: Vec<String>,
 }
 
 pub async fn folder_delete_stats(

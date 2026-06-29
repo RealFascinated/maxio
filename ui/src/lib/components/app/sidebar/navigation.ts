@@ -1,5 +1,6 @@
 import Home from 'lucide-svelte/icons/home'
 import UsersIcon from 'lucide-svelte/icons/users'
+import Shield from 'lucide-svelte/icons/shield'
 import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
 import Settings from 'lucide-svelte/icons/settings'
 import type { LucideIcon } from '$lib/lucide'
@@ -42,6 +43,14 @@ const mainNavItems: NavItemDef[] = [
     href: routes.users(),
     visible: (ctx) => ctx.isRootUser,
     isActive: (ctx) => ctx.pathname === routes.users(),
+  },
+  {
+    id: 'policies',
+    label: 'Policies',
+    icon: Shield,
+    href: routes.policies(),
+    visible: (ctx) => ctx.isRootUser,
+    isActive: (ctx) => ctx.pathname === routes.policies(),
   },
   {
     id: 'metrics',

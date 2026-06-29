@@ -35,6 +35,31 @@ async fn test_put_and_get_object_tagging() {
 }
 
 #[tokio::test]
+async fn test_put_object_x_amz_tagging_header() {
+    let base = start_server().await;
+    s3_request("PUT", &format!("{}/tag-bucket", base), vec![]).await;
+    let resp = s3_request_with_headers(
+        "PUT",
+        &format!("{}/tag-bucket/inline.txt", base),
+        b"hello".to_vec(),
+        vec![("x-amz-tagging", "env=prod&team=platform")],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let get = s3_request(
+        "GET",
+        &format!("{}/tag-bucket/inline.txt?tagging", base),
+        vec![],
+    )
+    .await;
+    assert_eq!(get.status(), 200);
+    let body = get.text().await.unwrap();
+    assert!(body.contains("<Key>env</Key>"));
+    assert!(body.contains("<Value>prod</Value>"));
+}
+
+#[tokio::test]
 async fn test_get_object_tagging_no_tags() {
     let base = start_server().await;
     s3_request("PUT", &format!("{}/notag-bucket", base), vec![]).await;

@@ -19,6 +19,7 @@
   import { Sonner } from '$lib/components/ui/sonner'
   import { checkAuth, logout, type AuthCheckResponse } from '$lib/api/auth'
   import { authKeys } from '$lib/api/keys'
+  import { registerSessionExpiredHandler, setSessionActive } from '$lib/api/session'
   import { isRootOnlyPath, routes } from '$lib/navigation'
   import { queryClient } from '$lib/query/client'
 
@@ -43,6 +44,15 @@
   let themeMode = $state<ThemeMode>('system')
   let isDark = $state(true)
   let mobileMenuOpen = $state(false)
+  let sessionExpiredNotice = $state(false)
+
+  function handleSessionExpired() {
+    authenticatedOverride = false
+    sessionIsRoot = null
+    sessionExpiredNotice = true
+    setSessionActive(false)
+    queryClient.clear()
+  }
 
   const isRootUser = $derived(sessionIsRoot ?? authQuery.data?.isRoot === true)
 
@@ -79,6 +89,12 @@
   }
 
   $effect(() => {
+    if (authenticatedOverride === true || authQuery.data?.ok === true) {
+      setSessionActive(true)
+    }
+  })
+
+  $effect(() => {
     if (authQuery.data?.isRoot !== undefined) {
       sessionIsRoot = authQuery.data.isRoot === true
     }
@@ -107,6 +123,8 @@
     }
     mediaQuery.addEventListener('change', handleSystemThemeChange)
 
+    registerSessionExpiredHandler(handleSessionExpired)
+
     return () => {
       mediaQuery.removeEventListener('change', handleSystemThemeChange)
     }
@@ -115,11 +133,14 @@
   function handleLogin(session: AuthCheckResponse) {
     authenticatedOverride = true
     sessionIsRoot = session.isRoot === true
+    sessionExpiredNotice = false
+    setSessionActive(true)
     queryClient.setQueryData(authKeys.check(), session)
     queryClient.invalidateQueries({ queryKey: authKeys.all })
   }
 
   async function handleLogout() {
+    setSessionActive(false)
     await logoutMutation.mutateAsync()
     authenticatedOverride = false
     sessionIsRoot = null
@@ -148,7 +169,7 @@
 {#if authQuery.isPending && authenticatedOverride === null}
   <!-- loading -->
 {:else if !(authenticatedOverride ?? authQuery.isSuccess)}
-  <Login onLogin={handleLogin} />
+  <Login onLogin={handleLogin} sessionExpired={sessionExpiredNotice} />
 {:else}
   <div class="relative flex h-screen bg-background">
     {#if mobileMenuOpen}

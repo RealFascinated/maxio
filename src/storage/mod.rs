@@ -1,12 +1,14 @@
 pub mod blob;
 pub mod cache;
 pub mod hashing;
+pub mod lifecycle;
 pub mod metadata;
 pub mod object_storage;
 pub mod orphans;
 pub mod pg_metadata;
 pub mod traits;
 
+pub use lifecycle::{LifecycleAction, LifecycleRule};
 pub use metadata::MetadataStore;
 pub use object_storage::ObjectStorage;
 pub use pg_metadata::PgMetadataStore;
@@ -93,6 +95,13 @@ pub struct CorsRule {
     pub expose_headers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_age_seconds: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersioningState {
+    Unversioned,
+    Enabled,
+    Suspended,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

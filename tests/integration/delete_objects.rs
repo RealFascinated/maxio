@@ -59,6 +59,30 @@ async fn test_delete_objects_batch() {
 }
 
 #[tokio::test]
+async fn test_delete_objects_requires_delete_query_param() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/mybucket/keep.txt", base_url),
+        b"keep".to_vec(),
+    )
+    .await;
+
+    let delete_xml = r#"<Delete><Object><Key>keep.txt</Key></Object></Delete>"#;
+    let resp = s3_request(
+        "POST",
+        &format!("{}/mybucket", base_url),
+        delete_xml.as_bytes().to_vec(),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+
+    let get = s3_request("GET", &format!("{}/mybucket/keep.txt", base_url), vec![]).await;
+    assert_eq!(get.status(), 200);
+}
+
+#[tokio::test]
 async fn test_delete_objects_batch_missing_bucket_returns_404() {
     let base_url = start_server().await;
 

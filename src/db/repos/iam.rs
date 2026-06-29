@@ -359,6 +359,8 @@ impl IamRepo {
             return Err(format!("user not found: {username}"));
         }
 
+        parse_policy_document(&document)?;
+
         let json = serde_json::to_value(&document).map_err(|e| e.to_string())?;
         diesel::insert_into(iam_user_inline_policies::table)
             .values((

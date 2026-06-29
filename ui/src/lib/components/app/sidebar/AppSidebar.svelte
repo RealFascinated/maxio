@@ -1,5 +1,6 @@
 <script lang="ts">
   import { base } from '$app/paths'
+  import ChevronLeft from 'lucide-svelte/icons/chevron-left'
   import LogOut from 'lucide-svelte/icons/log-out'
   import SidebarNavItem from '$lib/components/app/sidebar/SidebarNavItem.svelte'
   import SidebarThemeControl from '$lib/components/app/sidebar/SidebarThemeControl.svelte'
@@ -60,19 +61,10 @@
       aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       aria-expanded={!isCollapsed}
     >
-      <svg
-        class="size-3.5 transition-transform"
-        class:rotate-180={isCollapsed}
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
+      <ChevronLeft
+        class="size-3.5 transition-transform {isCollapsed ? 'rotate-180' : ''}"
         aria-hidden="true"
-      >
-        <path d="M15 18 9 12l6-6" />
-      </svg>
+      />
     </button>
   {/if}
 

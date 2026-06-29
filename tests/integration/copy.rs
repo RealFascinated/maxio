@@ -23,7 +23,7 @@ async fn test_copy_object_basic() {
     .await;
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("<CopyObjectResult>"));
+    assert!(body.contains("<CopyObjectResult"));
     assert!(body.contains("<ETag>"));
     assert!(body.contains("<LastModified>"));
 

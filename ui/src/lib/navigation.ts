@@ -3,6 +3,7 @@ import { base } from '$app/paths'
 export const routes = {
   home: () => `${base}/`,
   users: () => `${base}/users`,
+  policies: () => `${base}/policies`,
   metrics: () => `${base}/metrics`,
   serverSettings: () => `${base}/settings`,
   bucket: (bucket: string, prefix = '') => bucketObjectsUrl(bucket, prefix),
@@ -30,6 +31,7 @@ export function bucketObjectsUrl(bucket: string, prefix = ''): string {
 export function isRootOnlyPath(pathname: string): boolean {
   return (
     pathname === routes.users() ||
+    pathname === routes.policies() ||
     pathname === routes.metrics() ||
     pathname === routes.serverSettings()
   )

@@ -13,6 +13,7 @@ use crate::iam::authz::{authorize, filter_buckets_by_access};
 use crate::iam::policy::{parse_policy_json, policy_has_public_list, policy_has_public_read};
 use crate::iam::principal::Principal;
 use crate::server::AppState;
+use crate::storage::lifecycle::{lifecycle_rules_from_xml, lifecycle_rules_to_xml};
 use crate::storage::{BucketMeta, CorsRule, StorageError, is_valid_bucket_name};
 use crate::xml::{response::to_xml, types::*};
 
@@ -163,7 +164,10 @@ pub async fn delete_bucket(
         return delete_bucket_policy(state, bucket, principal).await;
     }
     if params.contains_key("cors") {
-        return delete_bucket_cors(state, bucket).await;
+        return delete_bucket_cors(state, bucket, principal).await;
+    }
+    if params.contains_key("lifecycle") {
+        return delete_bucket_lifecycle(state, bucket).await;
     }
     check_bucket_access(&state, &principal, &bucket, "s3:DeleteBucket").await?;
     match state.storage.delete_bucket(&bucket).await {
@@ -194,10 +198,13 @@ pub async fn handle_bucket_put(
             .await;
     }
     if params.contains_key("versioning") {
-        return put_bucket_versioning(State(state), Path(bucket), body).await;
+        return put_bucket_versioning(State(state), Path(bucket), body, principal).await;
     }
     if params.contains_key("cors") {
-        return put_bucket_cors(state, bucket, body).await;
+        return put_bucket_cors(state, bucket, body, principal).await;
+    }
+    if params.contains_key("lifecycle") {
+        return put_bucket_lifecycle(state, bucket, body).await;
     }
     let bucket_name = bucket.clone();
     let state_for_acl = state.clone();
@@ -219,32 +226,32 @@ async fn put_bucket_versioning(
     State(state): State<AppState>,
     Path(bucket): Path<String>,
     body: Body,
+    principal: Principal,
 ) -> Result<Response<Body>, S3Error> {
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
+    check_bucket_access(&state, &principal, &bucket, "s3:PutBucketVersioning").await?;
 
     let body_bytes = axum::body::to_bytes(body, 1024 * 64)
         .await
         .map_err(|e| S3Error::internal(e))?;
     let body_str = String::from_utf8_lossy(&body_bytes);
 
-    // Parse <VersioningConfiguration><Status>Enabled|Suspended</Status></VersioningConfiguration>
-    let enabled = if body_str.contains("<Status>Enabled</Status>") {
-        true
+    use crate::storage::VersioningState;
+    let versioning_state = if body_str.contains("<Status>Enabled</Status>") {
+        VersioningState::Enabled
     } else if body_str.contains("<Status>Suspended</Status>") {
-        false
+        VersioningState::Suspended
     } else {
-        false
+        return Err(S3Error::malformed_xml());
     };
 
     state
         .storage
-        .set_versioning(&bucket, enabled)
+        .set_versioning_state(&bucket, versioning_state)
         .await
-        .map_err(|e| S3Error::internal(e))?;
+        .map_err(|e| match e {
+            StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),
+            e => S3Error::internal(e),
+        })?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -256,17 +263,21 @@ pub async fn get_bucket_versioning(
     state: AppState,
     bucket: String,
 ) -> Result<Response<Body>, S3Error> {
-    let versioned = state
+    use crate::storage::VersioningState;
+    let status = state
         .storage
-        .is_versioned(&bucket)
+        .get_versioning_state(&bucket)
         .await
-        .map_err(|e| S3Error::internal(e))?;
+        .map_err(|e| match e {
+            StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),
+            e => S3Error::internal(e),
+        })?;
 
     let result = VersioningConfiguration {
-        status: if versioned {
-            Some("Enabled".to_string())
-        } else {
-            None
+        status: match status {
+            VersioningState::Enabled => Some("Enabled".to_string()),
+            VersioningState::Suspended => Some("Suspended".to_string()),
+            VersioningState::Unversioned => None,
         },
     };
 
@@ -282,12 +293,9 @@ async fn put_bucket_cors(
     state: AppState,
     bucket: String,
     body: Body,
+    principal: Principal,
 ) -> Result<Response<Body>, S3Error> {
-    match state.storage.head_bucket(&bucket).await {
-        Ok(true) => {}
-        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
-        Err(e) => return Err(S3Error::internal(e)),
-    }
+    check_bucket_access(&state, &principal, &bucket, "s3:PutBucketCors").await?;
 
     let body_bytes = axum::body::to_bytes(body, 64 * 1024)
         .await
@@ -377,7 +385,88 @@ pub async fn get_bucket_cors(state: AppState, bucket: String) -> Result<Response
         .unwrap())
 }
 
-async fn delete_bucket_cors(state: AppState, bucket: String) -> Result<Response<Body>, S3Error> {
+async fn delete_bucket_cors(
+    state: AppState,
+    bucket: String,
+    principal: Principal,
+) -> Result<Response<Body>, S3Error> {
+    check_bucket_access(&state, &principal, &bucket, "s3:DeleteBucketCors").await?;
+
+    state
+        .storage
+        .delete_bucket_cors(&bucket)
+        .await
+        .map_err(|e| S3Error::internal(e))?;
+
+    Ok(Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .body(Body::empty())
+        .unwrap())
+}
+
+async fn put_bucket_lifecycle(
+    state: AppState,
+    bucket: String,
+    body: Body,
+) -> Result<Response<Body>, S3Error> {
+    match state.storage.head_bucket(&bucket).await {
+        Ok(true) => {}
+        Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
+        Err(e) => return Err(S3Error::internal(e)),
+    }
+
+    let body_bytes = axum::body::to_bytes(body, 256 * 1024)
+        .await
+        .map_err(|e| S3Error::internal(e))?;
+
+    let config: LifecycleConfiguration =
+        quick_xml::de::from_str(&String::from_utf8_lossy(&body_bytes))
+            .map_err(|_| S3Error::malformed_xml())?;
+
+    let rules = lifecycle_rules_from_xml(&config).map_err(|msg| S3Error::invalid_argument(&msg))?;
+
+    state
+        .storage
+        .put_bucket_lifecycle(&bucket, rules)
+        .await
+        .map_err(|e| S3Error::internal(e))?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::empty())
+        .unwrap())
+}
+
+pub async fn get_bucket_lifecycle(
+    state: AppState,
+    bucket: String,
+) -> Result<Response<Body>, S3Error> {
+    let rules = state
+        .storage
+        .get_bucket_lifecycle(&bucket)
+        .await
+        .map_err(|e| match e {
+            StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),
+            e => S3Error::internal(e),
+        })?;
+
+    if rules.is_empty() {
+        return Err(S3Error::no_such_lifecycle_configuration());
+    }
+
+    let config = lifecycle_rules_to_xml(&rules);
+    let xml = to_xml(&config).map_err(|e| S3Error::internal(e))?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/xml")
+        .body(Body::from(xml))
+        .unwrap())
+}
+
+async fn delete_bucket_lifecycle(
+    state: AppState,
+    bucket: String,
+) -> Result<Response<Body>, S3Error> {
     match state.storage.head_bucket(&bucket).await {
         Ok(true) => {}
         Ok(false) => return Err(S3Error::no_such_bucket(&bucket)),
@@ -386,7 +475,7 @@ async fn delete_bucket_cors(state: AppState, bucket: String) -> Result<Response<
 
     state
         .storage
-        .delete_bucket_cors(&bucket)
+        .delete_bucket_lifecycle(&bucket)
         .await
         .map_err(|e| S3Error::internal(e))?;
 
@@ -438,8 +527,7 @@ pub async fn get_bucket_policy(
         .get_bucket_policy(&bucket)
         .await
         .map_err(S3Error::internal)?;
-    let policy =
-        policy.ok_or_else(|| S3Error::access_denied("The bucket policy does not exist"))?;
+    let policy = policy.ok_or_else(S3Error::no_such_bucket_policy)?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/json")

@@ -1,6 +1,9 @@
 <script lang="ts">
   import { createMutation, createQuery } from '@tanstack/svelte-query'
+  import { createColumnHelper, createTable, FlexRender } from '@tanstack/svelte-table'
   import * as Table from '$lib/components/ui/table'
+  import { sortableHeader, sortableTableFeatures } from '$lib/table/sortable'
+  import type { Bucket } from '$lib/api/buckets'
   import { Button } from '$lib/components/ui/button'
   import { Callout } from '$lib/components/ui/callout'
   import { Badge } from '$lib/components/ui/badge'
@@ -13,7 +16,7 @@
   import Settings from 'lucide-svelte/icons/settings'
   import Search from 'lucide-svelte/icons/search'
   import X from 'lucide-svelte/icons/x'
-  import { toast } from '$lib/toast'
+  import { toast, toastApiError } from '$lib/toast'
   import { bucketKeys } from '$lib/api/keys'
   import { createBucket as createBucketApi, deleteBucket as deleteBucketApi, listBuckets } from '$lib/api/buckets'
   import { ApiError } from '$lib/api/http'
@@ -52,6 +55,30 @@
     return allBuckets.filter((bucket) => bucket.name.toLowerCase().includes(q))
   })
 
+  const columnHelper = createColumnHelper<typeof sortableTableFeatures, Bucket>()
+  const columns = [
+    columnHelper.accessor('name', { header: sortableHeader('Name') }),
+    columnHelper.accessor('objectCount', {
+      header: sortableHeader('Objects'),
+      sortUndefined: 'last',
+    }),
+    columnHelper.accessor('sizeBytes', {
+      header: sortableHeader('Size'),
+      sortUndefined: 'last',
+    }),
+    columnHelper.accessor('versioning', { header: sortableHeader('Versioning') }),
+    columnHelper.accessor('createdAt', { header: sortableHeader('Created') }),
+    columnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
+  ]
+
+  const table = createTable({
+    features: sortableTableFeatures,
+    columns: columns as never,
+    get data() {
+      return filteredBuckets
+    },
+  })
+
 
   const createBucketMutation = createMutation(() => ({
     mutationFn: createBucketApi,
@@ -79,7 +106,7 @@
       await createBucketMutation.mutateAsync(name)
     } catch (err) {
       console.error('createBucket failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to connect to server')
+      toastApiError(err, 'Failed to connect to server')
     }
   }
 
@@ -96,7 +123,7 @@
       bucketToDelete = null
     } catch (err) {
       console.error('deleteBucket failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to connect to server')
+      toastApiError(err, 'Failed to connect to server')
     }
   }
 
@@ -167,17 +194,21 @@
     {:else}
     <Table.Root>
       <Table.Header>
-        <Table.Row>
-          <Table.Head>Name</Table.Head>
-          <Table.Head>Objects</Table.Head>
-          <Table.Head>Size</Table.Head>
-          <Table.Head>Versioning</Table.Head>
-          <Table.Head>Created</Table.Head>
-          <Table.Head class="w-20"></Table.Head>
-        </Table.Row>
+        {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
+          <Table.Row>
+            {#each headerGroup.headers as header (header.id)}
+              <Table.Head class={header.column.id === 'actions' ? 'w-20' : undefined}>
+                {#if !header.isPlaceholder}
+                  <FlexRender header={header} />
+                {/if}
+              </Table.Head>
+            {/each}
+          </Table.Row>
+        {/each}
       </Table.Header>
       <Table.Body>
-        {#each filteredBuckets as bucket}
+        {#each table.getRowModel().rows as row (row.id)}
+          {@const bucket = row.original}
           <Table.Row
             class="cursor-pointer"
             onclick={() => goto(routes.bucket(bucket.name))}

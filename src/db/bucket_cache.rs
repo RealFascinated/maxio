@@ -12,6 +12,7 @@ use crate::storage::CorsRule;
 pub struct CachedBucketEntry {
     pub id: Uuid,
     pub versioning: bool,
+    pub versioning_suspended: bool,
     pub owner_id: String,
     pub owner_display_name: String,
     pub policy: Option<String>,
@@ -47,8 +48,11 @@ impl BucketCache {
         self.map.remove(name);
     }
 
-    pub fn set_versioning(&self, name: &str, enabled: bool) {
-        self.map.get_mut(name, |entry| entry.versioning = enabled);
+    pub fn set_versioning_state(&self, name: &str, enabled: bool, suspended: bool) {
+        self.map.get_mut(name, |entry| {
+            entry.versioning = enabled;
+            entry.versioning_suspended = suspended;
+        });
     }
 
     pub fn set_policy(&self, name: &str, policy: Option<String>) {

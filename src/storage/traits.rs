@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use super::{
     BatchDeleteObject, BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult,
-    MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError,
+    LifecycleRule, MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError,
 };
 
 #[derive(Debug, Clone)]
@@ -36,8 +36,24 @@ pub trait Storage: Send + Sync {
     -> Result<(), StorageError>;
     async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError>;
     async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError>;
+    async fn put_bucket_lifecycle(
+        &self,
+        bucket: &str,
+        rules: Vec<LifecycleRule>,
+    ) -> Result<(), StorageError>;
+    async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, StorageError>;
+    async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<(), StorageError>;
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError>;
+    async fn get_versioning_state(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::VersioningState, StorageError>;
     async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError>;
+    async fn set_versioning_state(
+        &self,
+        bucket: &str,
+        state: crate::storage::VersioningState,
+    ) -> Result<(), StorageError>;
     async fn get_bucket_auth_info(
         &self,
         bucket: &str,
@@ -113,6 +129,8 @@ pub trait Storage: Send + Sync {
         start_after: Option<&str>,
         max_keys: usize,
         search: Option<&str>,
+        sort: crate::db::repos::ConsoleListSort,
+        order: crate::db::repos::SortOrder,
     ) -> Result<DelimitedListPage, StorageError>;
     async fn put_object_acl(
         &self,
@@ -205,4 +223,5 @@ pub trait Storage: Send + Sync {
 
     // Housekeeping
     async fn housekeeping_sweep(&self, stale_after: chrono::Duration) -> (u64, u64);
+    async fn lifecycle_sweep(&self) -> Result<u64, StorageError>;
 }

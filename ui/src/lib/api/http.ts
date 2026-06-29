@@ -1,14 +1,7 @@
-export class ApiError extends Error {
-  status: number
-  payload: unknown
+import { notifyUnauthorized, SessionExpiredError } from './session'
+import { ApiError } from './errors'
 
-  constructor(message: string, status: number, payload?: unknown) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-    this.payload = payload
-  }
-}
+export { ApiError } from './errors'
 
 export function encodeObjectKey(key: string): string {
   return key.split('/').map(encodeURIComponent).join('/')
@@ -38,6 +31,10 @@ export async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit):
       payload = await parseResponse(res)
     } catch {
       payload = undefined
+    }
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
+    if (res.status === 401 && notifyUnauthorized(url)) {
+      throw new SessionExpiredError(payload)
     }
     const message =
       payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'

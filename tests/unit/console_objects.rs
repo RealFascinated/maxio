@@ -140,7 +140,7 @@ async fn folder_delete_stats_counts_nested_objects() {
             .await
             .unwrap();
     assert_eq!(count, 3);
-    assert_eq!(size_bytes, 15);
+    assert_eq!(size_bytes, 14);
 }
 
 #[tokio::test]

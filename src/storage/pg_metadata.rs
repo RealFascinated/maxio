@@ -11,7 +11,9 @@ use crate::metrics::MetricsRegistry;
 
 use super::metadata::MetadataStore;
 use super::traits::ListPage;
-use super::{BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError};
+use super::{
+    BucketMeta, CorsRule, LifecycleRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError,
+};
 
 pub struct PgMetadataStore {
     ctx: DbContext,
@@ -149,6 +151,73 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
+    async fn put_bucket_lifecycle(
+        &self,
+        bucket: &str,
+        rules: Vec<LifecycleRule>,
+    ) -> Result<(), StorageError> {
+        meta_op!(
+            self,
+            "put_bucket_lifecycle",
+            repos::put_bucket_lifecycle(&self.ctx, bucket, &rules).await
+        )
+    }
+
+    async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, StorageError> {
+        meta_op!(
+            self,
+            "get_bucket_lifecycle",
+            repos::get_bucket_lifecycle(&self.ctx, bucket).await
+        )
+    }
+
+    async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<(), StorageError> {
+        meta_op!(
+            self,
+            "delete_bucket_lifecycle",
+            repos::delete_bucket_lifecycle(&self.ctx, bucket).await
+        )
+    }
+
+    async fn list_buckets_with_lifecycle(
+        &self,
+    ) -> Result<Vec<repos::BucketLifecycleEntry>, StorageError> {
+        meta_op!(
+            self,
+            "list_buckets_with_lifecycle",
+            repos::list_buckets_with_lifecycle(&self.ctx).await
+        )
+    }
+
+    async fn list_expired_current_objects(
+        &self,
+        bucket_id: uuid::Uuid,
+        prefix: &str,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> Result<Vec<String>, StorageError> {
+        meta_op!(
+            self,
+            "list_expired_current_objects",
+            repos::list_expired_current_objects(&self.ctx, bucket_id, prefix, cutoff, limit).await
+        )
+    }
+
+    async fn list_expired_noncurrent_versions(
+        &self,
+        bucket_id: uuid::Uuid,
+        prefix: &str,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> Result<Vec<repos::ExpiredVersionRef>, StorageError> {
+        meta_op!(
+            self,
+            "list_expired_noncurrent_versions",
+            repos::list_expired_noncurrent_versions(&self.ctx, bucket_id, prefix, cutoff, limit)
+                .await
+        )
+    }
+
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
         meta_op!(
             self,
@@ -162,6 +231,29 @@ impl MetadataStore for PgMetadataStore {
             self,
             "set_versioning",
             repos::set_versioning(&self.ctx, bucket, enabled).await
+        )
+    }
+
+    async fn get_versioning_state(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::VersioningState, StorageError> {
+        meta_op!(
+            self,
+            "get_versioning_state",
+            repos::get_versioning_state(&self.ctx, bucket).await
+        )
+    }
+
+    async fn set_versioning_state(
+        &self,
+        bucket: &str,
+        state: crate::storage::VersioningState,
+    ) -> Result<(), StorageError> {
+        meta_op!(
+            self,
+            "set_versioning_state",
+            repos::set_versioning_state(&self.ctx, bucket, state).await
         )
     }
 
@@ -257,9 +349,16 @@ impl MetadataStore for PgMetadataStore {
         search: Option<&str>,
     ) -> Result<ListPage, StorageError> {
         meta_op!(self, "list_objects_page", {
-            let (objects, is_truncated, next) =
-                repos::list_objects_page(&self.ctx, bucket, prefix, start_after, max_keys, search)
-                    .await?;
+            let (objects, is_truncated, next) = repos::list_objects_page(
+                &self.ctx,
+                bucket,
+                prefix,
+                start_after,
+                max_keys,
+                search,
+                repos::SortOrder::Asc,
+            )
+            .await?;
             Ok(ListPage {
                 objects,
                 is_truncated,
@@ -276,6 +375,8 @@ impl MetadataStore for PgMetadataStore {
         start_after: Option<&str>,
         max_keys: usize,
         search: Option<&str>,
+        sort: repos::ConsoleListSort,
+        order: repos::SortOrder,
     ) -> Result<crate::storage::traits::DelimitedListPage, StorageError> {
         meta_op!(self, "list_objects_delimited_page", {
             repos::list_objects_delimited_page(
@@ -286,6 +387,8 @@ impl MetadataStore for PgMetadataStore {
                 start_after,
                 max_keys,
                 search,
+                sort,
+                order,
             )
             .await
         })

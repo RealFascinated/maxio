@@ -38,7 +38,7 @@ async fn test_upload_part_copy_full() {
     assert_eq!(resp.status(), 200, "upload_part_copy should return 200");
     let body = resp.text().await.unwrap();
     assert!(
-        body.contains("<CopyPartResult>"),
+        body.contains("<CopyPartResult"),
         "response should be CopyPartResult XML, got: {}",
         body
     );
@@ -115,7 +115,7 @@ async fn test_upload_part_copy_range() {
     .await;
     assert_eq!(r1.status(), 200);
     let body1 = r1.text().await.unwrap();
-    assert!(body1.contains("<CopyPartResult>"));
+    assert!(body1.contains("<CopyPartResult"));
     let e1 = extract_xml_tag(&body1, "ETag").unwrap();
 
     // Part 2: remaining bytes
@@ -137,7 +137,7 @@ async fn test_upload_part_copy_range() {
     .await;
     assert_eq!(r2.status(), 200);
     let body2 = r2.text().await.unwrap();
-    assert!(body2.contains("<CopyPartResult>"));
+    assert!(body2.contains("<CopyPartResult"));
     let e2 = extract_xml_tag(&body2, "ETag").unwrap();
 
     // Complete

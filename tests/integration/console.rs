@@ -148,6 +148,53 @@ async fn test_console_list_objects_search() {
 }
 
 #[tokio::test]
+async fn test_console_list_objects_sort_by_size_desc() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/sort-bucket", base_url), vec![]).await;
+
+    for (key, body) in [
+        ("small.txt", b"1".as_slice()),
+        ("large.txt", b"0123456789".as_slice()),
+        ("medium.txt", b"12345".as_slice()),
+    ] {
+        s3_request(
+            "PUT",
+            &format!("{}/sort-bucket/{}", base_url, key),
+            body.to_vec(),
+        )
+        .await;
+    }
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/sort-bucket/objects?sort=size&order=desc",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let keys: Vec<String> = body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "large.txt".to_string(),
+            "medium.txt".to_string(),
+            "small.txt".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_console_list_objects_returns_all_sibling_folders_on_first_page() {
     let base_url = start_server().await;
     s3_request("PUT", &format!("{}/sibling-bucket", base_url), vec![]).await;
@@ -268,6 +315,66 @@ async fn test_console_list_objects_omits_current_folder_marker() {
         .map(|f| f["key"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(keys, vec!["nested/file.txt".to_string()]);
+}
+
+#[tokio::test]
+async fn test_console_delete_objects_batch() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{}/batch-del-bucket", base_url), vec![]).await;
+    s3_request(
+        "PUT",
+        &format!("{}/batch-del-bucket/a.txt", base_url),
+        b"aaa".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/batch-del-bucket/b.txt", base_url),
+        b"bbb".to_vec(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{}/batch-del-bucket/keep.txt", base_url),
+        b"keep".to_vec(),
+    )
+    .await;
+
+    let session = console_login(&base_url).await;
+
+    let resp = client()
+        .post(format!(
+            "{}/api/buckets/batch-del-bucket/objects/delete",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .json(&serde_json::json!({ "keys": ["a.txt", "b.txt"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["deleted"], 2);
+    assert!(body["failed"].as_array().unwrap().is_empty());
+
+    let resp = client()
+        .get(format!(
+            "{}/api/buckets/batch-del-bucket/objects?prefix=",
+            base_url
+        ))
+        .header("cookie", format!("maxio_session={}", session))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let list: serde_json::Value = resp.json().await.unwrap();
+    let keys: Vec<String> = list["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(keys, vec!["keep.txt".to_string()]);
 }
 
 #[tokio::test]
@@ -504,6 +611,94 @@ async fn test_console_presign_uses_forwarded_host() {
         resp.status(),
         200,
         "presigned URL behind proxy host should return 200, got {}",
+        resp.status()
+    );
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), body);
+}
+
+#[tokio::test]
+async fn test_console_presign_uses_iam_credentials() {
+    let base_url = start_server().await;
+    let root_session = console_login(&base_url).await;
+
+    s3_request("PUT", &format!("{}/iam-presign-bucket", base_url), vec![]).await;
+    let body = b"iam presign test";
+    s3_request(
+        "PUT",
+        &format!("{}/iam-presign-bucket/test.txt", base_url),
+        body.to_vec(),
+    )
+    .await;
+
+    let create = client()
+        .post(format!("{base_url}/api/users"))
+        .header("cookie", format!("maxio_session={root_session}"))
+        .header("origin", &*base_url)
+        .json(&serde_json::json!({"username": "presign-user"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), 200);
+    let create_body: serde_json::Value = create.json().await.unwrap();
+    let access_key = create_body["accessKey"]["accessKeyId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let secret_key = create_body["accessKey"]["secretAccessKey"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],"Resource":["arn:aws:s3:::iam-presign-bucket","arn:aws:s3:::iam-presign-bucket/*"]}]}"#;
+    let put_policy = client()
+        .put(format!(
+            "{base_url}/api/users/presign-user/policies/read-access"
+        ))
+        .header("cookie", format!("maxio_session={root_session}"))
+        .header("origin", &*base_url)
+        .json(&serde_json::json!({ "document": policy }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put_policy.status(), 200);
+
+    let session = console_login_with_creds(&base_url, &access_key, &secret_key).await;
+
+    let resp = client()
+        .get(&format!(
+            "{}/api/buckets/iam-presign-bucket/presign/test.txt?expires=300",
+            base_url
+        ))
+        .header("Cookie", format!("maxio_session={session}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let presigned_url = json["url"]
+        .as_str()
+        .expect("response should have url field");
+
+    let parsed = reqwest::Url::parse(presigned_url).unwrap();
+    let credential = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "X-Amz-Credential")
+        .map(|(_, v)| v.into_owned())
+        .expect("presigned URL should include X-Amz-Credential");
+    assert!(
+        credential.starts_with(&format!("{access_key}/")),
+        "expected IAM access key {access_key} in credential, got {credential}"
+    );
+    assert!(
+        !credential.starts_with(&format!("{ACCESS_KEY}/")),
+        "presigned URL should not use root credentials"
+    );
+
+    let resp = client().get(presigned_url).send().await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "IAM presigned URL should return 200, got {}",
         resp.status()
     );
     assert_eq!(resp.bytes().await.unwrap().as_ref(), body);

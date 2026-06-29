@@ -13,7 +13,8 @@ use crate::server::AppState;
 use super::access::session_capabilities;
 use super::session::{
     ConsoleSession, TOKEN_MAX_AGE_SECS, constant_time_eq, cookies_require_https, extract_client_ip,
-    extract_cookie, generate_token, make_cookie, resolve_session_username,
+    extract_cookie, generate_token, make_cookie, resolve_session_access_key,
+    session_from_access_key,
 };
 
 pub(crate) async fn console_auth_middleware(
@@ -22,14 +23,8 @@ pub(crate) async fn console_auth_middleware(
     next: Next,
 ) -> Response {
     let session = match extract_cookie(request.headers()) {
-        Some(token) => match resolve_session_username(&token, &state).await {
-            Some(username) if username == crate::iam::ROOT_USERNAME => Some(ConsoleSession::root()),
-            Some(username) => state
-                .user_store
-                .get_user(&username)
-                .await
-                .map(|u| ConsoleSession::from_user(&u))
-                .or(Some(ConsoleSession::root())),
+        Some(token) => match resolve_session_access_key(&token, &state).await {
+            Some(access_key_id) => session_from_access_key(&state, &access_key_id).await,
             None => None,
         },
         None => None,
@@ -80,14 +75,15 @@ pub async fn login(
         body.secret_key.as_bytes(),
         state.config.secret_key.as_bytes(),
     );
-    let session_username = if key_match && secret_match {
-        crate::iam::ROOT_USERNAME.to_string()
-    } else if let Some(user) = state
+    let access_key_id = if key_match && secret_match {
+        state.config.access_key.clone()
+    } else if state
         .user_store
         .lookup_by_credentials(&body.access_key, &body.secret_key)
         .await
+        .is_some()
     {
-        user.username
+        body.access_key.clone()
     } else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -97,21 +93,18 @@ pub async fn login(
     };
 
     let now = chrono::Utc::now().timestamp();
-    let token = generate_token(&session_username, &state.config.secret_key, now);
+    let token = generate_token(&access_key_id, &state.config.secret_key, now);
     let cookie = make_cookie(&token, TOKEN_MAX_AGE_SECS, cookies_require_https(&state));
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert("Set-Cookie", cookie.parse().unwrap());
 
-    let session = if session_username == crate::iam::ROOT_USERNAME {
-        ConsoleSession::root()
-    } else {
-        state
-            .user_store
-            .get_user(&session_username)
-            .await
-            .map(|u| ConsoleSession::from_user(&u))
-            .unwrap_or_else(ConsoleSession::root)
+    let Some(session) = session_from_access_key(&state, &access_key_id).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Invalid credentials"})),
+        )
+            .into_response();
     };
 
     (
@@ -119,7 +112,7 @@ pub async fn login(
         resp_headers,
         Json(serde_json::json!({
             "ok": true,
-            "username": session_username,
+            "username": session.username,
             "isRoot": session.is_root,
             "capabilities": session_capabilities(&state, &session).await,
         })),
@@ -135,36 +128,36 @@ pub async fn auth_config(State(state): State<AppState>) -> impl IntoResponse {
 
 pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let authenticated = match extract_cookie(&headers) {
-        Some(token) => resolve_session_username(&token, &state).await,
+        Some(token) => resolve_session_access_key(&token, &state).await,
         None => None,
     };
 
-    if let Some(username) = authenticated {
-        let session = if username == crate::iam::ROOT_USERNAME {
-            ConsoleSession::root()
-        } else {
-            state
-                .user_store
-                .get_user(&username)
-                .await
-                .map(|u| ConsoleSession::from_user(&u))
-                .unwrap_or_else(ConsoleSession::root)
-        };
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "username": username,
-                "isRoot": session.is_root,
-                "capabilities": session_capabilities(&state, &session).await,
-            })),
-        )
-    } else {
-        (
+    let Some(access_key_id) = authenticated else {
+        return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Not authenticated"})),
         )
-    }
+            .into_response();
+    };
+
+    let Some(session) = session_from_access_key(&state, &access_key_id).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Not authenticated"})),
+        )
+            .into_response();
+    };
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "username": session.username,
+            "isRoot": session.is_root,
+            "capabilities": session_capabilities(&state, &session).await,
+        })),
+    )
+        .into_response()
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {

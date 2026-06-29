@@ -1,11 +1,23 @@
 <script lang="ts">
   import { createMutation, createQuery } from '@tanstack/svelte-query'
-  import { toast } from '$lib/toast'
+  import { toast, toastApiError } from '$lib/toast'
   import { Callout } from '$lib/components/ui/callout'
   import { Switch } from '$lib/components/ui/switch'
+  import { Button } from '$lib/components/ui/button'
+  import { Input } from '$lib/components/ui/input'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { bucketKeys, settingsKeys } from '$lib/api/keys'
-  import { getCors, getPublicAccess, getVersioning, setCors, setPublicAccess, setVersioning } from '$lib/api/settings'
+  import {
+    getCors,
+    getLifecycle,
+    getPublicAccess,
+    getVersioning,
+    setCors,
+    setLifecycle,
+    setPublicAccess,
+    setVersioning,
+    type LifecycleRule,
+  } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
 
@@ -33,6 +45,17 @@
     queryKey: settingsKeys.cors(bucket),
     queryFn: () => getCors(bucket),
   }))
+  const lifecycleQuery = createQuery(() => ({
+    queryKey: settingsKeys.lifecycle(bucket),
+    queryFn: () => getLifecycle(bucket),
+  }))
+
+  let newRuleId = $state('')
+  let newRulePrefix = $state('')
+  let newExpireDays = $state('')
+  let newNoncurrentDays = $state('')
+
+  const lifecycleRules = $derived(lifecycleQuery.data?.rules ?? [])
 
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
   const publicRead = $derived(!!publicQuery.data?.read)
@@ -64,6 +87,95 @@
     },
   }))
 
+  const lifecycleMutation = createMutation(() => ({
+    mutationFn: (rules: LifecycleRule[]) => setLifecycle(bucket, rules),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: settingsKeys.lifecycle(bucket) })
+      toast.success('Lifecycle rules updated')
+    },
+  }))
+
+  function formatRuleActions(rule: LifecycleRule): string {
+    const parts: string[] = []
+    for (const action of rule.actions) {
+      if (action.type === 'expire_objects') {
+        parts.push(`expire current after ${action.days}d`)
+      } else if (action.type === 'noncurrent_version_expiration') {
+        parts.push(`expire old versions after ${action.noncurrent_days}d`)
+      }
+    }
+    return parts.join('; ')
+  }
+
+  async function saveLifecycleRules(rules: LifecycleRule[]) {
+    try {
+      await lifecycleMutation.mutateAsync(rules)
+      pendingConfirmation = null
+    } catch (err) {
+      console.error('saveLifecycleRules failed:', err)
+      toastApiError(err, 'Failed to update lifecycle rules')
+    }
+  }
+
+  async function toggleLifecycleRule(rule: LifecycleRule) {
+    const rules = lifecycleRules.map((r) =>
+      r.id === rule.id ? { ...r, enabled: !r.enabled } : r,
+    )
+    await saveLifecycleRules(rules)
+  }
+
+  function requestDeleteLifecycleRule(rule: LifecycleRule) {
+    pendingConfirmation = {
+      title: 'Delete lifecycle rule?',
+      description: `Remove rule "${rule.id}"? Objects already stored are not affected until the next sweep.`,
+      confirmLabel: 'Delete rule',
+      destructive: true,
+      action: async () => {
+        await saveLifecycleRules(lifecycleRules.filter((r) => r.id !== rule.id))
+      },
+    }
+  }
+
+  async function addLifecycleRule() {
+    const id = newRuleId.trim()
+    const expireDays = newExpireDays.trim() ? Number(newExpireDays) : null
+    const noncurrentDays = newNoncurrentDays.trim() ? Number(newNoncurrentDays) : null
+
+    if (!id) {
+      toast.error('Rule ID is required')
+      return
+    }
+    if (lifecycleRules.some((r) => r.id === id)) {
+      toast.error('A rule with this ID already exists')
+      return
+    }
+    if ((!expireDays || expireDays < 1) && (!noncurrentDays || noncurrentDays < 1)) {
+      toast.error('Set at least one expiration period (minimum 1 day)')
+      return
+    }
+
+    const actions: LifecycleRule['actions'] = []
+    if (expireDays && expireDays >= 1) {
+      actions.push({ type: 'expire_objects', days: expireDays })
+    }
+    if (noncurrentDays && noncurrentDays >= 1) {
+      actions.push({ type: 'noncurrent_version_expiration', noncurrent_days: noncurrentDays })
+    }
+
+    const rule: LifecycleRule = {
+      id,
+      enabled: true,
+      prefix: newRulePrefix.trim() || undefined,
+      actions,
+    }
+
+    await saveLifecycleRules([...lifecycleRules, rule])
+    newRuleId = ''
+    newRulePrefix = ''
+    newExpireDays = ''
+    newNoncurrentDays = ''
+  }
+
   async function toggleVersioning() {
     const newState = !versioningEnabled
     if (versioningEnabled && !newState) {
@@ -85,7 +197,7 @@
       pendingConfirmation = null
     } catch (err) {
       console.error('toggleVersioning failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to update versioning')
+      toastApiError(err, 'Failed to update versioning')
     }
   }
 
@@ -109,7 +221,7 @@
       pendingConfirmation = null
     } catch (err) {
       console.error('togglePublicRead failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to update public access')
+      toastApiError(err, 'Failed to update public access')
     }
   }
 
@@ -133,7 +245,7 @@
       pendingConfirmation = null
     } catch (err) {
       console.error('toggleCors failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to update CORS')
+      toastApiError(err, 'Failed to update CORS')
     }
   }
 
@@ -153,7 +265,7 @@
 </script>
 
 <div class="flex flex-col gap-6 max-w-2xl">
-  {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError}
+  {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError || lifecycleQuery.isError}
     <Callout type="danger">Failed to load bucket settings</Callout>
   {/if}
 
@@ -258,6 +370,83 @@
       {/if}
     </div>
   </div>
+
+  <div class="flex flex-col gap-4">
+    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">Lifecycle</h3>
+    <p class="text-sm text-muted-foreground">
+      Automatically delete objects when they exceed an age threshold. Rules run on an hourly sweep.
+    </p>
+
+    {#if lifecycleQuery.isPending}
+      <p class="text-sm text-muted-foreground">Loading lifecycle rules...</p>
+    {:else if lifecycleRules.length === 0}
+      <p class="text-sm text-muted-foreground">No lifecycle rules configured.</p>
+    {:else}
+      <div class="flex flex-col gap-3">
+        {#each lifecycleRules as rule (rule.id)}
+          <div class="flex items-start justify-between gap-4 border-2 border-border rounded-sm p-3">
+            <div class="flex flex-col gap-1 min-w-0">
+              <span class="text-sm font-medium truncate">{rule.id}</span>
+              <span class="text-sm text-muted-foreground">
+                {#if rule.prefix}
+                  Prefix: <code class="text-xs">{rule.prefix}</code> ·
+                {/if}
+                {formatRuleActions(rule)}
+              </span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <Switch
+                checked={rule.enabled}
+                onclick={() => toggleLifecycleRule(rule)}
+                disabled={lifecycleMutation.isPending}
+                aria-label={`Toggle rule ${rule.id}`}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => requestDeleteLifecycleRule(rule)}
+                disabled={lifecycleMutation.isPending}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <div class="flex flex-col gap-3 border-2 border-border rounded-sm p-3">
+      <span class="text-sm font-medium">Add rule</span>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <Input placeholder="Rule ID" bind:value={newRuleId} aria-label="Rule ID" />
+        <Input placeholder="Prefix (optional)" bind:value={newRulePrefix} aria-label="Prefix" />
+        <Input
+          type="number"
+          min="1"
+          placeholder="Expire current after (days)"
+          bind:value={newExpireDays}
+          aria-label="Expire current after days"
+        />
+        <Input
+          type="number"
+          min="1"
+          placeholder="Expire old versions after (days)"
+          bind:value={newNoncurrentDays}
+          aria-label="Expire noncurrent after days"
+        />
+      </div>
+      <div>
+        <Button
+          variant="highlighted"
+          size="sm"
+          onclick={addLifecycleRule}
+          disabled={lifecycleMutation.isPending}
+        >
+          Add rule
+        </Button>
+      </div>
+    </div>
+  </div>
 </div>
 
 {#if pendingConfirmation}
@@ -267,7 +456,7 @@
     description={pendingConfirmation.description}
     confirmLabel={pendingConfirmation.confirmLabel}
     confirmVariant={pendingConfirmation.destructive ? 'destructive' : 'highlighted'}
-    loading={versioningMutation.isPending || publicMutation.isPending || corsMutation.isPending}
+    loading={versioningMutation.isPending || publicMutation.isPending || corsMutation.isPending || lifecycleMutation.isPending}
     onClose={() => (pendingConfirmation = null)}
     onConfirm={pendingConfirmation.action}
   />

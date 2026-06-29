@@ -1,6 +1,9 @@
 <script lang="ts">
   import { createMutation, createQuery } from '@tanstack/svelte-query'
+  import { createColumnHelper, createTable, FlexRender } from '@tanstack/svelte-table'
   import * as Table from '$lib/components/ui/table'
+  import { sortableHeader, sortableTableFeatures } from '$lib/table/sortable'
+  import type { Version } from '$lib/api/versions'
   import { Button } from '$lib/components/ui/button'
   import { Callout } from '$lib/components/ui/callout'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
@@ -11,6 +14,7 @@
   import { versionKeys } from '$lib/api/keys'
   import { deleteVersion as deleteVersionApi, listVersions } from '$lib/api/versions'
   import { ApiError, encodeObjectKey } from '$lib/api/http'
+  import { isSessionExpiredError } from '$lib/api/session'
   import { queryClient } from '$lib/query/client'
   import { formatBytes } from '$lib/format-bytes'
   import { formatDate } from '$lib/format'
@@ -41,6 +45,23 @@
   let deleteError = $state<string | null>(null)
   let versionToDelete = $state<string | null>(null)
 
+  const columnHelper = createColumnHelper<typeof sortableTableFeatures, Version>()
+  const columns = [
+    columnHelper.accessor('versionId', { header: sortableHeader('Version ID') }),
+    columnHelper.accessor('lastModified', { header: sortableHeader('Date') }),
+    columnHelper.accessor('size', { header: sortableHeader('Size') }),
+    columnHelper.accessor('isDeleteMarker', { header: sortableHeader('Type') }),
+    columnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
+  ]
+
+  const table = createTable({
+    features: sortableTableFeatures,
+    columns: columns as never,
+    get data() {
+      return versions
+    },
+  })
+
   async function deleteVersion(versionId: string) {
     versionToDelete = versionId
   }
@@ -52,6 +73,7 @@
       await deleteVersionMutation.mutateAsync(versionToDelete)
       versionToDelete = null
     } catch (err) {
+      if (isSessionExpiredError(err)) return
       console.error('deleteVersion failed:', err)
       deleteError = err instanceof ApiError ? err.message : 'Failed to connect to server'
     }
@@ -89,16 +111,22 @@
   {:else}
     <Table.Root>
       <Table.Header>
-        <Table.Row>
-          <Table.Head>Version ID</Table.Head>
-          <Table.Head>Date</Table.Head>
-          <Table.Head>Size</Table.Head>
-          <Table.Head>Type</Table.Head>
-          <Table.Head class="w-20"></Table.Head>
-        </Table.Row>
+        {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
+          <Table.Row>
+            {#each headerGroup.headers as header (header.id)}
+              <Table.Head class={header.column.id === 'actions' ? 'w-20' : undefined}>
+                {#if !header.isPlaceholder}
+                  <FlexRender header={header} />
+                {/if}
+              </Table.Head>
+            {/each}
+          </Table.Row>
+        {/each}
       </Table.Header>
       <Table.Body>
-        {#each versions as version, i}
+        {#each table.getRowModel().rows as row (row.id)}
+          {@const version = row.original}
+          {@const i = versions.indexOf(version)}
           <Table.Row class={version.isDeleteMarker ? 'opacity-60' : ''}>
             <Table.Cell class="font-mono text-xs">
               <span title={version.versionId ?? ''}>

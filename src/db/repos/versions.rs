@@ -50,6 +50,7 @@ pub async fn insert_version(
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
     let last_modified = parse_ts(&meta.last_modified)?;
+    let now = Utc::now();
 
     if is_current {
         diesel::update(
@@ -57,11 +58,16 @@ pub async fn insert_version(
                 .filter(object_versions::bucket_id.eq(bucket_id))
                 .filter(object_versions::key.eq(&meta.key)),
         )
-        .set(object_versions::is_current.eq(false))
+        .set((
+            object_versions::is_current.eq(false),
+            object_versions::noncurrent_since.eq(Some(now)),
+        ))
         .execute(&mut conn)
         .await
         .map_err(db_err)?;
     }
+
+    let noncurrent_since = if is_current { None } else { Some(now) };
 
     let row_id: Uuid = diesel::insert_into(object_versions::table)
         .values((
@@ -79,6 +85,7 @@ pub async fn insert_version(
             object_versions::is_folder_marker.eq(meta.key.ends_with('/')),
             object_versions::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
             object_versions::is_current.eq(is_current),
+            object_versions::noncurrent_since.eq(noncurrent_since),
         ))
         .on_conflict((
             object_versions::bucket_id,
@@ -206,7 +213,8 @@ pub async fn list_object_versions(
     bucket_name: &str,
     prefix: &str,
 ) -> Result<Vec<ObjectMeta>, StorageError> {
-    let page = list_object_versions_page(ctx, bucket_name, prefix, None, None, usize::MAX).await?;
+    const MAX_KEYS: usize = 10_000;
+    let page = list_object_versions_page(ctx, bucket_name, prefix, None, None, MAX_KEYS).await?;
     Ok(page.items)
 }
 
@@ -229,8 +237,16 @@ pub async fn list_object_versions_page(
 
     let versioned = super::is_versioned(ctx, bucket_name).await?;
     if !versioned {
-        let (objects, is_truncated, next) =
-            super::list_objects_page(ctx, bucket_name, prefix, key_marker, max_keys, None).await?;
+        let (objects, is_truncated, next) = super::list_objects_page(
+            ctx,
+            bucket_name,
+            prefix,
+            key_marker,
+            max_keys,
+            None,
+            super::SortOrder::Asc,
+        )
+        .await?;
         return Ok(VersionsPage {
             items: objects,
             is_truncated,

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use crate::common::*;
+use diesel::sql_query;
+use diesel_async::RunQueryDsl;
 use maxio::storage::blob::BlobStorage;
 use maxio::storage::{MetadataStore, PgMetadataStore};
 use tempfile::TempDir;
@@ -147,7 +149,16 @@ async fn test_list_objects_delimited_page_skips_dense_folders() {
     }
 
     let page = storage
-        .list_objects_delimited_page("dense-bucket", "", "/", None, 200, None)
+        .list_objects_delimited_page(
+            "dense-bucket",
+            "",
+            "/",
+            None,
+            200,
+            None,
+            maxio::db::repos::ConsoleListSort::Name,
+            maxio::db::repos::SortOrder::Asc,
+        )
         .await
         .unwrap();
 
@@ -343,6 +354,159 @@ async fn test_orphan_meta_scan_and_delete() {
         .await
         .unwrap();
     assert!(orphans.is_empty());
+
+    let _postgres = postgres;
+}
+
+#[tokio::test]
+async fn test_lifecycle_sweep_expires_current_objects() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(data_dir, &database_url).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "lc-sweep-bucket".to_string(),
+            created_at: "2026-06-07T00:00:00.000Z".to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    storage
+        .put_bucket_lifecycle(
+            "lc-sweep-bucket",
+            vec![maxio::storage::LifecycleRule {
+                id: "expire".into(),
+                enabled: true,
+                prefix: None,
+                actions: vec![maxio::storage::LifecycleAction::ExpireObjects { days: 1 }],
+            }],
+        )
+        .await
+        .unwrap();
+
+    let body: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"stale object".to_vec()));
+    storage
+        .put_object("lc-sweep-bucket", "old.txt", "text/plain", body, None)
+        .await
+        .unwrap();
+
+    let pool = maxio::db::create_pool(&database_url, Default::default())
+        .await
+        .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE objects SET last_modified = NOW() - INTERVAL '2 days' WHERE key = 'old.txt'",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+
+    let deleted = storage.lifecycle_sweep().await.unwrap();
+    assert!(deleted >= 1);
+    assert!(
+        storage
+            .head_object("lc-sweep-bucket", "old.txt")
+            .await
+            .is_err()
+    );
+
+    let _postgres = postgres;
+}
+
+#[tokio::test]
+async fn test_lifecycle_sweep_expires_noncurrent_versions() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_str().unwrap();
+    let (postgres, database_url) = start_postgres().await;
+    let storage = create_storage(data_dir, &database_url).await;
+
+    storage
+        .create_bucket(&maxio::storage::BucketMeta {
+            name: "lc-nc-bucket".to_string(),
+            created_at: "2026-06-07T00:00:00.000Z".to_string(),
+            versioning: true,
+            cors_rules: None,
+            owner_id: maxio::iam::ROOT_CANONICAL_ID.to_string(),
+            owner_display_name: maxio::iam::ROOT_DISPLAY_NAME.to_string(),
+            acl: Some(maxio::iam::Acl::private(
+                maxio::iam::ROOT_CANONICAL_ID,
+                maxio::iam::ROOT_DISPLAY_NAME,
+            )),
+            policy: None,
+            public_read: false,
+            public_list: false,
+        })
+        .await
+        .unwrap();
+
+    storage.set_versioning("lc-nc-bucket", true).await.unwrap();
+
+    storage
+        .put_bucket_lifecycle(
+            "lc-nc-bucket",
+            vec![maxio::storage::LifecycleRule {
+                id: "nc-expire".into(),
+                enabled: true,
+                prefix: None,
+                actions: vec![
+                    maxio::storage::LifecycleAction::NoncurrentVersionExpiration {
+                        noncurrent_days: 1,
+                    },
+                ],
+            }],
+        )
+        .await
+        .unwrap();
+
+    let put_v1: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"v1".to_vec()));
+    let r1 = storage
+        .put_object("lc-nc-bucket", "obj.txt", "text/plain", put_v1, None)
+        .await
+        .unwrap();
+    let vid1 = r1.version_id.unwrap();
+
+    let put_v2: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"v2".to_vec()));
+    storage
+        .put_object("lc-nc-bucket", "obj.txt", "text/plain", put_v2, None)
+        .await
+        .unwrap();
+
+    let pool = maxio::db::create_pool(&database_url, Default::default())
+        .await
+        .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    sql_query(
+        "UPDATE object_versions SET noncurrent_since = NOW() - INTERVAL '2 days' \
+         WHERE key = 'obj.txt' AND version_id = $1",
+    )
+    .bind::<diesel::sql_types::Text, _>(vid1.clone())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+
+    let deleted = storage.lifecycle_sweep().await.unwrap();
+    assert!(deleted >= 1);
+
+    assert!(
+        storage
+            .head_object_version("lc-nc-bucket", "obj.txt", &vid1)
+            .await
+            .is_err()
+    );
+    assert!(storage.head_object("lc-nc-bucket", "obj.txt").await.is_ok());
 
     let _postgres = postgres;
 }

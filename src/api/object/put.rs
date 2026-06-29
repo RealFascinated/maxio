@@ -2,28 +2,29 @@ use std::collections::HashMap;
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::Response,
 };
 
-use crate::api::authz::{check_object_access, get_principal};
+use crate::api::authz::check_object_access;
 use crate::api::{acl, multipart};
 use crate::error::S3Error;
+use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::StorageError;
 
 use super::checksum::{body_to_reader, extract_checksum};
 use super::copy::{copy_object, upload_part_copy};
-use super::tagging::put_object_tagging;
+use super::tagging::{parse_amz_tagging_header, put_object_tagging, put_object_tags};
 
 pub async fn put_object(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
     req: axum::extract::Request,
 ) -> Result<Response<Body>, S3Error> {
-    let principal = get_principal(req.extensions());
     let headers = req.headers().clone();
     let body = req.into_body();
     if params.contains_key("acl") {
@@ -31,15 +32,34 @@ pub async fn put_object(
             .await;
     }
     if params.contains_key("uploadId") && headers.contains_key("x-amz-copy-source") {
-        return upload_part_copy(State(state), Path((bucket, key)), Query(params), headers).await;
+        return upload_part_copy(
+            State(state),
+            Path((bucket, key)),
+            Query(params),
+            Extension(principal),
+            headers,
+        )
+        .await;
     }
 
     if headers.contains_key("x-amz-copy-source") {
-        return copy_object(State(state), Path((bucket, key)), headers).await;
+        return copy_object(
+            State(state),
+            Path((bucket, key)),
+            Extension(principal),
+            headers,
+        )
+        .await;
     }
 
     if params.contains_key("tagging") {
-        return put_object_tagging(State(state), Path((bucket, key)), body).await;
+        return put_object_tagging(
+            State(state),
+            Path((bucket, key)),
+            Extension(principal),
+            body,
+        )
+        .await;
     }
 
     if params.contains_key("uploadId") {
@@ -47,6 +67,7 @@ pub async fn put_object(
             State(state),
             Path((bucket, key)),
             Query(params),
+            Extension(principal),
             headers,
             body,
         )
@@ -68,6 +89,7 @@ pub async fn put_object(
         .map(|s| s.to_string());
 
     let checksum = extract_checksum(&headers);
+    let inline_tags = parse_amz_tagging_header(&headers)?;
 
     let result = state
         .storage
@@ -89,6 +111,10 @@ pub async fn put_object(
             let _ = state.storage.delete_object(&bucket, &key).await;
             return Err(S3Error::bad_digest());
         }
+    }
+
+    if let Some(tags) = inline_tags {
+        put_object_tags(&state, &bucket, &key, tags).await?;
     }
 
     let has_acl_header = headers.contains_key("x-amz-acl")

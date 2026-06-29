@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
+  import X from 'lucide-svelte/icons/x'
 
   type Props = {
     open?: boolean
@@ -72,7 +73,7 @@
           disabled={loading}
           onclick={close}
         >
-          ×
+          <X class="size-5" />
         </Button>
       </div>
 

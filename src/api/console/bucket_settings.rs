@@ -6,6 +6,7 @@ use axum::{
 };
 
 use crate::server::AppState;
+use crate::storage::LifecycleRule;
 
 use super::access::console_bucket_check;
 use super::session::ConsoleSession;
@@ -191,6 +192,75 @@ pub async fn set_public(
         }
     };
     match state.storage.put_bucket_policy(&bucket, &policy).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn get_lifecycle(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:GetLifecycleConfiguration").await
+    {
+        return resp;
+    }
+
+    match state.storage.get_bucket_lifecycle(&bucket).await {
+        Ok(rules) => (StatusCode::OK, Json(serde_json::json!({"rules": rules}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetLifecycleRequest {
+    rules: Vec<LifecycleRule>,
+}
+
+pub async fn set_lifecycle(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<SetLifecycleRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:PutLifecycleConfiguration").await
+    {
+        return resp;
+    }
+
+    for rule in &body.rules {
+        if rule.id.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Rule ID is required"})),
+            )
+                .into_response();
+        }
+        if rule.actions.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Rule {} must have at least one action", rule.id)})),
+            )
+                .into_response();
+        }
+    }
+
+    match state
+        .storage
+        .put_bucket_lifecycle(&bucket, body.rules)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

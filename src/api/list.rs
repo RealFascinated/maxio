@@ -34,7 +34,13 @@ pub async fn handle_bucket_get(
     }
 
     if params.contains_key("uploads") {
-        return multipart::list_multipart_uploads(State(state), Path(bucket)).await;
+        return multipart::list_multipart_uploads(
+            State(state),
+            Path(bucket),
+            Query(params),
+            Extension(principal),
+        )
+        .await;
     }
 
     if params.contains_key("versioning") {
@@ -45,6 +51,11 @@ pub async fn handle_bucket_get(
     if params.contains_key("cors") {
         check_bucket_access(&state, &principal, &bucket, "s3:GetBucketCors").await?;
         return super::bucket::get_bucket_cors(state, bucket).await;
+    }
+
+    if params.contains_key("lifecycle") {
+        check_bucket_access(&state, &principal, &bucket, "s3:GetLifecycleConfiguration").await?;
+        return super::bucket::get_bucket_lifecycle(state, bucket).await;
     }
 
     if params.contains_key("versions") {

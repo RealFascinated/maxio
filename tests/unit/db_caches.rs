@@ -7,6 +7,7 @@ fn sample_bucket_entry() -> CachedBucketEntry {
     CachedBucketEntry {
         id: Uuid::new_v4(),
         versioning: false,
+        versioning_suspended: false,
         owner_id: "owner".into(),
         owner_display_name: "Owner".into(),
         policy: None,
@@ -49,8 +50,9 @@ fn bucket_cache_stores_put_context() {
 fn bucket_cache_updates_versioning_in_place() {
     let cache = BucketCache::new(None, 256);
     cache.insert("b", sample_bucket_entry());
-    cache.set_versioning("b", true);
+    cache.set_versioning_state("b", true, false);
     assert!(cache.get("b").unwrap().versioning);
+    assert!(!cache.get("b").unwrap().versioning_suspended);
 }
 
 #[test]

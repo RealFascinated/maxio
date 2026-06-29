@@ -34,6 +34,58 @@ async fn test_console_admin_create_and_list_users() {
 }
 
 #[tokio::test]
+async fn test_deleted_iam_user_session_rejected() {
+    let base_url = start_server().await;
+    let admin_session = console_login(&base_url).await;
+
+    let create = client()
+        .post(format!("{}/api/users", base_url))
+        .header("cookie", format!("maxio_session={admin_session}"))
+        .header("origin", &*base_url)
+        .json(&serde_json::json!({"username": "ephemeral-user"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), 200);
+    let create_body: serde_json::Value = create.json().await.unwrap();
+    let access_key = create_body["accessKey"]["accessKeyId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let secret_key = create_body["accessKey"]["secretAccessKey"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let user_session = console_login_with_creds(&base_url, &access_key, &secret_key).await;
+
+    let delete = client()
+        .delete(format!("{}/api/users/ephemeral-user", base_url))
+        .header("cookie", format!("maxio_session={admin_session}"))
+        .header("origin", &*base_url)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), 200);
+
+    let check = client()
+        .get(format!("{}/api/auth/check", base_url))
+        .header("cookie", format!("maxio_session={user_session}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(check.status(), 401);
+
+    let buckets = client()
+        .get(format!("{}/api/buckets", base_url))
+        .header("cookie", format!("maxio_session={user_session}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(buckets.status(), 401);
+}
+
+#[tokio::test]
 async fn test_console_auth_check_and_logout() {
     let base_url = start_server().await;
 

@@ -2,7 +2,16 @@
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
   import { createInfiniteQuery, createMutation, createQuery } from '@tanstack/svelte-query'
+  import {
+    createColumnHelper,
+    createTable,
+    FlexRender,
+    type SortingState,
+  } from '@tanstack/svelte-table'
   import * as Table from '$lib/components/ui/table'
+  import { sortableHeader } from '$lib/table/sortable'
+  import { serverSortableTableFeatures } from '$lib/table/server-sortable'
+  import type { ObjectListSort } from '$lib/api/objects'
   import { Button } from '$lib/components/ui/button'
   import { Callout } from '$lib/components/ui/callout'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
@@ -26,7 +35,7 @@
   import { formatBytes } from '$lib/format-bytes'
   import { formatDate } from '$lib/format'
   import { isPreviewable } from '$lib/preview'
-  import { toast } from '$lib/toast'
+  import { toast, toastApiError } from '$lib/toast'
   import { objectKeys, settingsKeys } from '$lib/api/keys'
   import { createFolder as createFolderApi, deleteFolder as deleteFolderApi, deleteFolders as deleteFoldersApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, previewFolderDelete, presignObject, uploadObject, type FolderDeletePreview, type S3File } from '$lib/api/objects'
   import { getVersioning } from '$lib/api/settings'
@@ -59,7 +68,13 @@
   let createFolderInput = $state<HTMLInputElement | null>(null)
   let sentinelEl = $state<HTMLDivElement | undefined>()
   let dragDepth = $state(0)
+  let sorting = $state<SortingState>([])
   const isDragging = $derived(dragDepth > 0)
+
+  const listSort = $derived<ObjectListSort>(
+    (sorting[0]?.id as ObjectListSort | undefined) ?? 'name',
+  )
+  const listOrder = $derived(sorting[0]?.desc ? 'desc' : 'asc')
 
   $effect(() => {
     if (showCreateFolder && createFolderInput) {
@@ -70,6 +85,7 @@
   $effect(() => {
     prefix
     clearSearch()
+    sorting = []
     selectedKeys = new Set()
     detailFile = null
     previewFile = null
@@ -85,9 +101,9 @@
   })
 
   const objectsQuery = createInfiniteQuery(() => ({
-    queryKey: objectKeys.list(bucket, prefix, searchQuery || undefined),
+    queryKey: objectKeys.list(bucket, prefix, searchQuery || undefined, listSort, listOrder),
     queryFn: ({ pageParam }) =>
-      listObjects(bucket, prefix, pageParam, searchQuery || undefined),
+      listObjects(bucket, prefix, pageParam, searchQuery || undefined, listSort, listOrder),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextContinuationToken ?? undefined,
   }))
@@ -152,7 +168,7 @@
     onSuccess: (count) => {
       toast.success(count === 1 ? 'File uploaded' : `${count} files uploaded`)
       if (fileInput) fileInput.value = ''
-      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
     },
   }))
 
@@ -161,7 +177,7 @@
     onSuccess: (_data, key) => {
       toast.success(`"${displayName(key)}" deleted`)
       selectedKeys = new Set([...selectedKeys].filter((k) => k !== key))
-      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
     },
   }))
 
@@ -197,7 +213,7 @@
       }
       selectedKeys = new Set(failed)
       showBulkDeleteConfirm = false
-      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
     },
   }))
 
@@ -207,7 +223,7 @@
       toast.success(`Folder "${name}" created`)
       newFolderName = ''
       showCreateFolder = false
-      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
     },
   }))
 
@@ -222,7 +238,7 @@
       )
       pendingDeletePrefix = null
       selectedKeys = new Set([...selectedKeys].filter((k) => k !== folderPrefix))
-      queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
     },
   }))
 
@@ -256,9 +272,37 @@
   const allSelected = $derived(selectableKeys.length > 0 && selectableKeys.every((key) => selectedKeys.has(key)))
   const someSelected = $derived(selectableKeys.some((key) => selectedKeys.has(key)))
 
+  type ObjectRow = { id: string }
+
+  const objectColumnHelper = createColumnHelper<typeof serverSortableTableFeatures, ObjectRow>()
+  const objectColumns = [
+    objectColumnHelper.display({ id: 'select', enableSorting: false, header: '' }),
+    objectColumnHelper.accessor('id', { id: 'name', header: sortableHeader('Name') }),
+    objectColumnHelper.accessor('id', { id: 'type', header: sortableHeader('Type') }),
+    objectColumnHelper.accessor('id', { id: 'size', header: sortableHeader('Size', 'ml-auto') }),
+    objectColumnHelper.accessor('id', { id: 'modified', header: sortableHeader('Modified') }),
+    objectColumnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
+  ]
+
+  const objectTable = createTable({
+    features: serverSortableTableFeatures,
+    columns: objectColumns as never,
+    data: [],
+    state: {
+      get sorting() {
+        return sorting
+      },
+    },
+    onSortingChange: (updater) => {
+      sorting = typeof updater === 'function' ? updater(sorting) : updater
+    },
+  })
+
   $effect(() => {
     prefix
     searchQuery
+    listSort
+    listOrder
     selectedKeys = new Set()
   })
 
@@ -384,7 +428,7 @@
       toast.dismiss(toastId)
     } catch (err) {
       console.error('Upload failed:', err)
-      toast.error(err instanceof Error ? err.message : 'Upload failed', { id: toastId })
+      toastApiError(err, 'Upload failed', { id: toastId })
       if (fileInput) fileInput.value = ''
     }
   }
@@ -408,7 +452,7 @@
       pendingDelete = null
     } catch (err) {
       console.error('deleteObject failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to connect to server')
+      toastApiError(err, 'Failed to connect to server')
     }
   }
 
@@ -424,7 +468,7 @@
       await deleteFolderMutation.mutateAsync(folderPrefix)
     } catch (err) {
       console.error('deleteFolder failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to delete folder')
+      toastApiError(err, 'Failed to delete folder')
     }
   }
 
@@ -536,7 +580,7 @@
       await deleteSelectionMutation.mutateAsync({ folders, objects })
     } catch (err) {
       console.error('deleteSelection failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to delete selection')
+      toastApiError(err, 'Failed to delete selection')
     }
   }
 
@@ -562,7 +606,7 @@
       toast.success('Presigned URL copied to clipboard')
     } catch (err) {
       console.error('shareObject failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to generate share link')
+      toastApiError(err, 'Failed to generate share link')
     }
   }
 
@@ -573,7 +617,7 @@
       await createFolderMutation.mutateAsync(name)
     } catch (err) {
       console.error('createFolder failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to create folder')
+      toastApiError(err, 'Failed to create folder')
     }
   }
 
@@ -676,35 +720,50 @@
   {:else}
     <Table.Root>
       <Table.Header>
-        <Table.Row>
-          <Table.Head class="w-10 p-0">
-            {#if selectableKeys.length > 0}
-              <label class={objectCheckboxLabelClass}>
-                <input
-                  type="checkbox"
-                  class="peer sr-only"
-                  checked={allSelected}
-                  aria-label={allSelected ? 'Deselect all' : 'Select all'}
-                  onchange={toggleSelectAll}
-                />
-                <span
-                  class="{objectCheckboxBoxClass} {allSelected || someSelected ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
-                >
-                  {#if allSelected}
-                    <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
-                  {:else if someSelected}
-                    <Minus class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+        {#each objectTable.getHeaderGroups() as headerGroup (headerGroup.id)}
+          <Table.Row>
+            {#each headerGroup.headers as header (header.id)}
+              <Table.Head
+                class={header.column.id === 'select'
+                  ? 'w-10 p-0'
+                  : header.column.id === 'type'
+                    ? 'w-48'
+                    : header.column.id === 'size'
+                      ? 'w-28 text-right'
+                      : header.column.id === 'modified'
+                        ? 'w-48'
+                        : header.column.id === 'actions'
+                          ? 'w-24'
+                          : undefined}
+              >
+                {#if header.column.id === 'select'}
+                  {#if selectableKeys.length > 0}
+                    <label class={objectCheckboxLabelClass}>
+                      <input
+                        type="checkbox"
+                        class="peer sr-only"
+                        checked={allSelected}
+                        aria-label={allSelected ? 'Deselect all' : 'Select all'}
+                        onchange={toggleSelectAll}
+                      />
+                      <span
+                        class="{objectCheckboxBoxClass} {allSelected || someSelected ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
+                      >
+                        {#if allSelected}
+                          <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+                        {:else if someSelected}
+                          <Minus class={objectCheckboxIconClass} size={12} strokeWidth={3} />
+                        {/if}
+                      </span>
+                    </label>
                   {/if}
-                </span>
-              </label>
-            {/if}
-          </Table.Head>
-          <Table.Head>Name</Table.Head>
-          <Table.Head class="w-48">Type</Table.Head>
-          <Table.Head class="w-28 text-right">Size</Table.Head>
-          <Table.Head class="w-48">Modified</Table.Head>
-          <Table.Head class="w-24"></Table.Head>
-        </Table.Row>
+                {:else if !header.isPlaceholder}
+                  <FlexRender header={header} />
+                {/if}
+              </Table.Head>
+            {/each}
+          </Table.Row>
+        {/each}
       </Table.Header>
       <Table.Body>
         {#each prefixes as p}
@@ -897,7 +956,7 @@
     file={detailFile}
     {versioningEnabled}
     onClose={() => (detailFile = null)}
-    onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.list(bucket, prefix) })}
+    onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })}
   />
 {/if}
 

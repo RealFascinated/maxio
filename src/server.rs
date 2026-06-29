@@ -201,3 +201,8 @@ async fn security_headers_middleware(
         ));
     response
 }
+
+/// Stable S3 error `HostId` value (AWS-compatible error XML field).
+pub fn s3_host_id() -> &'static str {
+    "maxio"
+}

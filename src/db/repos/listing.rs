@@ -1,3 +1,5 @@
+use super::console_list_sort;
+
 use std::collections::{BTreeSet, HashMap};
 
 use crate::db::DbContext;
@@ -10,7 +12,9 @@ use diesel_async::RunQueryDsl;
 use super::objects::{ObjectRow, row_into_read_meta};
 use super::{db_err, get_conn, resolve_bucket_id};
 
-const DELIMITED_SCAN_BATCH: usize = 200;
+pub use console_list_sort::{ConsoleListSort, SortOrder, is_file_cursor};
+
+pub(crate) const DELIMITED_SCAN_BATCH: usize = 200;
 
 /// True when `key` is a direct file at `prefix` with `delimiter` (not a folder marker or nested path).
 pub fn delimited_direct_file(key: &str, prefix: &str, delimiter: &str) -> bool {
@@ -72,6 +76,7 @@ pub async fn list_objects_page(
     start_after: Option<&str>,
     max_keys: usize,
     search: Option<&str>,
+    order: SortOrder,
 ) -> Result<(Vec<ObjectMeta>, bool, Option<String>), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?;
@@ -86,10 +91,11 @@ pub async fn list_objects_page(
         query = query.filter(objects::key.like(pattern));
     }
 
-    if let Some(marker) = start_after {
-        if !marker.is_empty() {
-            query = query.filter(objects::key.gt(marker));
-        }
+    if let Some(marker) = start_after.filter(|m| !m.is_empty()) {
+        query = match order {
+            SortOrder::Asc => query.filter(objects::key.gt(marker)),
+            SortOrder::Desc => query.filter(objects::key.lt(marker)),
+        };
     }
 
     if let Some(q) = search.filter(|s| !s.is_empty()) {
@@ -97,8 +103,12 @@ pub async fn list_objects_page(
         query = query.filter(objects::key.ilike(pattern));
     }
 
+    query = match order {
+        SortOrder::Asc => query.order(objects::key.asc()),
+        SortOrder::Desc => query.order(objects::key.desc()),
+    };
+
     let rows: Vec<ObjectRow> = query
-        .order(objects::key.asc())
         .limit(limit)
         .select(ObjectRow::as_select())
         .load(&mut conn)
@@ -107,13 +117,10 @@ pub async fn list_objects_page(
 
     let truncated = rows.len() > max_keys;
     let page_rows: Vec<ObjectRow> = rows.into_iter().take(max_keys).collect();
-    let next_key = if truncated {
-        page_rows.last().map(|r| r.key.clone())
-    } else {
-        None
-    };
-
-    let metas: Vec<ObjectMeta> = page_rows.into_iter().map(row_into_read_meta).collect();
+    let next_key = truncated
+        .then(|| page_rows.last().map(|r| r.key.clone()))
+        .flatten();
+    let metas = page_rows.into_iter().map(row_into_read_meta).collect();
 
     Ok((metas, truncated, next_key))
 }
@@ -127,6 +134,46 @@ pub async fn list_objects_delimited_page(
     start_after: Option<&str>,
     max_keys: usize,
     search: Option<&str>,
+    sort: ConsoleListSort,
+    order: SortOrder,
+) -> Result<DelimitedListPage, StorageError> {
+    if sort == ConsoleListSort::Name && order == SortOrder::Asc && !is_file_cursor(start_after) {
+        return list_objects_delimited_page_key_scan(
+            ctx,
+            bucket_name,
+            prefix,
+            delimiter,
+            start_after,
+            max_keys,
+            search,
+            SortOrder::Asc,
+        )
+        .await;
+    }
+
+    console_list_sort::list_objects_delimited_page_composed(
+        ctx,
+        bucket_name,
+        prefix,
+        delimiter,
+        start_after,
+        max_keys,
+        search,
+        sort,
+        order,
+    )
+    .await
+}
+
+async fn list_objects_delimited_page_key_scan(
+    ctx: &DbContext,
+    bucket_name: &str,
+    prefix: &str,
+    delimiter: &str,
+    start_after: Option<&str>,
+    max_keys: usize,
+    search: Option<&str>,
+    order: SortOrder,
 ) -> Result<DelimitedListPage, StorageError> {
     let mut files = Vec::new();
     let mut prefix_set = BTreeSet::new();
@@ -142,6 +189,7 @@ pub async fn list_objects_delimited_page(
             cursor.as_deref(),
             DELIMITED_SCAN_BATCH,
             search,
+            order,
         )
         .await?;
 
@@ -155,13 +203,17 @@ pub async fn list_objects_delimited_page(
                 let more_in_batch = i + 1 < batch.len();
                 if more_in_batch || batch_truncated {
                     next_continuation = Some(batch[i].key.clone());
-                } else {
-                    let has_more =
-                        has_keys_after(ctx, bucket_name, prefix, Some(&batch[i].key), search)
-                            .await?;
-                    if has_more {
-                        next_continuation = Some(batch[i].key.clone());
-                    }
+                } else if has_keys_after(
+                    ctx,
+                    bucket_name,
+                    prefix,
+                    Some(&batch[i].key),
+                    search,
+                    order,
+                )
+                .await?
+                {
+                    next_continuation = Some(batch[i].key.clone());
                 }
                 break 'outer;
             }
@@ -200,7 +252,7 @@ pub async fn list_objects_delimited_page(
                 next_continuation = batch.last().map(|o| o.key.clone());
             } else {
                 let last_key = batch.last().map(|o| o.key.as_str());
-                if has_keys_after(ctx, bucket_name, prefix, last_key, search).await? {
+                if has_keys_after(ctx, bucket_name, prefix, last_key, search, order).await? {
                     next_continuation = batch.last().map(|o| o.key.clone());
                 }
             }
@@ -226,7 +278,9 @@ async fn has_keys_after(
     prefix: &str,
     after: Option<&str>,
     search: Option<&str>,
+    order: SortOrder,
 ) -> Result<bool, StorageError> {
-    let (objects, _, _) = list_objects_page(ctx, bucket_name, prefix, after, 1, search).await?;
+    let (objects, _, _) =
+        list_objects_page(ctx, bucket_name, prefix, after, 1, search, order).await?;
     Ok(!objects.is_empty())
 }

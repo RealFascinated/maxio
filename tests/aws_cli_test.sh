@@ -508,12 +508,15 @@ TAG_AFTER=$($AWS s3api get-object-tagging --bucket "$TAG_BUCKET" --key tag.txt 2
 TAG_AFTER_COUNT=$(echo "$TAG_AFTER" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("TagSet",[])))' 2>/dev/null)
 assert_eq "get-object-tagging empty after delete" "0" "$TAG_AFTER_COUNT"
 
-# NOTE: `put-object --tagging 'env=prod&...'` (x-amz-tagging header on PUT) is
-# not yet implemented in MaxIO — only the separate PutObjectTagging API works.
-# When that header lands, add an assertion here that verifies tags are set by
-# PUT+header in one request.
+$AWS s3 cp "$TMPDIR/tag.txt" "s3://$TAG_BUCKET/inline-tag.txt" \
+    --metadata-directive REPLACE \
+    --tagging 'env=prod&team=platform' > /dev/null
+INLINE_TAGS=$($AWS s3api get-object-tagging --bucket "$TAG_BUCKET" --key "inline-tag.txt" --output json 2>/dev/null)
+assert_contains "put-object x-amz-tagging sets tags" "env" "$INLINE_TAGS"
+assert_contains "put-object x-amz-tagging team tag" "platform" "$INLINE_TAGS"
 
 $AWS s3 rm "s3://$TAG_BUCKET/tag.txt" > /dev/null || true
+$AWS s3 rm "s3://$TAG_BUCKET/inline-tag.txt" > /dev/null || true
 assert "delete tag bucket" $AWS s3api delete-bucket --bucket "$TAG_BUCKET"
 
 # --- Batch DeleteObjects ---

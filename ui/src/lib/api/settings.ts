@@ -35,3 +35,29 @@ export async function setCors(bucket: string, enabled: boolean): Promise<{ ok: b
     body: JSON.stringify({ enabled }),
   })
 }
+
+export type LifecycleAction =
+  | { type: 'expire_objects'; days: number }
+  | { type: 'noncurrent_version_expiration'; noncurrent_days: number }
+
+export interface LifecycleRule {
+  id: string
+  enabled: boolean
+  prefix?: string
+  actions: LifecycleAction[]
+}
+
+export interface LifecycleResponse {
+  rules: LifecycleRule[]
+}
+
+export async function getLifecycle(bucket: string): Promise<LifecycleResponse> {
+  return apiFetch<LifecycleResponse>(`/api/buckets/${encodeURIComponent(bucket)}/lifecycle`)
+}
+
+export async function setLifecycle(bucket: string, rules: LifecycleRule[]): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/lifecycle`, {
+    method: 'PUT',
+    body: JSON.stringify({ rules }),
+  })
+}

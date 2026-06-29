@@ -44,7 +44,7 @@ async fn test_bucket_policy_put_get_delete() {
     );
 
     let get_after = s3_request("GET", &format!("{}/{bucket}?policy", base_url), vec![]).await;
-    assert_eq!(get_after.status(), 403);
+    assert_eq!(get_after.status(), 404);
 }
 
 #[tokio::test]

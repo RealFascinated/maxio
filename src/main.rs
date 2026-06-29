@@ -81,6 +81,13 @@ async fn main() -> anyhow::Result<()> {
                         temps
                     );
                 }
+                match storage.lifecycle_sweep().await {
+                    Ok(deleted) if deleted > 0 => {
+                        tracing::info!("lifecycle: expired {} object(s)/version(s)", deleted);
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("lifecycle sweep failed: {}", e),
+                }
             }
         });
     }

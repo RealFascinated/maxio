@@ -4,15 +4,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::blob::{BlobStorage, validate_key, validate_upload_id};
+use super::lifecycle::{action_cutoff, rule_matches_prefix, rule_prefix};
 use super::metadata::{MetadataStore, PutBucketContext};
 use super::traits::{ListPage, Storage};
 use super::{
     BatchDeleteObject, BucketMeta, ByteStream, ChecksumAlgorithm, CorsRule, DeleteResult,
-    MultipartUploadMeta, ObjectMeta, PartMeta, PutResult, StorageError, normalize_object_meta,
-    validate_bucket_name,
+    LifecycleAction, LifecycleRule, MultipartUploadMeta, ObjectMeta, PartMeta, PutResult,
+    StorageError, normalize_object_meta, validate_bucket_name,
 };
 
 const DELETE_BLOB_CONCURRENCY: usize = 32;
+const LIFECYCLE_SWEEP_BATCH: i64 = 500;
 use crate::metrics::MetricsRegistry;
 
 pub struct ObjectStorage {
@@ -641,12 +643,43 @@ impl Storage for ObjectStorage {
         self.meta.delete_bucket_cors(bucket).await
     }
 
+    async fn put_bucket_lifecycle(
+        &self,
+        bucket: &str,
+        rules: Vec<LifecycleRule>,
+    ) -> Result<(), StorageError> {
+        self.meta.put_bucket_lifecycle(bucket, rules).await
+    }
+
+    async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, StorageError> {
+        self.meta.get_bucket_lifecycle(bucket).await
+    }
+
+    async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<(), StorageError> {
+        self.meta.delete_bucket_lifecycle(bucket).await
+    }
+
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
         self.meta.is_versioned(bucket).await
     }
 
     async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
         self.meta.set_versioning(bucket, enabled).await
+    }
+
+    async fn get_versioning_state(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::VersioningState, StorageError> {
+        self.meta.get_versioning_state(bucket).await
+    }
+
+    async fn set_versioning_state(
+        &self,
+        bucket: &str,
+        state: crate::storage::VersioningState,
+    ) -> Result<(), StorageError> {
+        self.meta.set_versioning_state(bucket, state).await
     }
 
     async fn get_bucket_auth_info(
@@ -829,11 +862,22 @@ impl Storage for ObjectStorage {
         start_after: Option<&str>,
         max_keys: usize,
         search: Option<&str>,
+        sort: crate::db::repos::ConsoleListSort,
+        order: crate::db::repos::SortOrder,
     ) -> Result<crate::storage::traits::DelimitedListPage, StorageError> {
         let t = std::time::Instant::now();
         let result = self
             .meta
-            .list_objects_delimited_page(bucket, prefix, delimiter, start_after, max_keys, search)
+            .list_objects_delimited_page(
+                bucket,
+                prefix,
+                delimiter,
+                start_after,
+                max_keys,
+                search,
+                sort,
+                order,
+            )
             .await;
         self.record("list_objects_delimited", t.elapsed(), 0);
         result
@@ -1103,5 +1147,107 @@ impl Storage for ObjectStorage {
             });
         let temp_removed = self.blobs.housekeeping_temp_sweep().await;
         (uploads_removed, temp_removed)
+    }
+
+    async fn lifecycle_sweep(&self) -> Result<u64, StorageError> {
+        let now = chrono::Utc::now();
+        let entries = self.meta.list_buckets_with_lifecycle().await?;
+        let mut total = 0u64;
+
+        for entry in entries {
+            let versioned = self
+                .meta
+                .is_versioned(&entry.bucket_name)
+                .await
+                .unwrap_or(false);
+
+            for rule in &entry.rules {
+                if !rule.enabled {
+                    continue;
+                }
+                let prefix = rule_prefix(rule);
+
+                for action in &rule.actions {
+                    let Some(cutoff) = action_cutoff(action, now) else {
+                        continue;
+                    };
+
+                    match action {
+                        LifecycleAction::ExpireObjects { .. } => loop {
+                            let keys = self
+                                .meta
+                                .list_expired_current_objects(
+                                    entry.bucket_id,
+                                    prefix,
+                                    cutoff,
+                                    LIFECYCLE_SWEEP_BATCH,
+                                )
+                                .await?;
+                            if keys.is_empty() {
+                                break;
+                            }
+                            for key in keys {
+                                if !rule_matches_prefix(rule, &key) {
+                                    continue;
+                                }
+                                match self.delete_object_inner(&entry.bucket_name, &key).await {
+                                    Ok(_) => total += 1,
+                                    Err(StorageError::NotFound(_)) => {}
+                                    Err(e) => tracing::warn!(
+                                        bucket = %entry.bucket_name,
+                                        key = %key,
+                                        "lifecycle: expire object failed: {e}"
+                                    ),
+                                }
+                            }
+                        },
+                        LifecycleAction::NoncurrentVersionExpiration { .. } => {
+                            if !versioned {
+                                continue;
+                            }
+                            loop {
+                                let versions = self
+                                    .meta
+                                    .list_expired_noncurrent_versions(
+                                        entry.bucket_id,
+                                        prefix,
+                                        cutoff,
+                                        LIFECYCLE_SWEEP_BATCH,
+                                    )
+                                    .await?;
+                                if versions.is_empty() {
+                                    break;
+                                }
+                                for version in versions {
+                                    if !rule_matches_prefix(rule, &version.key) {
+                                        continue;
+                                    }
+                                    match self
+                                        .delete_object_version(
+                                            &entry.bucket_name,
+                                            &version.key,
+                                            &version.version_id,
+                                        )
+                                        .await
+                                    {
+                                        Ok(_) => total += 1,
+                                        Err(StorageError::NotFound(_))
+                                        | Err(StorageError::VersionNotFound(_)) => {}
+                                        Err(e) => tracing::warn!(
+                                            bucket = %entry.bucket_name,
+                                            key = %version.key,
+                                            version_id = %version.version_id,
+                                            "lifecycle: expire noncurrent version failed: {e}"
+                                        ),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total)
     }
 }

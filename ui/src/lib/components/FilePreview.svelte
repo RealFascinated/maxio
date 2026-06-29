@@ -4,6 +4,7 @@
   import { Dialog } from '$lib/components/ui/dialog'
   import Download from 'lucide-svelte/icons/download'
   import { downloadUrl as objectDownloadUrl } from '$lib/api/objects'
+  import { notifyUnauthorized, isSessionExpiredError } from '$lib/api/session'
   import { displayName } from '$lib/utils'
   import { previewKind, BINARY_PREVIEW_CAP, TEXT_PREVIEW_CAP, tryPrettyJson, type PreviewKind } from '$lib/preview'
 
@@ -38,7 +39,10 @@
     }
     try {
       const res = await fetch(downloadUrl, { credentials: 'same-origin' })
-      if (!res.ok) throw new Error(`Request failed (${res.status})`)
+      if (!res.ok) {
+        if (res.status === 401 && notifyUnauthorized(downloadUrl)) return
+        throw new Error(`Request failed (${res.status})`)
+      }
       if (kind === 'text') {
         let text = await res.text()
         if (text.length > TEXT_PREVIEW_CAP) {
@@ -50,6 +54,7 @@
         blobUrl = URL.createObjectURL(await res.blob())
       }
     } catch (err) {
+      if (isSessionExpiredError(err)) return
       console.error('FilePreview load failed:', err)
       error = err instanceof Error ? err.message : 'Failed to load preview'
     } finally {

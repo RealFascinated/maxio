@@ -4,6 +4,7 @@ diesel::table! {
         name -> Text,
         created_at -> Timestamptz,
         versioning -> Bool,
+        versioning_suspended -> Bool,
         owner_id -> Text,
         owner_display_name -> Text,
     }
@@ -25,6 +26,18 @@ diesel::table! {
         allowed_headers -> Array<Text>,
         expose_headers -> Array<Text>,
         max_age_seconds -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    bucket_lifecycle_rules (id) {
+        id -> Uuid,
+        bucket_id -> Uuid,
+        rule_id -> Text,
+        enabled -> Bool,
+        prefix -> Text,
+        actions -> Jsonb,
+        sort_order -> Integer,
     }
 }
 
@@ -102,6 +115,7 @@ diesel::table! {
         is_folder_marker -> Bool,
         part_sizes -> Nullable<Array<Int8>>,
         is_current -> Bool,
+        noncurrent_since -> Nullable<Timestamptz>,
     }
 }
 
@@ -213,6 +227,7 @@ diesel::table! {
 
 diesel::joinable!(bucket_policies -> buckets (bucket_id));
 diesel::joinable!(bucket_cors_rules -> buckets (bucket_id));
+diesel::joinable!(bucket_lifecycle_rules -> buckets (bucket_id));
 diesel::joinable!(bucket_acl_grants -> buckets (bucket_id));
 diesel::joinable!(objects -> buckets (bucket_id));
 diesel::joinable!(object_tags -> objects (object_id));
@@ -229,6 +244,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     buckets,
     bucket_policies,
     bucket_cors_rules,
+    bucket_lifecycle_rules,
     bucket_acl_grants,
     objects,
     object_tags,

@@ -112,3 +112,17 @@ export async function getPolicy(name: string): Promise<{ name: string; arn: stri
 export async function deletePolicy(name: string): Promise<{ ok: boolean }> {
   return apiFetch(`/api/policies/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
+
+export async function attachUserPolicy(username: string, policyArn: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/users/${encodeURIComponent(username)}/attach-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ policyArn }),
+  })
+}
+
+export async function detachUserPolicy(username: string, policyArn: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/users/${encodeURIComponent(username)}/detach-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ policyArn }),
+  })
+}

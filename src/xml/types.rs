@@ -149,6 +149,15 @@ pub struct ListPartsResult {
     pub key: String,
     #[serde(rename = "UploadId")]
     pub upload_id: String,
+    #[serde(rename = "PartNumberMarker", skip_serializing_if = "Option::is_none")]
+    pub part_number_marker: Option<u32>,
+    #[serde(
+        rename = "NextPartNumberMarker",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next_part_number_marker: Option<u32>,
+    #[serde(rename = "MaxParts", skip_serializing_if = "Option::is_none")]
+    pub max_parts: Option<i32>,
     #[serde(rename = "IsTruncated")]
     pub is_truncated: bool,
     #[serde(rename = "Part", default)]
@@ -170,6 +179,20 @@ pub struct MultipartUploadEntry {
 pub struct ListMultipartUploadsResult {
     #[serde(rename = "Bucket")]
     pub bucket: String,
+    #[serde(rename = "KeyMarker", skip_serializing_if = "Option::is_none")]
+    pub key_marker: Option<String>,
+    #[serde(rename = "UploadIdMarker", skip_serializing_if = "Option::is_none")]
+    pub upload_id_marker: Option<String>,
+    #[serde(rename = "NextKeyMarker", skip_serializing_if = "Option::is_none")]
+    pub next_key_marker: Option<String>,
+    #[serde(rename = "NextUploadIdMarker", skip_serializing_if = "Option::is_none")]
+    pub next_upload_id_marker: Option<String>,
+    #[serde(rename = "Prefix", skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(rename = "Delimiter", skip_serializing_if = "Option::is_none")]
+    pub delimiter: Option<String>,
+    #[serde(rename = "MaxUploads", skip_serializing_if = "Option::is_none")]
+    pub max_uploads: Option<i32>,
     #[serde(rename = "IsTruncated")]
     pub is_truncated: bool,
     #[serde(rename = "Upload", default)]
@@ -307,6 +330,57 @@ pub struct CorsRuleXml {
     pub expose_headers: Vec<String>,
     #[serde(rename = "MaxAgeSeconds", skip_serializing_if = "Option::is_none")]
     pub max_age_seconds: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename = "LifecycleConfiguration")]
+pub struct LifecycleConfiguration {
+    #[serde(rename = "Rule", default)]
+    pub rules: Vec<LifecycleRuleXml>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LifecycleRuleXml {
+    #[serde(rename = "ID")]
+    pub id: String,
+    #[serde(rename = "Status", default = "default_lifecycle_enabled")]
+    pub status: String,
+    #[serde(rename = "Filter", default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<LifecycleFilterXml>,
+    #[serde(
+        rename = "Expiration",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expiration: Option<LifecycleExpirationXml>,
+    #[serde(
+        rename = "NoncurrentVersionExpiration",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub noncurrent_version_expiration: Option<NoncurrentVersionExpirationXml>,
+}
+
+fn default_lifecycle_enabled() -> String {
+    "Enabled".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LifecycleFilterXml {
+    #[serde(rename = "Prefix", default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LifecycleExpirationXml {
+    #[serde(rename = "Days")]
+    pub days: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NoncurrentVersionExpirationXml {
+    #[serde(rename = "NoncurrentDays")]
+    pub noncurrent_days: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

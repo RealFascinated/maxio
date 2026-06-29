@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 
+use crate::api::authz::{check_bucket_access, check_object_access};
 use crate::error::S3Error;
+use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::{ChecksumAlgorithm, StorageError};
 use crate::xml::{response::to_xml, types::*};
@@ -15,13 +17,17 @@ use crate::xml::{response::to_xml, types::*};
 use super::object::{body_to_reader, extract_checksum};
 
 const COMPLETE_BODY_MAX: usize = 1024 * 1024;
+const DEFAULT_MAX_PARTS: usize = 1000;
+const DEFAULT_MAX_UPLOADS: usize = 1000;
 
 pub async fn create_multipart_upload(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
+    Extension(principal): Extension<Principal>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, S3Error> {
     ensure_bucket_exists(&state, &bucket).await?;
+    check_object_access(&state, &principal, &bucket, &key, "s3:PutObject").await?;
 
     let content_type = headers
         .get("content-type")
@@ -54,8 +60,9 @@ pub async fn create_multipart_upload(
 
 pub async fn upload_part(
     State(state): State<AppState>,
-    Path((bucket, _key)): Path<(String, String)>,
+    Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response<Body>, S3Error> {
@@ -64,6 +71,18 @@ pub async fn upload_part(
     let upload_id = params
         .get("uploadId")
         .ok_or_else(|| S3Error::invalid_argument("missing uploadId"))?;
+
+    let upload = state
+        .storage
+        .get_multipart_upload(upload_id)
+        .await
+        .map_err(map_storage_err)?;
+    if upload.bucket != bucket {
+        return Err(S3Error::no_such_upload(upload_id));
+    }
+
+    check_object_access(&state, &principal, &bucket, &upload.key, "s3:PutObject").await?;
+
     let part_number = params
         .get("partNumber")
         .ok_or_else(|| S3Error::invalid_argument("missing partNumber"))?
@@ -78,6 +97,7 @@ pub async fn upload_part(
         .await
         .map_err(map_storage_err)?;
 
+    let _ = key;
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("ETag", &part.etag);
@@ -91,10 +111,13 @@ pub async fn complete_multipart_upload(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
     _headers: HeaderMap,
     body: Body,
 ) -> Result<Response<Body>, S3Error> {
     ensure_bucket_exists(&state, &bucket).await?;
+    check_object_access(&state, &principal, &bucket, &key, "s3:PutObject").await?;
+
     let upload_id = params
         .get("uploadId")
         .ok_or_else(|| S3Error::invalid_argument("missing uploadId"))?;
@@ -132,11 +155,30 @@ pub async fn abort_multipart_upload(
     State(state): State<AppState>,
     Path((bucket, _key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
     ensure_bucket_exists(&state, &bucket).await?;
     let upload_id = params
         .get("uploadId")
         .ok_or_else(|| S3Error::invalid_argument("missing uploadId"))?;
+
+    let upload = state
+        .storage
+        .get_multipart_upload(upload_id)
+        .await
+        .map_err(map_storage_err)?;
+    if upload.bucket != bucket {
+        return Err(S3Error::no_such_upload(upload_id));
+    }
+
+    check_object_access(
+        &state,
+        &principal,
+        &bucket,
+        &upload.key,
+        "s3:AbortMultipartUpload",
+    )
+    .await?;
 
     state
         .storage
@@ -154,6 +196,7 @@ pub async fn list_parts(
     State(state): State<AppState>,
     Path((bucket, _key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
     ensure_bucket_exists(&state, &bucket).await?;
     let upload_id = params
@@ -169,17 +212,46 @@ pub async fn list_parts(
         return Err(S3Error::no_such_upload(upload_id));
     }
 
-    let (parts, _) = state
+    check_object_access(
+        &state,
+        &principal,
+        &bucket,
+        &upload.key,
+        "s3:ListMultipartUploadParts",
+    )
+    .await?;
+
+    let part_number_marker = params
+        .get("part-number-marker")
+        .map(|s| s.parse::<u32>())
+        .transpose()
+        .map_err(|_| S3Error::invalid_argument("invalid part-number-marker"))?;
+    let max_parts = params
+        .get("max-parts")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_PARTS)
+        .clamp(1, DEFAULT_MAX_PARTS);
+
+    let (parts, is_truncated) = state
         .storage
-        .list_parts(&bucket, upload_id, None, 1000)
+        .list_parts(&bucket, upload_id, part_number_marker, max_parts)
         .await
         .map_err(map_storage_err)?;
+
+    let next_part_number_marker = if is_truncated {
+        parts.last().map(|p| p.part_number)
+    } else {
+        None
+    };
 
     let xml = to_xml(&ListPartsResult {
         bucket,
         key: upload.key,
         upload_id: upload_id.clone(),
-        is_truncated: false,
+        part_number_marker,
+        next_part_number_marker,
+        max_parts: Some(max_parts as i32),
+        is_truncated,
         parts: parts
             .into_iter()
             .map(|p| PartEntry {
@@ -202,19 +274,57 @@ pub async fn list_parts(
 pub async fn list_multipart_uploads(
     State(state): State<AppState>,
     Path(bucket): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
     ensure_bucket_exists(&state, &bucket).await?;
+    check_bucket_access(&state, &principal, &bucket, "s3:ListBucketMultipartUploads").await?;
 
-    let uploads = state
+    let prefix = params.get("prefix").map(String::as_str);
+    let key_marker = params.get("key-marker").cloned();
+    let upload_id_marker = params.get("upload-id-marker").cloned();
+    let max_uploads = params
+        .get("max-uploads")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_UPLOADS)
+        .clamp(1, DEFAULT_MAX_UPLOADS);
+
+    let mut uploads = state
         .storage
-        .list_multipart_uploads(&bucket, None)
+        .list_multipart_uploads(&bucket, prefix)
         .await
         .map_err(map_storage_err)?;
 
+    uploads.sort_by(|a, b| {
+        (a.key.as_str(), a.upload_id.as_str()).cmp(&(b.key.as_str(), b.upload_id.as_str()))
+    });
+
+    if let Some(ref km) = key_marker {
+        let um = upload_id_marker.as_deref().unwrap_or("");
+        uploads.retain(|u| u.key > *km || (u.key == *km && u.upload_id.as_str() > um));
+    }
+
+    let is_truncated = uploads.len() > max_uploads;
+    let page: Vec<_> = uploads.into_iter().take(max_uploads).collect();
+    let (next_key_marker, next_upload_id_marker) = if is_truncated {
+        page.last()
+            .map(|u| (Some(u.key.clone()), Some(u.upload_id.clone())))
+            .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+
     let xml = to_xml(&ListMultipartUploadsResult {
         bucket,
-        is_truncated: false,
-        uploads: uploads
+        key_marker,
+        upload_id_marker,
+        next_key_marker,
+        next_upload_id_marker,
+        prefix: prefix.map(str::to_string),
+        delimiter: params.get("delimiter").cloned(),
+        max_uploads: Some(max_uploads as i32),
+        is_truncated,
+        uploads: page
             .into_iter()
             .map(|u| MultipartUploadEntry {
                 key: u.key,

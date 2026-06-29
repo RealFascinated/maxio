@@ -79,6 +79,7 @@ pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, S
         CachedBucketEntry {
             id: bucket_id,
             versioning: meta.versioning,
+            versioning_suspended: false,
             owner_id: meta.owner_id.clone(),
             owner_display_name: meta.owner_display_name.clone(),
             policy: meta.policy.clone(),
@@ -372,11 +373,12 @@ pub(crate) async fn load_bucket_cache_entry(
     name: &str,
 ) -> Result<CachedBucketEntry, StorageError> {
     validate_bucket_name(name)?;
-    let row: (Uuid, bool, String, String) = buckets::table
+    let row: (Uuid, bool, bool, String, String) = buckets::table
         .filter(buckets::name.eq(name))
         .select((
             buckets::id,
             buckets::versioning,
+            buckets::versioning_suspended,
             buckets::owner_id,
             buckets::owner_display_name,
         ))
@@ -387,7 +389,7 @@ pub(crate) async fn load_bucket_cache_entry(
             other => db_err(other),
         })?;
 
-    let (policy, acl) = load_bucket_auth_parts(conn, row.0, &row.2, &row.3).await?;
+    let (policy, acl) = load_bucket_auth_parts(conn, row.0, &row.3, &row.4).await?;
 
     let cors_rows: Vec<CorsRuleRow> = bucket_cors_rules::table
         .filter(bucket_cors_rules::bucket_id.eq(row.0))
@@ -406,8 +408,9 @@ pub(crate) async fn load_bucket_cache_entry(
     Ok(CachedBucketEntry {
         id: row.0,
         versioning: row.1,
-        owner_id: row.2,
-        owner_display_name: row.3,
+        versioning_suspended: row.2,
+        owner_id: row.3,
+        owner_display_name: row.4,
         policy,
         acl,
         cors_rules,
@@ -426,15 +429,59 @@ pub async fn is_versioned(ctx: &DbContext, bucket: &str) -> Result<bool, Storage
     Ok(entry.versioning)
 }
 
+pub async fn get_versioning_state(
+    ctx: &DbContext,
+    bucket: &str,
+) -> Result<crate::storage::VersioningState, StorageError> {
+    validate_bucket_name(bucket)?;
+    let entry = if let Some(entry) = ctx.bucket_cache().get(bucket) {
+        entry
+    } else {
+        ctx.bucket_cache().record_miss();
+        let mut conn = get_conn(ctx.pool()).await?;
+        let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+        ctx.bucket_cache().insert(bucket, entry.clone());
+        entry
+    };
+    Ok(if entry.versioning {
+        crate::storage::VersioningState::Enabled
+    } else if entry.versioning_suspended {
+        crate::storage::VersioningState::Suspended
+    } else {
+        crate::storage::VersioningState::Unversioned
+    })
+}
+
 pub async fn set_versioning(
     ctx: &DbContext,
     bucket: &str,
     enabled: bool,
 ) -> Result<(), StorageError> {
+    let state = if enabled {
+        crate::storage::VersioningState::Enabled
+    } else {
+        crate::storage::VersioningState::Suspended
+    };
+    set_versioning_state(ctx, bucket, state).await
+}
+
+pub async fn set_versioning_state(
+    ctx: &DbContext,
+    bucket: &str,
+    state: crate::storage::VersioningState,
+) -> Result<(), StorageError> {
     validate_bucket_name(bucket)?;
+    let (enabled, suspended) = match state {
+        crate::storage::VersioningState::Enabled => (true, false),
+        crate::storage::VersioningState::Suspended => (false, true),
+        crate::storage::VersioningState::Unversioned => (false, false),
+    };
     let mut conn = get_conn(ctx.pool()).await?;
     let updated = diesel::update(buckets::table.filter(buckets::name.eq(bucket)))
-        .set(buckets::versioning.eq(enabled))
+        .set((
+            buckets::versioning.eq(enabled),
+            buckets::versioning_suspended.eq(suspended),
+        ))
         .execute(&mut conn)
         .await
         .map_err(db_err)?;
@@ -442,7 +489,8 @@ pub async fn set_versioning(
     if updated == 0 {
         return Err(StorageError::NotFound(bucket.to_string()));
     }
-    ctx.bucket_cache().set_versioning(bucket, enabled);
+    ctx.bucket_cache()
+        .set_versioning_state(bucket, enabled, suspended);
     Ok(())
 }
 

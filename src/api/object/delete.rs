@@ -22,12 +22,18 @@ pub async fn delete_object(
     Extension(principal): Extension<Principal>,
 ) -> Result<Response<Body>, S3Error> {
     if params.contains_key("tagging") {
-        return delete_object_tagging(State(state), Path((bucket, key))).await;
+        return delete_object_tagging(State(state), Path((bucket, key)), Extension(principal))
+            .await;
     }
 
     if params.contains_key("uploadId") {
-        return multipart::abort_multipart_upload(State(state), Path((bucket, key)), Query(params))
-            .await;
+        return multipart::abort_multipart_upload(
+            State(state),
+            Path((bucket, key)),
+            Query(params),
+            Extension(principal),
+        )
+        .await;
     }
 
     check_object_access(&state, &principal, &bucket, &key, "s3:DeleteObject").await?;
@@ -161,8 +167,15 @@ pub fn parse_delete_objects_xml(
 pub async fn delete_objects(
     State(state): State<AppState>,
     Path(bucket): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
     req: axum::extract::Request,
 ) -> Result<Response<Body>, S3Error> {
+    if !params.contains_key("delete") {
+        return Err(S3Error::invalid_argument(
+            "DELETE query string parameter is required",
+        ));
+    }
+
     let principal = get_principal(req.extensions());
     let body = req.into_body();
     multipart::ensure_bucket_exists(&state, &bucket).await?;

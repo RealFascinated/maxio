@@ -2,13 +2,15 @@ use std::collections::HashMap;
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 
+use crate::api::authz::check_object_access;
 use crate::api::multipart;
 use crate::error::S3Error;
+use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::StorageError;
 use crate::xml::{
@@ -69,6 +71,7 @@ pub(super) async fn upload_part_copy(
     State(state): State<AppState>,
     Path((bucket, _key)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
+    Extension(principal): Extension<Principal>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, S3Error> {
     let (src_bucket, src_key) = parse_copy_source(&headers)?;
@@ -83,6 +86,18 @@ pub(super) async fn upload_part_copy(
         .map_err(|_| S3Error::invalid_part("invalid part number"))?;
 
     multipart::ensure_bucket_exists(&state, &bucket).await?;
+
+    let upload = state
+        .storage
+        .get_multipart_upload(upload_id)
+        .await
+        .map_err(multipart::map_storage_err)?;
+    if upload.bucket != bucket {
+        return Err(S3Error::no_such_upload(upload_id));
+    }
+
+    check_object_access(&state, &principal, &src_bucket, &src_key, "s3:GetObject").await?;
+    check_object_access(&state, &principal, &bucket, &upload.key, "s3:PutObject").await?;
 
     // Get source metadata first to validate range before opening the file
     let src_meta = state
@@ -146,10 +161,14 @@ pub(super) async fn upload_part_copy(
 pub(super) async fn copy_object(
     State(state): State<AppState>,
     Path((bucket, key)): Path<(String, String)>,
+    Extension(principal): Extension<Principal>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, S3Error> {
     let (src_bucket, src_key) = parse_copy_source(&headers)?;
     let (src_bucket, src_key) = (src_bucket.as_str(), src_key.as_str());
+
+    check_object_access(&state, &principal, src_bucket, src_key, "s3:GetObject").await?;
+    check_object_access(&state, &principal, &bucket, &key, "s3:PutObject").await?;
 
     let (reader, src_meta) = state
         .storage

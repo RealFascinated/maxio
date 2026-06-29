@@ -7,6 +7,7 @@ use axum::http::HeaderMap;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
+use crate::iam::types::KeyStatus;
 use crate::server::AppState;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -95,50 +96,98 @@ pub(crate) fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> Strin
     addr.ip().to_string()
 }
 
-pub(crate) fn generate_token(username: &str, secret_key: &str, issued_at: i64) -> String {
+pub(crate) fn generate_token(access_key_id: &str, secret_key: &str, issued_at: i64) -> String {
     let issued_hex = format!("{:x}", issued_at);
     let mut mac =
         HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(format!("{}:{}", username, issued_hex).as_bytes());
+    mac.update(format!("{}:{}", access_key_id, issued_hex).as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
-    format!("{}.{}", issued_hex, sig)
+    format!("{}.{}.{}", issued_hex, access_key_id, sig)
 }
 
-fn verify_token(token: &str, username: &str, secret_key: &str) -> bool {
-    let Some((issued_hex, signature)) = token.split_once('.') else {
-        return false;
-    };
+fn verify_token(token: &str, secret_key: &str) -> Option<String> {
+    let mut parts = token.split('.');
+    let issued_hex = parts.next()?;
+    let access_key_id = parts.next()?;
+    let signature = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
 
     let Ok(issued_at) = i64::from_str_radix(issued_hex, 16) else {
-        return false;
+        return None;
     };
 
     let now = chrono::Utc::now().timestamp();
     if now - issued_at > TOKEN_MAX_AGE_SECS || issued_at > now + 60 {
-        return false;
+        return None;
     }
 
     let mut mac =
         HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(format!("{}:{}", username, issued_hex).as_bytes());
+    mac.update(format!("{}:{}", access_key_id, issued_hex).as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
 
-    constant_time_eq(signature.as_bytes(), expected.as_bytes())
+    if constant_time_eq(signature.as_bytes(), expected.as_bytes()) {
+        Some(access_key_id.to_string())
+    } else {
+        None
+    }
 }
 
-pub(crate) async fn resolve_session_username(token: &str, state: &AppState) -> Option<String> {
+pub(crate) async fn resolve_session_access_key(token: &str, state: &AppState) -> Option<String> {
     if token.is_empty() || state.revoked_sessions.is_revoked(token) {
         return None;
     }
-    if verify_token(token, crate::iam::ROOT_USERNAME, &state.config.secret_key) {
-        return Some(crate::iam::ROOT_USERNAME.to_string());
+    let access_key_id = verify_token(token, &state.config.secret_key)?;
+    session_from_access_key(state, &access_key_id).await?;
+    Some(access_key_id)
+}
+
+pub(crate) async fn session_from_access_key(
+    state: &AppState,
+    access_key_id: &str,
+) -> Option<ConsoleSession> {
+    if crate::auth::signature_v4::constant_time_eq(
+        access_key_id.as_bytes(),
+        state.config.access_key.as_bytes(),
+    ) {
+        return Some(ConsoleSession::root(state.config.access_key.clone()));
     }
-    for user in state.user_store.list_users().await {
-        if verify_token(token, &user.username, &state.config.secret_key) {
-            return Some(user.username);
-        }
+
+    let (user, key) = state.user_store.lookup_by_access_key(access_key_id).await?;
+    if key.status != KeyStatus::Active {
+        return None;
     }
-    None
+
+    Some(ConsoleSession {
+        username: user.username,
+        is_root: false,
+        user_id: user.user_id,
+        access_key_id: access_key_id.to_string(),
+    })
+}
+
+pub(crate) async fn session_signing_credentials(
+    state: &AppState,
+    session: &ConsoleSession,
+) -> Option<(String, String)> {
+    if session.is_root {
+        return Some((
+            state.config.access_key.clone(),
+            state.config.secret_key.clone(),
+        ));
+    }
+
+    let (_, key) = state
+        .user_store
+        .lookup_by_access_key(&session.access_key_id)
+        .await?;
+    if key.status != KeyStatus::Active {
+        return None;
+    }
+
+    Some((key.access_key_id, key.secret_access_key))
 }
 
 #[derive(Clone, Debug)]
@@ -146,22 +195,16 @@ pub(crate) struct ConsoleSession {
     pub username: String,
     pub is_root: bool,
     pub user_id: String,
+    pub access_key_id: String,
 }
 
 impl ConsoleSession {
-    pub(crate) fn root() -> Self {
+    pub(crate) fn root(access_key_id: String) -> Self {
         Self {
             username: crate::iam::ROOT_USERNAME.to_string(),
             is_root: true,
             user_id: crate::iam::ROOT_CANONICAL_ID.to_string(),
-        }
-    }
-
-    pub(crate) fn from_user(user: &crate::iam::types::IamUser) -> Self {
-        Self {
-            username: user.username.clone(),
-            is_root: false,
-            user_id: user.user_id.clone(),
+            access_key_id,
         }
     }
 

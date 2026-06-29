@@ -1,6 +1,9 @@
 <script lang="ts">
   import { createMutation, createQuery } from '@tanstack/svelte-query'
+  import { createColumnHelper, createTable, FlexRender } from '@tanstack/svelte-table'
   import * as Table from '$lib/components/ui/table'
+  import { sortableHeader, sortableTableFeatures } from '$lib/table/sortable'
+  import type { OrphanMetaEntry } from '$lib/api/maintenance'
   import * as Card from '$lib/components/ui/card'
   import { Button } from '$lib/components/ui/button'
   import { Callout } from '$lib/components/ui/callout'
@@ -9,7 +12,7 @@
   import CircleCheck from 'lucide-svelte/icons/circle-check'
   import RefreshCw from 'lucide-svelte/icons/refresh-cw'
   import Trash2 from 'lucide-svelte/icons/trash-2'
-  import { toast } from '$lib/toast'
+  import { toast, toastApiError } from '$lib/toast'
   import { maintenanceKeys } from '$lib/api/keys'
   import { repairOrphanMeta, scanOrphanMeta } from '$lib/api/maintenance'
   let showRepairConfirm = $state(false)
@@ -40,7 +43,7 @@
     },
     onError: (error) => {
       console.error('repairOrphanMeta failed:', error)
-      toast.error(error instanceof Error ? error.message : 'Repair failed')
+      toastApiError(error, 'Repair failed')
     },
   }))
 
@@ -50,6 +53,24 @@
     }
     return `${entry.bucket}/${entry.key}`
   }
+
+  const orphans = $derived(scanQuery.data?.orphans ?? [])
+
+  const columnHelper = createColumnHelper<typeof sortableTableFeatures, OrphanMetaEntry>()
+  const columns = [
+    columnHelper.accessor((entry) => formatObjectRef(entry), {
+      id: 'object',
+      header: sortableHeader('Object'),
+    }),
+  ]
+
+  const table = createTable({
+    features: sortableTableFeatures,
+    columns: columns as never,
+    get data() {
+      return orphans
+    },
+  })
 </script>
 
 <div class="mx-auto max-w-6xl space-y-6">
@@ -113,14 +134,22 @@
         <div class="overflow-hidden rounded-sm border-2 border-neutral-200 dark:border-coolgray-200">
           <Table.Root>
             <Table.Header>
-              <Table.Row>
-                <Table.Head>Object</Table.Head>
-              </Table.Row>
+              {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
+                <Table.Row>
+                  {#each headerGroup.headers as header (header.id)}
+                    <Table.Head>
+                      {#if !header.isPlaceholder}
+                        <FlexRender header={header} />
+                      {/if}
+                    </Table.Head>
+                  {/each}
+                </Table.Row>
+              {/each}
             </Table.Header>
             <Table.Body>
-              {#each scanQuery.data.orphans as entry (formatObjectRef(entry))}
+              {#each table.getRowModel().rows as row (row.id)}
                 <Table.Row>
-                  <Table.Cell class="font-mono text-sm">{formatObjectRef(entry)}</Table.Cell>
+                  <Table.Cell class="font-mono text-sm">{formatObjectRef(row.original)}</Table.Cell>
                 </Table.Row>
               {/each}
             </Table.Body>

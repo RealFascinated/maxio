@@ -4,6 +4,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use crate::api::authz::{check_bucket_access, check_object_access};
+use crate::error::{S3Error, S3ErrorCode};
 use crate::server::AppState;
 
 use super::session::ConsoleSession;
@@ -15,6 +17,22 @@ pub(crate) fn console_forbidden() -> ConsoleDeny {
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({"error": "Access Denied"})),
     )
+}
+
+fn s3_error_to_response(err: S3Error) -> Response {
+    match err.code {
+        S3ErrorCode::NoSuchBucket => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Bucket not found"})),
+        )
+            .into_response(),
+        S3ErrorCode::AccessDenied => console_forbidden().into_response(),
+        _ => (
+            err.code.status_code(),
+            Json(serde_json::json!({"error": err.message})),
+        )
+            .into_response(),
+    }
 }
 
 pub(crate) async fn console_check(
@@ -55,24 +73,10 @@ pub(crate) async fn console_bucket_check(
     bucket: &str,
     action: &str,
 ) -> Result<(), Response> {
-    match state.storage.get_bucket_auth_info(bucket).await {
-        Ok((policy, acl)) => console_check(
-            state,
-            session,
-            action,
-            &crate::iam::authz::bucket_arn(bucket),
-            policy.as_deref(),
-            Some(&acl),
-        )
+    check_bucket_access(state, &session.principal(), bucket, action)
         .await
-        .map_err(|deny| deny.into_response()),
-        Err(_) if session.is_root => Ok(()),
-        Err(_) => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Bucket not found"})),
-        )
-            .into_response()),
-    }
+        .map(|_| ())
+        .map_err(s3_error_to_response)
 }
 
 pub(crate) async fn console_bucket_can(
@@ -84,19 +88,9 @@ pub(crate) async fn console_bucket_can(
     if session.is_root {
         return true;
     }
-    match state.storage.get_bucket_auth_info(bucket).await {
-        Ok((policy, acl)) => console_check(
-            state,
-            session,
-            action,
-            &crate::iam::authz::bucket_arn(bucket),
-            policy.as_deref(),
-            Some(&acl),
-        )
+    check_bucket_access(state, &session.principal(), bucket, action)
         .await
-        .is_ok(),
-        Err(_) => false,
-    }
+        .is_ok()
 }
 
 pub(crate) async fn console_bucket_can_manage_settings(
@@ -108,6 +102,7 @@ pub(crate) async fn console_bucket_can_manage_settings(
         "s3:PutBucketVersioning",
         "s3:PutBucketPolicy",
         "s3:PutBucketCors",
+        "s3:PutLifecycleConfiguration",
     ] {
         if console_bucket_can(state, session, bucket, action).await {
             return true;
@@ -123,24 +118,10 @@ pub(crate) async fn console_object_check(
     key: &str,
     action: &str,
 ) -> Result<(), Response> {
-    match state.storage.get_bucket_auth_info(bucket).await {
-        Ok((policy, acl)) => console_check(
-            state,
-            session,
-            action,
-            &crate::iam::authz::object_arn(bucket, key),
-            policy.as_deref(),
-            Some(&acl),
-        )
+    check_object_access(state, &session.principal(), bucket, key, action)
         .await
-        .map_err(|deny| deny.into_response()),
-        Err(_) if session.is_root => Ok(()),
-        Err(_) => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Bucket not found"})),
-        )
-            .into_response()),
-    }
+        .map(|_| ())
+        .map_err(s3_error_to_response)
 }
 
 pub(crate) async fn session_capabilities(

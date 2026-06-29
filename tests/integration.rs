@@ -24,6 +24,10 @@ mod conditionals;
 mod console;
 #[path = "integration/console_admin.rs"]
 mod console_admin;
+#[path = "integration/console_admin_extended.rs"]
+mod console_admin_extended;
+#[path = "integration/console_buckets.rs"]
+mod console_buckets;
 #[path = "integration/console_upload.rs"]
 mod console_upload;
 #[path = "integration/copy.rs"]
@@ -38,6 +42,8 @@ mod delete_objects;
 mod folder_marker;
 #[path = "integration/iam.rs"]
 mod iam;
+#[path = "integration/lifecycle.rs"]
+mod lifecycle;
 #[path = "integration/list_v1.rs"]
 mod list_v1;
 #[path = "integration/list_v2.rs"]

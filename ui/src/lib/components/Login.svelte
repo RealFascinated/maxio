@@ -37,8 +37,9 @@
 
   interface Props {
     onLogin: (session: AuthCheckResponse) => void
+    sessionExpired?: boolean
   }
-  let { onLogin }: Props = $props()
+  let { onLogin, sessionExpired = false }: Props = $props()
 
   async function handleSubmit(e: Event) {
     e.preventDefault()
@@ -109,6 +110,10 @@
           Use HTTPS, or set <code class="font-mono text-xs">MAXIO_ALLOW_INSECURE_DEV=true</code> or
           <code class="font-mono text-xs">MAXIO_SECURE_COOKIES=false</code> for HTTP-only deployments.
         </Callout>
+      {/if}
+
+      {#if sessionExpired}
+        <Callout type="warning">Your session has expired. Please sign in again.</Callout>
       {/if}
 
       {#if error}

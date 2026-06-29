@@ -1,6 +1,8 @@
 <script lang="ts">
   import { createMutation, createQuery } from '@tanstack/svelte-query'
+  import { createColumnHelper, createTable, FlexRender } from '@tanstack/svelte-table'
   import * as Table from '$lib/components/ui/table'
+  import { sortableHeader, sortableTableFeatures } from '$lib/table/sortable'
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
   import { Callout } from '$lib/components/ui/callout'
@@ -13,18 +15,22 @@
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import KeyRound from 'lucide-svelte/icons/key-round'
   import FileJson from 'lucide-svelte/icons/file-json'
+  import Shield from 'lucide-svelte/icons/shield'
   import Search from 'lucide-svelte/icons/search'
   import X from 'lucide-svelte/icons/x'
   import Copy from 'lucide-svelte/icons/copy'
-  import { toast } from '$lib/toast'
-  import { userKeys } from '$lib/api/keys'
+  import { toast, toastApiError } from '$lib/toast'
+  import { userKeys, policyKeys } from '$lib/api/keys'
   import {
+    attachUserPolicy,
     createUser,
     createUserKey,
     deleteUser,
     deleteUserKey,
     deleteUserPolicy,
+    detachUserPolicy,
     getUserPolicy,
+    listPolicies,
     listUsers,
     putUserPolicy,
     type IamUserSummary,
@@ -44,8 +50,12 @@
   let newKeySecret = $state<{ username: string; accessKeyId: string; secretAccessKey: string } | null>(null)
   let policyEditor = $state<{ username: string; policyName: string; document: string } | null>(null)
   let policyToDelete = $state<{ username: string; policyName: string } | null>(null)
+  let attachPolicyUser = $state<IamUserSummary | null>(null)
+  let selectedPolicyArn = $state('')
+  let detachPolicyTarget = $state<{ username: string; policyArn: string; policyName: string } | null>(null)
   let showKeySecretDialog = $state(false)
   let showPolicyDialog = $state(false)
+  let showAttachDialog = $state(false)
 
   $effect(() => {
     if (showCreate && createUserInput) {
@@ -58,6 +68,18 @@
     queryFn: listUsers,
   }))
 
+  const policiesQuery = createQuery(() => ({
+    queryKey: policyKeys.list(),
+    queryFn: listPolicies,
+    enabled: showAttachDialog,
+  }))
+
+  const attachablePolicies = $derived.by(() => {
+    if (!attachPolicyUser) return []
+    const attached = new Set(attachPolicyUser.attachedPolicies)
+    return (policiesQuery.data?.policies ?? []).filter((policy) => !attached.has(policy.arn))
+  })
+
   const allUsers = $derived(usersQuery.data?.users ?? [])
   const filteredUsers = $derived.by(() => {
     const q = searchInput.trim().toLowerCase()
@@ -68,6 +90,30 @@
         user.userId.toLowerCase().includes(q) ||
         user.accessKeys.some((key) => key.accessKeyId.toLowerCase().includes(q)),
     )
+  })
+
+  const columnHelper = createColumnHelper<typeof sortableTableFeatures, IamUserSummary>()
+  const columns = [
+    columnHelper.accessor('username', { header: sortableHeader('Username') }),
+    columnHelper.accessor('userId', { header: sortableHeader('User ID') }),
+    columnHelper.accessor((user) => user.accessKeys.length, {
+      id: 'accessKeys',
+      header: sortableHeader('Access keys'),
+    }),
+    columnHelper.accessor(
+      (user) => user.inlinePolicies.length + user.attachedPolicies.length,
+      { id: 'policies', header: sortableHeader('Policies') },
+    ),
+    columnHelper.accessor('createdAt', { header: sortableHeader('Created') }),
+    columnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
+  ]
+
+  const table = createTable({
+    features: sortableTableFeatures,
+    columns: columns as never,
+    get data() {
+      return filteredUsers
+    },
   })
 
   const createUserMutation = createMutation(() => ({
@@ -144,6 +190,25 @@
     },
   }))
 
+  const attachPolicyMutation = createMutation(() => ({
+    mutationFn: ({ username, policyArn }: { username: string; policyArn: string }) =>
+      attachUserPolicy(username, policyArn),
+    onSuccess: () => {
+      toast.success('Policy attached')
+      closeAttachDialog()
+      queryClient.invalidateQueries({ queryKey: userKeys.list() })
+    },
+  }))
+
+  const detachPolicyMutation = createMutation(() => ({
+    mutationFn: ({ username, policyArn }: { username: string; policyArn: string }) =>
+      detachUserPolicy(username, policyArn),
+    onSuccess: () => {
+      toast.success('Policy detached')
+      queryClient.invalidateQueries({ queryKey: userKeys.list() })
+    },
+  }))
+
   async function copyText(text: string, label: string) {
     try {
       await navigator.clipboard.writeText(text)
@@ -161,7 +226,7 @@
       await createUserMutation.mutateAsync(username)
     } catch (err) {
       console.error('createUser failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to create user')
+      toastApiError(err, 'Failed to create user')
     }
   }
 
@@ -177,7 +242,7 @@
       showPolicyDialog = true
     } catch (err) {
       console.error('getUserPolicy failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to load policy')
+      toastApiError(err, 'Failed to load policy')
     }
   }
 
@@ -216,6 +281,35 @@
     }
   }
 
+  function openAttachDialog(user: IamUserSummary) {
+    attachPolicyUser = user
+    selectedPolicyArn = ''
+    showAttachDialog = true
+  }
+
+  function closeAttachDialog() {
+    attachPolicyUser = null
+    selectedPolicyArn = ''
+    showAttachDialog = false
+  }
+
+  function managedPolicyName(arn: string): string {
+    return arn.split('/').pop() ?? arn
+  }
+
+  async function handleAttachPolicy() {
+    if (!attachPolicyUser || !selectedPolicyArn) return
+    try {
+      await attachPolicyMutation.mutateAsync({
+        username: attachPolicyUser.username,
+        policyArn: selectedPolicyArn,
+      })
+    } catch (err) {
+      console.error('attachUserPolicy failed:', err)
+      toastApiError(err, 'Failed to attach policy')
+    }
+  }
+
   async function savePolicy() {
     if (!policyEditor) return
     try {
@@ -228,7 +322,7 @@
       await savePolicyMutation.mutateAsync(policyEditor)
     } catch (err) {
       console.error('putUserPolicy failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to save policy')
+      toastApiError(err, 'Failed to save policy')
     }
   }
 </script>
@@ -296,17 +390,21 @@
     {:else}
       <Table.Root>
         <Table.Header>
-          <Table.Row>
-            <Table.Head>Username</Table.Head>
-            <Table.Head>User ID</Table.Head>
-            <Table.Head>Access keys</Table.Head>
-            <Table.Head>Policies</Table.Head>
-            <Table.Head>Created</Table.Head>
-            <Table.Head class="w-28"></Table.Head>
-          </Table.Row>
+          {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
+            <Table.Row>
+              {#each headerGroup.headers as header (header.id)}
+                <Table.Head class={header.column.id === 'actions' ? 'w-36' : undefined}>
+                  {#if !header.isPlaceholder}
+                    <FlexRender header={header} />
+                  {/if}
+                </Table.Head>
+              {/each}
+            </Table.Row>
+          {/each}
         </Table.Header>
         <Table.Body>
-          {#each filteredUsers as user (user.username)}
+          {#each table.getRowModel().rows as row (row.id)}
+            {@const user = row.original}
             <Table.Row>
               <Table.Cell class="font-medium">{user.username}</Table.Cell>
               <Table.Cell>
@@ -379,10 +477,20 @@
                       </button>
                     {/each}
                     {#each user.attachedPolicies as arn}
-                      <span
-                        class="rounded-sm border border-neutral-200 px-2 py-0.5 font-mono text-xs text-muted-foreground dark:border-coolgray-300"
-                        title={arn}
-                      >{arn.split('/').pop()}</span>
+                      <button
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded-sm border border-neutral-200 px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-destructive hover:text-destructive dark:border-coolgray-300"
+                        title={`Detach ${arn}`}
+                        onclick={() =>
+                          (detachPolicyTarget = {
+                            username: user.username,
+                            policyArn: arn,
+                            policyName: managedPolicyName(arn),
+                          })}
+                      >
+                        <Shield class="size-3 opacity-70" />
+                        {managedPolicyName(arn)}
+                      </button>
                     {/each}
                   </div>
                 {/if}
@@ -398,6 +506,15 @@
                     onclick={() => (keyToCreate = user.username)}
                   >
                     <KeyRound class="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    class="text-muted-foreground transition-colors hover:text-foreground"
+                    title="Attach managed policy"
+                    aria-label="Attach managed policy"
+                    onclick={() => openAttachDialog(user)}
+                  >
+                    <Shield class="size-4" />
                   </button>
                   <button
                     type="button"
@@ -560,7 +677,7 @@
       await deleteUserMutation.mutateAsync(userToDelete)
     } catch (err) {
       console.error('deleteUser failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to delete user')
+      toastApiError(err, 'Failed to delete user')
     } finally {
       userToDelete = null
     }
@@ -581,7 +698,7 @@
       await createKeyMutation.mutateAsync({ username })
     } catch (err) {
       console.error('createUserKey failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to create access key')
+      toastApiError(err, 'Failed to create access key')
     } finally {
       keyToCreate = null
     }
@@ -602,7 +719,7 @@
       await deleteKeyMutation.mutateAsync(keyToDelete)
     } catch (err) {
       console.error('deleteUserKey failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to delete key')
+      toastApiError(err, 'Failed to delete key')
     } finally {
       keyToDelete = null
     }
@@ -624,10 +741,85 @@
       closePolicyDialog()
     } catch (err) {
       console.error('deleteUserPolicy failed:', err)
-      toast.error(err instanceof ApiError ? err.message : 'Failed to delete policy')
+      toastApiError(err, 'Failed to delete policy')
     } finally {
       policyToDelete = null
     }
   }}
   onClose={() => (policyToDelete = null)}
+/>
+
+<Dialog
+  bind:open={showAttachDialog}
+  title="Attach managed policy"
+  description={attachPolicyUser ? `Attach a managed policy to user "${attachPolicyUser.username}".` : ''}
+  loading={attachPolicyMutation.isPending}
+  onClose={closeAttachDialog}
+>
+  {#if attachPolicyUser}
+    {#if policiesQuery.isPending}
+      <p class="text-sm text-muted-foreground">Loading policies…</p>
+    {:else if policiesQuery.isError}
+      <Callout type="danger">
+        {policiesQuery.error instanceof ApiError ? policiesQuery.error.message : 'Failed to load policies'}
+      </Callout>
+    {:else if attachablePolicies.length === 0}
+      <Callout type="info">
+        No managed policies available to attach. Create one on the Policies page first.
+      </Callout>
+    {:else}
+      <div class="space-y-1.5">
+        <Label for="attachPolicySelect">Policy</Label>
+        <select
+          id="attachPolicySelect"
+          bind:value={selectedPolicyArn}
+          class="input-cool h-8 w-full rounded-sm bg-background px-3 text-sm"
+          disabled={attachPolicyMutation.isPending}
+        >
+          <option value="">Select a policy…</option>
+          {#each attachablePolicies as policy (policy.arn)}
+            <option value={policy.arn}>{policy.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
+  {/if}
+  {#snippet footer()}
+    <Button variant="outline" disabled={attachPolicyMutation.isPending} onclick={closeAttachDialog}>
+      Cancel
+    </Button>
+    <Button
+      variant="brand"
+      disabled={attachPolicyMutation.isPending || !selectedPolicyArn}
+      onclick={handleAttachPolicy}
+    >
+      {attachPolicyMutation.isPending ? 'Attaching…' : 'Attach policy'}
+    </Button>
+  {/snippet}
+</Dialog>
+
+<ConfirmDialog
+  open={detachPolicyTarget !== null}
+  title="Detach managed policy?"
+  description={detachPolicyTarget
+    ? `Remove policy "${detachPolicyTarget.policyName}" from user "${detachPolicyTarget.username}"?`
+    : ''}
+  confirmLabel="Detach"
+  confirmVariant="destructive"
+  loading={detachPolicyMutation.isPending}
+  onConfirm={async () => {
+    if (!detachPolicyTarget) return
+    try {
+      await detachPolicyMutation.mutateAsync({
+        username: detachPolicyTarget.username,
+        policyArn: detachPolicyTarget.policyArn,
+      })
+    } catch (err) {
+      console.error('detachUserPolicy failed:', err)
+      toastApiError(err, 'Failed to detach policy')
+    } finally {
+      detachPolicyTarget = null
+    }
+  }}
+  onClose={() => (detachPolicyTarget = null)}
 />

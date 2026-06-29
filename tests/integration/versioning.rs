@@ -53,4 +53,17 @@ async fn test_put_get_bucket_versioning() {
     .await;
     assert_eq!(hist.status(), 200);
     assert_eq!(&hist.bytes().await.unwrap()[..], b"v1");
+
+    let suspend = s3_request(
+        "PUT",
+        &format!("{}/{bucket}?versioning", base_url),
+        br#"<VersioningConfiguration><Status>Suspended</Status></VersioningConfiguration>"#.to_vec(),
+    )
+    .await;
+    assert_eq!(suspend.status(), 200);
+
+    let get_suspended = s3_request("GET", &format!("{}/{bucket}?versioning", base_url), vec![]).await;
+    assert_eq!(get_suspended.status(), 200);
+    let suspended_body = get_suspended.text().await.unwrap();
+    assert!(suspended_body.contains("<Status>Suspended</Status>"));
 }

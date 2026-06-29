@@ -1,7 +1,10 @@
 <script lang="ts">
   import { createQuery } from '@tanstack/svelte-query'
+  import { createColumnHelper, createTable, FlexRender } from '@tanstack/svelte-table'
   import { untrack } from 'svelte'
   import * as Table from '$lib/components/ui/table'
+  import { sortableHeader, sortableTableFeatures } from '$lib/table/sortable'
+  import type { CacheSnapshot, MetadataOpSnapshot, StorageOpSnapshot } from '$lib/api/metrics'
   import * as Card from '$lib/components/ui/card'
   import { Callout } from '$lib/components/ui/callout'
   import { Badge } from '$lib/components/ui/badge'
@@ -42,6 +45,62 @@
     const totalIops =
       data.opsTotals.readIops + data.opsTotals.writeIops + data.opsTotals.metaIops
     peakIops = Math.max(totalIops, untrack(() => peakIops) * 0.95)
+  })
+
+  const otherCaches = $derived(
+    metricsQuery.data?.caches.filter((cache) => cache.id !== 'object_disk') ?? [],
+  )
+  const storageOps = $derived(metricsQuery.data?.storageOps ?? [])
+  const metadataOps = $derived(metricsQuery.data?.metadataOps ?? [])
+
+  const cacheColumnHelper = createColumnHelper<typeof sortableTableFeatures, CacheSnapshot>()
+  const cacheColumns = [
+    cacheColumnHelper.accessor('id', { header: sortableHeader('Cache') }),
+    cacheColumnHelper.accessor('hits', { header: sortableHeader('Hits', 'ml-auto') }),
+    cacheColumnHelper.accessor('misses', { header: sortableHeader('Misses', 'ml-auto') }),
+    cacheColumnHelper.accessor(
+      (cache) => (cache.hits + cache.misses > 0 ? cache.hits / (cache.hits + cache.misses) : 0),
+      { id: 'hitRate', header: sortableHeader('Hit Rate', 'ml-auto') },
+    ),
+    cacheColumnHelper.accessor('evictions', { header: sortableHeader('Evictions', 'ml-auto') }),
+    cacheColumnHelper.accessor('entries', { header: sortableHeader('Entries', 'ml-auto') }),
+  ]
+
+  const cacheTable = createTable({
+    features: sortableTableFeatures,
+    columns: cacheColumns as never,
+    get data() {
+      return otherCaches
+    },
+  })
+
+  const opColumnHelper = createColumnHelper<
+    typeof sortableTableFeatures,
+    StorageOpSnapshot | MetadataOpSnapshot
+  >()
+  const opColumns = [
+    opColumnHelper.accessor('operation', { header: sortableHeader('Operation') }),
+    opColumnHelper.accessor('count', { header: sortableHeader('Count', 'ml-auto') }),
+    opColumnHelper.accessor(
+      (op) => (op.count > 0 ? op.sumSeconds / op.count : 0),
+      { id: 'avgLatency', header: sortableHeader('Avg latency', 'ml-auto') },
+    ),
+  ]
+
+  const storageOpsTable = createTable({
+    features: sortableTableFeatures,
+    columns: opColumns as never,
+    get data() {
+      return storageOps
+    },
+  })
+
+  const metadataOpsTable = createTable({
+    features: sortableTableFeatures,
+    columns: opColumns as never,
+    get data() {
+      return metadataOps
+    },
   })
 </script>
 
@@ -244,7 +303,6 @@
     </div>
 
     {@const objectDiskCache = data.caches.find((cache) => cache.id === 'object_disk')}
-    {@const otherCaches = data.caches.filter((cache) => cache.id !== 'object_disk')}
 
     {#if objectDiskCache}
       {@const sizePercent =
@@ -386,17 +444,21 @@
       </div>
       <Table.Root>
         <Table.Header>
-          <Table.Row>
-            <Table.Head>Cache</Table.Head>
-            <Table.Head class="text-right">Hits</Table.Head>
-            <Table.Head class="text-right">Misses</Table.Head>
-            <Table.Head class="text-right">Hit Rate</Table.Head>
-            <Table.Head class="text-right">Evictions</Table.Head>
-            <Table.Head class="text-right">Entries</Table.Head>
-          </Table.Row>
+          {#each cacheTable.getHeaderGroups() as headerGroup (headerGroup.id)}
+            <Table.Row>
+              {#each headerGroup.headers as header (header.id)}
+                <Table.Head class={header.column.id === 'id' ? undefined : 'text-right'}>
+                  {#if !header.isPlaceholder}
+                    <FlexRender header={header} />
+                  {/if}
+                </Table.Head>
+              {/each}
+            </Table.Row>
+          {/each}
         </Table.Header>
         <Table.Body>
-          {#each otherCaches as cache (cache.id)}
+          {#each cacheTable.getRowModel().rows as row (row.id)}
+            {@const cache = row.original}
             <Table.Row>
               <Table.Cell class="text-base font-bold dark:text-white">
                 {formatMetricName(cache.id)}
@@ -422,14 +484,21 @@
       {:else}
         <Table.Root>
           <Table.Header>
-            <Table.Row>
-              <Table.Head>Operation</Table.Head>
-              <Table.Head class="text-right">Count</Table.Head>
-              <Table.Head class="text-right">Avg latency</Table.Head>
-            </Table.Row>
+            {#each storageOpsTable.getHeaderGroups() as headerGroup (headerGroup.id)}
+              <Table.Row>
+                {#each headerGroup.headers as header (header.id)}
+                  <Table.Head class={header.column.id === 'operation' ? undefined : 'text-right'}>
+                    {#if !header.isPlaceholder}
+                      <FlexRender header={header} />
+                    {/if}
+                  </Table.Head>
+                {/each}
+              </Table.Row>
+            {/each}
           </Table.Header>
           <Table.Body>
-            {#each data.storageOps as op}
+            {#each storageOpsTable.getRowModel().rows as row (row.id)}
+              {@const op = row.original}
               <Table.Row>
                 <Table.Cell class="text-base font-bold dark:text-white">
                   {formatOperationName(op.operation)}
@@ -461,14 +530,21 @@
       {:else}
         <Table.Root>
           <Table.Header>
-            <Table.Row>
-              <Table.Head>Operation</Table.Head>
-              <Table.Head class="text-right">Count</Table.Head>
-              <Table.Head class="text-right">Avg latency</Table.Head>
-            </Table.Row>
+            {#each metadataOpsTable.getHeaderGroups() as headerGroup (headerGroup.id)}
+              <Table.Row>
+                {#each headerGroup.headers as header (header.id)}
+                  <Table.Head class={header.column.id === 'operation' ? undefined : 'text-right'}>
+                    {#if !header.isPlaceholder}
+                      <FlexRender header={header} />
+                    {/if}
+                  </Table.Head>
+                {/each}
+              </Table.Row>
+            {/each}
           </Table.Header>
           <Table.Body>
-            {#each data.metadataOps as op}
+            {#each metadataOpsTable.getRowModel().rows as row (row.id)}
+              {@const op = row.original}
               <Table.Row>
                 <Table.Cell class="text-base font-bold dark:text-white">
                   {formatOperationName(op.operation)}

@@ -4,7 +4,9 @@ use std::collections::HashMap;
 pub use crate::db::repos::PutBucketContext;
 
 use super::traits::{DelimitedListPage, ListPage};
-use super::{BucketMeta, CorsRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError};
+use super::{
+    BucketMeta, CorsRule, LifecycleRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError,
+};
 
 #[async_trait]
 pub trait MetadataStore: Send + Sync {
@@ -21,8 +23,41 @@ pub trait MetadataStore: Send + Sync {
     -> Result<(), StorageError>;
     async fn get_bucket_cors(&self, bucket: &str) -> Result<Vec<CorsRule>, StorageError>;
     async fn delete_bucket_cors(&self, bucket: &str) -> Result<(), StorageError>;
+    async fn put_bucket_lifecycle(
+        &self,
+        bucket: &str,
+        rules: Vec<LifecycleRule>,
+    ) -> Result<(), StorageError>;
+    async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, StorageError>;
+    async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<(), StorageError>;
+    async fn list_buckets_with_lifecycle(
+        &self,
+    ) -> Result<Vec<crate::db::repos::BucketLifecycleEntry>, StorageError>;
+    async fn list_expired_current_objects(
+        &self,
+        bucket_id: uuid::Uuid,
+        prefix: &str,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> Result<Vec<String>, StorageError>;
+    async fn list_expired_noncurrent_versions(
+        &self,
+        bucket_id: uuid::Uuid,
+        prefix: &str,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> Result<Vec<crate::db::repos::ExpiredVersionRef>, StorageError>;
     async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError>;
+    async fn get_versioning_state(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::VersioningState, StorageError>;
     async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError>;
+    async fn set_versioning_state(
+        &self,
+        bucket: &str,
+        state: crate::storage::VersioningState,
+    ) -> Result<(), StorageError>;
 
     async fn fetch_put_bucket_context(
         &self,
@@ -73,6 +108,8 @@ pub trait MetadataStore: Send + Sync {
         start_after: Option<&str>,
         max_keys: usize,
         search: Option<&str>,
+        sort: crate::db::repos::ConsoleListSort,
+        order: crate::db::repos::SortOrder,
     ) -> Result<DelimitedListPage, StorageError>;
     async fn put_object_acl(
         &self,

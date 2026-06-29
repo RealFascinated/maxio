@@ -27,13 +27,16 @@ use axum::{
     extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
 };
-use bucket_settings::{get_cors, get_public, get_versioning, set_cors, set_public, set_versioning};
+use bucket_settings::{
+    get_cors, get_lifecycle, get_public, get_versioning, set_cors, set_lifecycle, set_public,
+    set_versioning,
+};
 use buckets::{create_bucket, delete_bucket_api, list_buckets};
 use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
 use metrics::get_metrics_api;
 use objects::{
-    create_folder, delete_folder, delete_object_api, download_object, get_object_api, list_objects,
-    presign_object, preview_folder_delete, upload_object,
+    create_folder, delete_folder, delete_object_api, delete_objects_api, download_object,
+    get_object_api, list_objects, presign_object, preview_folder_delete, upload_object,
 };
 use versions::{delete_version, download_version, list_versions};
 
@@ -101,6 +104,7 @@ pub fn console_router(state: AppState) -> Router<AppState> {
             post(preview_folder_delete),
         )
         .route("/buckets/{bucket}/objects", get(list_objects))
+        .route("/buckets/{bucket}/objects/delete", post(delete_objects_api))
         .route(
             "/buckets/{bucket}/objects/{*key}",
             get(get_object_api).delete(delete_object_api),
@@ -113,6 +117,8 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .route("/buckets/{bucket}/public", put(set_public))
         .route("/buckets/{bucket}/cors", get(get_cors))
         .route("/buckets/{bucket}/cors", put(set_cors))
+        .route("/buckets/{bucket}/lifecycle", get(get_lifecycle))
+        .route("/buckets/{bucket}/lifecycle", put(set_lifecycle))
         .route("/buckets/{bucket}/versions", get(list_versions))
         .route(
             "/buckets/{bucket}/versions/{version_id}/objects/{*key}",

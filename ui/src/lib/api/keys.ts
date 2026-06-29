@@ -12,8 +12,15 @@ export const bucketKeys = {
 
 export const objectKeys = {
   all: ['objects'] as const,
-  list: (bucket: string, prefix: string, q?: string) =>
-    [...objectKeys.all, 'list', bucket, prefix, q ?? ''] as const,
+  list: (
+    bucket: string,
+    prefix: string,
+    q?: string,
+    sort: string = 'name',
+    order: string = 'asc',
+  ) => [...objectKeys.all, 'list', bucket, prefix, q ?? '', sort, order] as const,
+  listScope: (bucket: string, prefix: string) =>
+    [...objectKeys.all, 'list', bucket, prefix] as const,
   detail: (bucket: string, key: string) =>
     [...objectKeys.all, 'detail', bucket, key] as const,
 }
@@ -28,14 +35,20 @@ export const settingsKeys = {
   versioning: (bucket: string) => [...settingsKeys.all, 'versioning', bucket] as const,
   publicAccess: (bucket: string) => [...settingsKeys.all, 'public', bucket] as const,
   cors: (bucket: string) => [...settingsKeys.all, 'cors', bucket] as const,
+  lifecycle: (bucket: string) => [...settingsKeys.all, 'lifecycle', bucket] as const,
 }
 
 export const userKeys = {
   all: ['users'] as const,
   list: () => [...userKeys.all, 'list'] as const,
-  policies: () => [...userKeys.all, 'policies'] as const,
   userPolicy: (username: string, policyName: string) =>
     [...userKeys.all, 'policy', username, policyName] as const,
+}
+
+export const policyKeys = {
+  all: ['policies'] as const,
+  list: () => [...policyKeys.all, 'list'] as const,
+  detail: (name: string) => [...policyKeys.all, 'detail', name] as const,
 }
 
 export const metricsKeys = {

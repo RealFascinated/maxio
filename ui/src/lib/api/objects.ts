@@ -1,4 +1,5 @@
-import { apiFetch, encodeObjectKey } from './http'
+import { apiFetch, ApiError, encodeObjectKey } from './http'
+import { notifyUnauthorized, SessionExpiredError } from './session'
 import { guessContentType } from '$lib/mime'
 
 export interface S3File {
@@ -21,11 +22,16 @@ export interface ObjectsResponse {
   nextContinuationToken?: string | null
 }
 
+export type ObjectListSort = 'name' | 'size' | 'modified' | 'type'
+export type SortOrder = 'asc' | 'desc'
+
 export async function listObjects(
   bucket: string,
   prefix: string,
   startAfter?: string,
   q?: string,
+  sort: ObjectListSort = 'name',
+  order: SortOrder = 'asc',
 ): Promise<ObjectsResponse> {
   const params = new URLSearchParams({ prefix, delimiter: '/' })
   if (startAfter) {
@@ -34,6 +40,12 @@ export async function listObjects(
   const trimmed = q?.trim()
   if (trimmed) {
     params.set('q', trimmed)
+  }
+  if (sort !== 'name') {
+    params.set('sort', sort)
+  }
+  if (order !== 'asc') {
+    params.set('order', order)
   }
   return apiFetch<ObjectsResponse>(`/api/buckets/${encodeURIComponent(bucket)}/objects?${params}`)
 }
@@ -59,7 +71,11 @@ export async function uploadObject(
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve({ ok: true })
-      else reject(new Error(`Upload failed (${xhr.status})`))
+      else if (xhr.status === 401 && notifyUnauthorized(url)) {
+        reject(new SessionExpiredError())
+      } else {
+        reject(new ApiError(`Upload failed (${xhr.status})`, xhr.status))
+      }
     }
     xhr.onerror = () => reject(new Error('Upload failed'))
     xhr.send(file)
@@ -80,16 +96,10 @@ export interface DeleteObjectsResult {
 }
 
 export async function deleteObjects(bucket: string, keys: string[]): Promise<DeleteObjectsResult> {
-  const failed: string[] = []
-  for (const key of keys) {
-    try {
-      await deleteObject(bucket, key)
-    } catch (err) {
-      console.error('deleteObject failed:', key, err)
-      failed.push(key)
-    }
-  }
-  return { deleted: keys.length - failed.length, failed }
+  return apiFetch<DeleteObjectsResult>(`/api/buckets/${encodeURIComponent(bucket)}/objects/delete`, {
+    method: 'POST',
+    body: JSON.stringify({ keys }),
+  })
 }
 
 export async function createFolder(bucket: string, name: string): Promise<{ ok: boolean }> {
