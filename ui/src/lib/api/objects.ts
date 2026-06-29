@@ -57,7 +57,7 @@ export async function uploadObject(
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<{ ok: boolean }> {
   const contentType = file.type || guessContentType(file.name)
-  const url = `/api/buckets/${encodeURIComponent(bucket)}/upload/${encodeObjectKey(key)}`
+  const url = `/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(key)}`
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -149,9 +149,9 @@ export async function deleteFolders(bucket: string, prefixes: string[]): Promise
 }
 
 export async function presignObject(bucket: string, key: string, expires: number): Promise<{ url: string }> {
-  return apiFetch<{ url: string }>(`/api/buckets/${encodeURIComponent(bucket)}/presign/${encodeObjectKey(key)}?expires=${expires}`)
+  return apiFetch<{ url: string }>(`/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(key)}?presign=1&expires=${expires}`)
 }
 
 export function downloadUrl(bucket: string, key: string): string {
-  return `/api/buckets/${encodeURIComponent(bucket)}/download/${encodeObjectKey(key)}`
+  return `/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(key)}?download=1`
 }

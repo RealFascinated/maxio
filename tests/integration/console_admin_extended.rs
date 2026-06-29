@@ -588,7 +588,7 @@ async fn test_console_bucket_owner_bypasses_deny_policy() {
 
     let download = client()
         .get(format!(
-            "{base_url}/api/buckets/owner-console-bucket/download/owned.txt"
+            "{base_url}/api/buckets/owner-console-bucket/objects/owned.txt?download=1"
         ))
         .header("cookie", format!("maxio_session={session}"))
         .send()
@@ -670,7 +670,7 @@ async fn test_console_object_acl_grants_access() {
     let session = console_login_with_creds(&base_url, &access_key, &secret).await;
     let download = client()
         .get(format!(
-            "{base_url}/api/buckets/{bucket}/download/shared.txt"
+            "{base_url}/api/buckets/{bucket}/objects/shared.txt?download=1"
         ))
         .header("cookie", format!("maxio_session={session}"))
         .send()

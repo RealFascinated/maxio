@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::server::AppState;
-use crate::storage::LifecycleRule;
+use crate::storage::{LifecycleRule, VersioningState};
 
 use super::access::console_bucket_check;
 use super::session::ConsoleSession;
@@ -22,10 +22,10 @@ pub async fn get_versioning(
         return resp;
     }
 
-    match state.storage.is_versioned(&bucket).await {
-        Ok(enabled) => (
+    match state.storage.get_versioning_state(&bucket).await {
+        Ok(state) => (
             StatusCode::OK,
-            Json(serde_json::json!({"enabled": enabled})),
+            Json(serde_json::json!({"enabled": state == VersioningState::Enabled})),
         )
             .into_response(),
         Err(e) => (
@@ -53,7 +53,16 @@ pub async fn set_versioning(
         return resp;
     }
 
-    match state.storage.set_versioning(&bucket, body.enabled).await {
+    let versioning = if body.enabled {
+        VersioningState::Enabled
+    } else {
+        VersioningState::Suspended
+    };
+    match state
+        .storage
+        .set_versioning_state(&bucket, versioning)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

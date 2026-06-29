@@ -15,7 +15,7 @@ async fn test_console_upload_and_download() {
 
     let upload = client()
         .put(format!(
-            "{}/api/buckets/{bucket}/upload/hello.txt",
+            "{}/api/buckets/{bucket}/objects/hello.txt",
             base_url
         ))
         .header("cookie", format!("maxio_session={session}"))
@@ -29,7 +29,7 @@ async fn test_console_upload_and_download() {
 
     let download = client()
         .get(format!(
-            "{}/api/buckets/{bucket}/download/hello.txt",
+            "{}/api/buckets/{bucket}/objects/hello.txt?download=1",
             base_url
         ))
         .header("cookie", format!("maxio_session={session}"))

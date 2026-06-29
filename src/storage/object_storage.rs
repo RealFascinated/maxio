@@ -254,7 +254,10 @@ impl ObjectStorage {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
 
-        let versioned = self.meta.is_versioned(bucket).await.unwrap_or(false);
+        let versioned = matches!(
+            self.meta.get_versioning_state(bucket).await,
+            Ok(crate::storage::VersioningState::Enabled)
+        );
         if versioned {
             let version_id = BlobStorage::generate_version_id();
             let (owner_id, owner_name) = self.bucket_owner(bucket).await?;
@@ -657,14 +660,6 @@ impl Storage for ObjectStorage {
 
     async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<(), StorageError> {
         self.meta.delete_bucket_lifecycle(bucket).await
-    }
-
-    async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
-        self.meta.is_versioned(bucket).await
-    }
-
-    async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
-        self.meta.set_versioning(bucket, enabled).await
     }
 
     async fn get_versioning_state(
@@ -1155,11 +1150,11 @@ impl Storage for ObjectStorage {
         let mut total = 0u64;
 
         for entry in entries {
-            let versioned = self
-                .meta
-                .is_versioned(&entry.bucket_name)
-                .await
-                .unwrap_or(false);
+            let versioned = matches!(
+                self.meta.get_versioning_state(&entry.bucket_name).await,
+                Ok(crate::storage::VersioningState::Enabled)
+                    | Ok(crate::storage::VersioningState::Suspended)
+            );
 
             for rule in &entry.rules {
                 if !rule.enabled {

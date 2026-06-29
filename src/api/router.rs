@@ -18,24 +18,23 @@ async fn options_handler() -> Response<Body> {
         .unwrap()
 }
 
+macro_rules! bucket_route {
+    ($router:expr, $method:ident, $handler:expr) => {
+        $router
+            .route("/{bucket}", $method($handler))
+            .route("/{bucket}/", $method($handler))
+    };
+}
+
 pub fn s3_router() -> Router<AppState> {
-    Router::new()
-        .route("/", get(bucket::list_buckets))
-        // Bucket routes — with and without trailing slash
-        .route("/{bucket}", put(bucket::handle_bucket_put))
-        .route("/{bucket}/", put(bucket::handle_bucket_put))
-        .route("/{bucket}", head(bucket::head_bucket))
-        .route("/{bucket}/", head(bucket::head_bucket))
-        .route("/{bucket}", delete(bucket::delete_bucket))
-        .route("/{bucket}/", delete(bucket::delete_bucket))
-        .route("/{bucket}", get(list::handle_bucket_get))
-        .route("/{bucket}/", get(list::handle_bucket_get))
-        .route("/{bucket}", options(options_handler))
-        .route("/{bucket}/", options(options_handler))
-        // POST for DeleteObjects (multi-object delete)
-        .route("/{bucket}", post(object::delete_objects))
-        .route("/{bucket}/", post(object::delete_objects))
-        // Object routes
+    let router = Router::new().route("/", get(bucket::list_buckets));
+    let router = bucket_route!(router, put, bucket::handle_bucket_put);
+    let router = bucket_route!(router, head, bucket::head_bucket);
+    let router = bucket_route!(router, delete, bucket::delete_bucket);
+    let router = bucket_route!(router, get, list::handle_bucket_get);
+    let router = bucket_route!(router, options, options_handler);
+    let router = bucket_route!(router, post, object::delete_objects);
+    router
         .route("/{bucket}/{*key}", post(object::post_object))
         .route("/{bucket}/{*key}", put(object::put_object))
         .route("/{bucket}/{*key}", get(object::get_object))

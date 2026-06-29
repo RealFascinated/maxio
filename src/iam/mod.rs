@@ -1,6 +1,7 @@
 pub mod acl;
 pub mod authz;
 pub mod caching_store;
+pub mod format;
 pub mod iam_store;
 pub mod pg_store;
 pub mod policy;

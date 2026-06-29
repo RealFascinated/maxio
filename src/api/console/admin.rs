@@ -7,26 +7,15 @@ use axum::{
 
 use crate::server::AppState;
 
+use super::admin_views;
+
 pub async fn list_users_api(State(state): State<AppState>) -> impl IntoResponse {
     let users: Vec<_> = state
         .user_store
         .list_users()
         .await
         .into_iter()
-        .map(|u| {
-            serde_json::json!({
-                "username": u.username,
-                "userId": u.user_id,
-                "createdAt": u.created_at,
-                "accessKeys": u.access_keys.iter().map(|k| serde_json::json!({
-                    "accessKeyId": k.access_key_id,
-                    "status": format!("{:?}", k.status),
-                    "createdAt": k.created_at,
-                })).collect::<Vec<_>>(),
-                "attachedPolicies": u.attached_policies,
-                "inlinePolicies": u.inline_policies.iter().map(|p| p.policy_name.clone()).collect::<Vec<_>>(),
-            })
-        })
+        .map(|u| admin_views::user_json(&u))
         .collect();
     (StatusCode::OK, Json(serde_json::json!({ "users": users }))).into_response()
 }
@@ -38,11 +27,7 @@ pub async fn create_user_key_api(
     match state.user_store.create_access_key(&username).await {
         Ok(key) => (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "accessKeyId": key.access_key_id,
-                "secretAccessKey": key.secret_access_key,
-            })),
+            Json(admin_views::create_access_key_json(&key)),
         )
             .into_response(),
         Err(e) => (
@@ -126,10 +111,10 @@ pub async fn get_user_policy_api(
     match policy {
         Some(p) => (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "policyName": p.policy_name,
-                "document": serde_json::to_string(&p.document).unwrap_or_default(),
-            })),
+            Json(admin_views::inline_policy_json(
+                &p.policy_name,
+                &serde_json::to_value(&p.document).unwrap_or_default(),
+            )),
         )
             .into_response(),
         None => (
@@ -208,13 +193,7 @@ pub async fn list_policies_api(State(state): State<AppState>) -> impl IntoRespon
         .list_managed_policies()
         .await
         .into_iter()
-        .map(|p| {
-            serde_json::json!({
-                "name": p.policy_name,
-                "policyId": p.policy_id,
-                "arn": p.arn,
-            })
-        })
+        .map(|p| admin_views::policy_summary_json(&p))
         .collect();
     (
         StatusCode::OK,
@@ -250,11 +229,7 @@ pub async fn create_policy_api(
     {
         Ok(policy) => (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "name": policy.policy_name,
-                "arn": policy.arn,
-            })),
+            Json(admin_views::create_policy_json(&policy)),
         )
             .into_response(),
         Err(e) => (
@@ -270,15 +245,7 @@ pub async fn get_policy_api(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     match state.user_store.get_managed_policy(&name).await {
-        Some(p) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "name": p.policy_name,
-                "arn": p.arn,
-                "document": serde_json::to_string(&p.document).unwrap_or_default(),
-            })),
-        )
-            .into_response(),
+        Some(p) => (StatusCode::OK, Json(admin_views::policy_detail_json(&p))).into_response(),
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Policy not found"})),
@@ -319,15 +286,7 @@ pub async fn create_user_api(
                 .ok();
             (
                 StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": true,
-                    "username": user.username,
-                    "userId": user.user_id,
-                    "accessKey": key.map(|k| serde_json::json!({
-                        "accessKeyId": k.access_key_id,
-                        "secretAccessKey": k.secret_access_key,
-                    })),
-                })),
+                Json(admin_views::create_user_json(&user, key.as_ref())),
             )
                 .into_response()
         }

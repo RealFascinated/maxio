@@ -82,11 +82,7 @@ pub async fn check_bucket_access(
     }
 
     let ctx = load_bucket_auth(state, bucket).await?;
-    let resource = if action == "s3:ListBucket" || action.starts_with("s3:GetBucket") {
-        crate::iam::authz::bucket_arn(bucket)
-    } else {
-        crate::iam::authz::bucket_arn(bucket)
-    };
+    let resource = crate::iam::authz::bucket_arn(bucket);
     check_access(state, principal, action, &resource, &ctx, None).await?;
     Ok(ctx)
 }

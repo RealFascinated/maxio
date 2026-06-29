@@ -252,7 +252,7 @@ async fn test_console_versions_list_download_delete() {
 
     let download = client()
         .get(format!(
-            "{}/api/buckets/{bucket}/versions/{old_version_id}/download/{key}",
+            "{}/api/buckets/{bucket}/objects/{key}?versionId={old_version_id}&download=1",
             base_url
         ))
         .header("cookie", format!("maxio_session={session}"))
@@ -264,7 +264,7 @@ async fn test_console_versions_list_download_delete() {
 
     let delete = client()
         .delete(format!(
-            "{}/api/buckets/{bucket}/versions/{old_version_id}/objects/{key}",
+            "{}/api/buckets/{bucket}/objects/{key}?versionId={old_version_id}",
             base_url
         ))
         .header("cookie", format!("maxio_session={session}"))

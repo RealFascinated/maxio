@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{
     AclGrantRow, BucketAuthSnapshot, PutBucketContext, db_err, encode_grantee, format_ts, get_conn,
-    grants_to_acl, permission_to_db, resolve_bucket_id,
+    grants_to_acl, parse_ts, permission_to_db, resolve_bucket_id,
 };
 
 type BucketListRow = (Uuid, String, chrono::DateTime<Utc>, bool, String, String);
@@ -40,7 +40,7 @@ pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, S
     }
 
     let bucket_id = Uuid::new_v4();
-    let created_at = parse_created_at(&meta.created_at)?;
+    let created_at = parse_ts(&meta.created_at)?;
 
     diesel::insert_into(buckets::table)
         .values((
@@ -215,8 +215,6 @@ pub async fn list_buckets(ctx: &DbContext) -> Result<Vec<BucketMeta>, StorageErr
             owner_display_name,
             acl,
             policy,
-            public_read: false,
-            public_list: false,
         });
     }
     Ok(result)
@@ -417,18 +415,6 @@ pub(crate) async fn load_bucket_cache_entry(
     })
 }
 
-pub async fn is_versioned(ctx: &DbContext, bucket: &str) -> Result<bool, StorageError> {
-    validate_bucket_name(bucket)?;
-    if let Some(entry) = ctx.bucket_cache().get(bucket) {
-        return Ok(entry.versioning);
-    }
-    ctx.bucket_cache().record_miss();
-    let mut conn = get_conn(ctx.pool()).await?;
-    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
-    ctx.bucket_cache().insert(bucket, entry.clone());
-    Ok(entry.versioning)
-}
-
 pub async fn get_versioning_state(
     ctx: &DbContext,
     bucket: &str,
@@ -450,19 +436,6 @@ pub async fn get_versioning_state(
     } else {
         crate::storage::VersioningState::Unversioned
     })
-}
-
-pub async fn set_versioning(
-    ctx: &DbContext,
-    bucket: &str,
-    enabled: bool,
-) -> Result<(), StorageError> {
-    let state = if enabled {
-        crate::storage::VersioningState::Enabled
-    } else {
-        crate::storage::VersioningState::Suspended
-    };
-    set_versioning_state(ctx, bucket, state).await
 }
 
 pub async fn set_versioning_state(
@@ -610,14 +583,4 @@ async fn replace_bucket_acl(
             .map_err(db_err)?;
     }
     Ok(())
-}
-
-fn parse_created_at(s: &str) -> Result<chrono::DateTime<Utc>, StorageError> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .or_else(|_| {
-            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3fZ")
-                .map(|ndt| ndt.and_utc())
-        })
-        .map_err(db_err)
 }

@@ -15,5 +15,5 @@ export async function listVersions(bucket: string, objectKey: string): Promise<V
 }
 
 export async function deleteVersion(bucket: string, objectKey: string, versionId: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/versions/${encodeURIComponent(versionId)}/objects/${encodeObjectKey(objectKey)}`, { method: 'DELETE' })
+  return apiFetch<{ ok: boolean }>(`/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(objectKey)}?versionId=${encodeURIComponent(versionId)}`, { method: 'DELETE' })
 }

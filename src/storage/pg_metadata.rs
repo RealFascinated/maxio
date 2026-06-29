@@ -218,22 +218,6 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
-    async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError> {
-        meta_op!(
-            self,
-            "is_versioned",
-            repos::is_versioned(&self.ctx, bucket).await
-        )
-    }
-
-    async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError> {
-        meta_op!(
-            self,
-            "set_versioning",
-            repos::set_versioning(&self.ctx, bucket, enabled).await
-        )
-    }
-
     async fn get_versioning_state(
         &self,
         bucket: &str,

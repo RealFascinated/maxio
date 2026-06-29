@@ -43,12 +43,10 @@ pub trait Storage: Send + Sync {
     ) -> Result<(), StorageError>;
     async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>, StorageError>;
     async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<(), StorageError>;
-    async fn is_versioned(&self, bucket: &str) -> Result<bool, StorageError>;
     async fn get_versioning_state(
         &self,
         bucket: &str,
     ) -> Result<crate::storage::VersioningState, StorageError>;
-    async fn set_versioning(&self, bucket: &str, enabled: bool) -> Result<(), StorageError>;
     async fn set_versioning_state(
         &self,
         bucket: &str,

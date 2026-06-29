@@ -1,13 +1,9 @@
-use axum::{
-    Json,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+use axum::{Json, http::StatusCode, response::Response};
 
 use crate::api::authz::{check_bucket_access, check_object_access};
-use crate::error::{S3Error, S3ErrorCode};
 use crate::server::AppState;
 
+use super::error::s3_error_to_response;
 use super::session::ConsoleSession;
 
 pub(crate) type ConsoleDeny = (StatusCode, Json<serde_json::Value>);
@@ -17,22 +13,6 @@ pub(crate) fn console_forbidden() -> ConsoleDeny {
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({"error": "Access Denied"})),
     )
-}
-
-fn s3_error_to_response(err: S3Error) -> Response {
-    match err.code {
-        S3ErrorCode::NoSuchBucket => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Bucket not found"})),
-        )
-            .into_response(),
-        S3ErrorCode::AccessDenied => console_forbidden().into_response(),
-        _ => (
-            err.code.status_code(),
-            Json(serde_json::json!({"error": err.message})),
-        )
-            .into_response(),
-    }
 }
 
 pub(crate) async fn console_check(

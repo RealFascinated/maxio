@@ -182,8 +182,6 @@ async fn test_delete_bucket_sweeps_nested_versions() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();

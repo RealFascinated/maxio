@@ -123,12 +123,6 @@ pub struct BucketMeta {
     pub acl: Option<crate::iam::Acl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<String>,
-    /// Legacy field — migrated to bucket policy on load.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub public_read: bool,
-    /// Legacy field — migrated to bucket policy on load.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub public_list: bool,
 }
 
 fn default_owner_id() -> String {
@@ -145,6 +139,23 @@ fn is_root_owner(id: &str) -> bool {
 
 fn is_root_owner_display(name: &str) -> bool {
     name == crate::iam::ROOT_DISPLAY_NAME
+}
+
+impl BucketMeta {
+    pub fn new_for_owner(name: String, owner_id: String, owner_display_name: String) -> Self {
+        Self {
+            name,
+            created_at: chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string(),
+            versioning: false,
+            cors_rules: None,
+            owner_id: owner_id.clone(),
+            owner_display_name: owner_display_name.clone(),
+            acl: Some(crate::iam::Acl::private(&owner_id, &owner_display_name)),
+            policy: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +262,42 @@ pub fn normalize_object_meta(
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchDeleteOutcome {
+    pub succeeded: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// Delete object keys in chunks via `delete_objects_batch`.
+pub async fn batch_delete_keys(
+    storage: &dyn Storage,
+    bucket: &str,
+    keys: &[String],
+    chunk_size: usize,
+) -> Result<BatchDeleteOutcome, StorageError> {
+    let mut outcome = BatchDeleteOutcome::default();
+    if keys.is_empty() {
+        return Ok(outcome);
+    }
+    for chunk in keys.chunks(chunk_size.max(1)) {
+        let batch: Vec<BatchDeleteObject> = chunk
+            .iter()
+            .map(|key| BatchDeleteObject {
+                key: key.clone(),
+                version_id: None,
+            })
+            .collect();
+        let results = storage.delete_objects_batch(bucket, &batch).await?;
+        for (obj, result) in results {
+            match result {
+                Ok(_) => outcome.succeeded.push(obj.key),
+                Err(_) => outcome.failed.push(obj.key),
+            }
+        }
+    }
+    Ok(outcome)
+}
+
 /// List all objects under `prefix` by paging through `list_objects_page`.
 pub async fn list_objects_all(
     storage: &dyn Storage,
@@ -288,23 +335,11 @@ pub async fn provision_default_buckets(storage: &dyn Storage, default_buckets: &
             tracing::warn!("Skipping invalid default bucket name: '{}'", bucket_name);
             continue;
         }
-        let meta = BucketMeta {
-            name: bucket_name.to_string(),
-            created_at: chrono::Utc::now()
-                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                .to_string(),
-            versioning: false,
-            cors_rules: None,
-            owner_id: default_owner_id(),
-            owner_display_name: default_owner_display_name(),
-            acl: Some(crate::iam::Acl::private(
-                &default_owner_id(),
-                &default_owner_display_name(),
-            )),
-            policy: None,
-            public_read: false,
-            public_list: false,
-        };
+        let meta = BucketMeta::new_for_owner(
+            bucket_name.to_string(),
+            default_owner_id(),
+            default_owner_display_name(),
+        );
         match storage.create_bucket(&meta).await {
             Ok(true) => tracing::info!("Created default bucket: {}", bucket_name),
             Ok(false) => tracing::info!("Default bucket already exists: {}", bucket_name),

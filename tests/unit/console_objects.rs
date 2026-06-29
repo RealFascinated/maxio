@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use maxio::api::console::{
-    folder_delete_stats, normalize_folder_prefix, normalize_presign_host,
-    parent_folder_prefix_for_deleted_object, preserve_empty_parent_folder_after_object_delete,
+    ObjectGetOp, ObjectGetQuery, folder_delete_stats, normalize_folder_prefix,
+    normalize_presign_host, parent_folder_prefix_for_deleted_object,
+    preserve_empty_parent_folder_after_object_delete, sanitize_filename,
 };
 use maxio::config::MemoryCacheLimits;
-use maxio::iam::Acl;
 use maxio::iam::{ROOT_CANONICAL_ID, ROOT_DISPLAY_NAME};
 use maxio::storage::blob::BlobStorage;
 use maxio::storage::{
     BucketMeta, ByteStream, MetadataStore, ObjectStorage, PgMetadataStore, Storage,
+    batch_delete_keys,
 };
 use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
@@ -34,18 +35,11 @@ async fn test_storage(
 
 async fn create_test_bucket(storage: &dyn Storage, bucket: &str) {
     storage
-        .create_bucket(&BucketMeta {
-            name: bucket.to_string(),
-            created_at: "2026-05-18T00:00:00.000Z".to_string(),
-            versioning: false,
-            cors_rules: None,
-            owner_id: ROOT_CANONICAL_ID.to_string(),
-            owner_display_name: ROOT_DISPLAY_NAME.to_string(),
-            acl: Some(Acl::private(ROOT_CANONICAL_ID, ROOT_DISPLAY_NAME)),
-            policy: None,
-            public_read: false,
-            public_list: false,
-        })
+        .create_bucket(&BucketMeta::new_for_owner(
+            bucket.to_string(),
+            ROOT_CANONICAL_ID.to_string(),
+            ROOT_DISPLAY_NAME.to_string(),
+        ))
         .await
         .unwrap();
 }
@@ -202,4 +196,61 @@ async fn deleting_folder_marker_does_not_recreate_it() {
         .await
         .unwrap();
     assert!(objects.is_empty());
+}
+
+#[test]
+fn sanitize_filename_strips_header_injection_chars() {
+    assert_eq!(sanitize_filename("file\"name.txt"), "filename.txt");
+    assert_eq!(sanitize_filename("safe.txt"), "safe.txt");
+}
+
+#[test]
+fn object_get_op_from_query_defaults_to_metadata() {
+    let op = ObjectGetOp::from_query(&ObjectGetQuery::default()).unwrap();
+    assert_eq!(op, ObjectGetOp::Metadata);
+}
+
+#[test]
+fn object_get_op_from_query_download_and_presign() {
+    let download = ObjectGetOp::from_query(&ObjectGetQuery {
+        download: Some("1".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(download, ObjectGetOp::Download);
+
+    let presign = ObjectGetOp::from_query(&ObjectGetQuery {
+        presign: Some("1".into()),
+        expires: Some(600),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(presign, ObjectGetOp::Presign { expires_secs: 600 });
+}
+
+#[tokio::test]
+async fn batch_delete_keys_removes_objects() {
+    let temp = tempfile::tempdir().unwrap();
+    let (storage, _pg) = test_storage(temp.path().to_str().unwrap()).await.unwrap();
+    create_test_bucket(storage.as_ref(), "bucket").await;
+
+    storage
+        .put_object("bucket", "a.txt", "text/plain", bytes(b"a"), None)
+        .await
+        .unwrap();
+    storage
+        .put_object("bucket", "b.txt", "text/plain", bytes(b"b"), None)
+        .await
+        .unwrap();
+
+    let outcome = batch_delete_keys(
+        storage.as_ref(),
+        "bucket",
+        &[String::from("a.txt"), String::from("b.txt")],
+        1000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.succeeded.len(), 2);
+    assert!(outcome.failed.is_empty());
 }

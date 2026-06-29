@@ -456,7 +456,7 @@ async fn test_console_presign_simple_key() {
     // Generate presigned URL via console endpoint
     let resp = client()
         .get(&format!(
-            "{}/api/buckets/cpresign-bucket/presign/test.txt?expires=300",
+            "{}/api/buckets/cpresign-bucket/objects/test.txt?presign=1&expires=300",
             base_url
         ))
         .header("Cookie", format!("maxio_session={}", session))
@@ -499,7 +499,7 @@ async fn test_console_presign_key_with_spaces() {
     // Request presigned URL for the key with spaces (URL-encoded in the API path)
     let resp = client()
         .get(&format!(
-            "{}/api/buckets/cpresign-space/presign/my%20file.txt?expires=300",
+            "{}/api/buckets/cpresign-space/objects/my%20file.txt?presign=1&expires=300",
             base_url
         ))
         .header("Cookie", format!("maxio_session={}", session))
@@ -539,7 +539,7 @@ async fn test_console_presign_nested_key() {
 
     let resp = client()
         .get(&format!(
-            "{}/api/buckets/cpresign-nested/presign/folder/sub/file.txt?expires=300",
+            "{}/api/buckets/cpresign-nested/objects/folder/sub/file.txt?presign=1&expires=300",
             base_url
         ))
         .header("Cookie", format!("maxio_session={}", session))
@@ -579,7 +579,7 @@ async fn test_console_presign_uses_forwarded_host() {
 
     let resp = client()
         .get(&format!(
-            "{}/api/buckets/cpresign-proxy/presign/test.txt?expires=300",
+            "{}/api/buckets/cpresign-proxy/objects/test.txt?presign=1&expires=300",
             base_url
         ))
         .header("Cookie", format!("maxio_session={}", session))
@@ -666,7 +666,7 @@ async fn test_console_presign_uses_iam_credentials() {
 
     let resp = client()
         .get(&format!(
-            "{}/api/buckets/iam-presign-bucket/presign/test.txt?expires=300",
+            "{}/api/buckets/iam-presign-bucket/objects/test.txt?presign=1&expires=300",
             base_url
         ))
         .header("Cookie", format!("maxio_session={session}"))

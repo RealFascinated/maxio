@@ -235,7 +235,8 @@ pub async fn list_object_versions_page(
         });
     }
 
-    let versioned = super::is_versioned(ctx, bucket_name).await?;
+    let versioning_state = super::get_versioning_state(ctx, bucket_name).await?;
+    let versioned = versioning_state != crate::storage::VersioningState::Unversioned;
     if !versioned {
         let (objects, is_truncated, next) = super::list_objects_page(
             ctx,

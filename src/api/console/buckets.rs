@@ -78,9 +78,6 @@ pub async fn create_bucket(
         )
             .into_response();
     }
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
     let (owner_id, owner_display_name) = if session.is_root {
         (
             crate::iam::ROOT_CANONICAL_ID.to_string(),
@@ -89,18 +86,8 @@ pub async fn create_bucket(
     } else {
         (session.user_id.clone(), session.username.clone())
     };
-    let meta = crate::storage::BucketMeta {
-        name: body.name.clone(),
-        created_at: now,
-        versioning: false,
-        cors_rules: None,
-        owner_id: owner_id.clone(),
-        owner_display_name: owner_display_name.clone(),
-        acl: Some(crate::iam::Acl::private(&owner_id, &owner_display_name)),
-        policy: None,
-        public_read: false,
-        public_list: false,
-    };
+    let meta =
+        crate::storage::BucketMeta::new_for_owner(body.name.clone(), owner_id, owner_display_name);
 
     match state.storage.create_bucket(&meta).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),

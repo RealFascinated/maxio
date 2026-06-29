@@ -81,7 +81,7 @@
 
   function downloadVersion(versionId: string) {
     window.open(
-      `/api/buckets/${encodeURIComponent(bucket)}/versions/${encodeURIComponent(versionId)}/download/${encodeObjectKey(objectKey)}`,
+      `/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(objectKey)}?versionId=${encodeURIComponent(versionId)}&download=1`,
       '_blank'
     )
   }

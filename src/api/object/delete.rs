@@ -135,29 +135,7 @@ pub fn parse_delete_objects_xml(
     }
 
     if objects.is_empty() {
-        let mut in_key = false;
-        let mut reader = quick_xml::Reader::from_str(&body_str);
-        reader.config_mut().trim_text(true);
-        loop {
-            match reader.read_event() {
-                Ok(quick_xml::events::Event::Start(e)) if e.name().as_ref() == b"Key" => {
-                    in_key = true;
-                }
-                Ok(quick_xml::events::Event::Text(e)) if in_key => {
-                    objects.push(crate::storage::BatchDeleteObject {
-                        key: e.decode().unwrap_or_default().into_owned(),
-                        version_id: None,
-                    });
-                    in_key = false;
-                }
-                Ok(quick_xml::events::Event::End(e)) if e.name().as_ref() == b"Key" => {
-                    in_key = false;
-                }
-                Ok(quick_xml::events::Event::Eof) => break,
-                Err(_) => return Err(S3Error::malformed_xml()),
-                _ => {}
-            }
-        }
+        return Err(S3Error::malformed_xml());
     }
 
     Ok(objects)

@@ -27,8 +27,6 @@ async fn test_list_objects_page_db_pagination() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
@@ -103,8 +101,6 @@ async fn test_list_objects_delimited_page_skips_dense_folders() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
@@ -202,8 +198,6 @@ async fn test_put_rollback_when_publish_fails() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
@@ -256,8 +250,6 @@ async fn test_housekeeping_removes_stale_multipart_uploads() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
@@ -305,8 +297,6 @@ async fn test_orphan_meta_scan_and_delete() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
@@ -378,8 +368,6 @@ async fn test_lifecycle_sweep_expires_current_objects() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
@@ -446,13 +434,9 @@ async fn test_lifecycle_sweep_expires_noncurrent_versions() {
                 maxio::iam::ROOT_DISPLAY_NAME,
             )),
             policy: None,
-            public_read: false,
-            public_list: false,
         })
         .await
         .unwrap();
-
-    storage.set_versioning("lc-nc-bucket", true).await.unwrap();
 
     storage
         .put_bucket_lifecycle(

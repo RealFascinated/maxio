@@ -250,7 +250,7 @@ fn glob_regex_match(parts: &[GlobPart], value: &str) -> bool {
     rec(parts, value)
 }
 
-/// Build a public-read bucket policy from legacy flags.
+/// Build a bucket policy document for console public read/list toggles.
 pub fn public_read_policy(bucket: &str) -> PolicyDocumentRaw {
     PolicyDocumentRaw {
         version: "2012-10-17".to_string(),

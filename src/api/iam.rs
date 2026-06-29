@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use axum::{body::Body, extract::State, http::StatusCode, response::Response};
 
 use crate::error::S3Error;
+use crate::iam::format::xml;
 use crate::iam::principal::Principal;
 use crate::iam::types::{KeyStatus, PolicyDocumentRaw};
 use crate::server::AppState;
@@ -21,7 +22,6 @@ pub async fn iam_handler(
         .map_err(|_| S3Error::invalid_argument("Invalid form body"))?;
     let action = form
         .get("Action")
-        .or_else(|| form.get("action"))
         .cloned()
         .ok_or_else(|| S3Error::invalid_argument("Missing Action"))?;
 
@@ -87,10 +87,7 @@ async fn create_user(state: &AppState, form: &HashMap<String, String>) -> Result
         .create_user(username)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><CreateUserResponse><CreateUserResult><User><UserId>{}</UserId><UserName>{}</UserName></User></CreateUserResult></CreateUserResponse>",
-        user.user_id, user.username
-    ))
+    Ok(xml::create_user_response(&user))
 }
 
 async fn delete_user(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
@@ -102,7 +99,7 @@ async fn delete_user(state: &AppState, form: &HashMap<String, String>) -> Result
         .delete_user(username)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteUserResponse/>".into())
+    Ok(xml::delete_user_response())
 }
 
 async fn get_user(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
@@ -114,25 +111,12 @@ async fn get_user(state: &AppState, form: &HashMap<String, String>) -> Result<St
         .get_user(username)
         .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><GetUserResponse><GetUserResult><User><UserId>{}</UserId><UserName>{}</UserName><CreateDate>{}</CreateDate></User></GetUserResult></GetUserResponse>",
-        user.user_id, user.username, user.created_at
-    ))
+    Ok(xml::get_user_response(&user))
 }
 
 async fn list_users(state: &AppState) -> Result<String, S3Error> {
     let users = state.user_store.list_users().await;
-    let mut members = String::new();
-    for u in users {
-        members.push_str(&format!(
-            "<member><UserId>{}</UserId><UserName>{}</UserName><CreateDate>{}</CreateDate></member>",
-            u.user_id, u.username, u.created_at
-        ));
-    }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListUsersResponse><ListUsersResult><Users>{}</Users></ListUsersResult></ListUsersResponse>",
-        members
-    ))
+    Ok(xml::list_users_response(&users))
 }
 
 async fn create_access_key(
@@ -147,9 +131,9 @@ async fn create_access_key(
         .create_access_key(username)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><CreateAccessKeyResponse><CreateAccessKeyResult><AccessKey><AccessKeyId>{}</AccessKeyId><SecretAccessKey>{}</SecretAccessKey><Status>Active</Status></AccessKey></CreateAccessKeyResult></CreateAccessKeyResponse>",
-        key.access_key_id, key.secret_access_key
+    Ok(xml::create_access_key_response(
+        &key.access_key_id,
+        &key.secret_access_key,
     ))
 }
 
@@ -168,7 +152,7 @@ async fn delete_access_key(
         .delete_access_key(username, access_key_id)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteAccessKeyResponse/>".into())
+    Ok(xml::delete_access_key_response())
 }
 
 async fn update_access_key(
@@ -196,7 +180,7 @@ async fn update_access_key(
         .update_access_key_status(username, access_key_id, status)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><UpdateAccessKeyResponse/>".into())
+    Ok(xml::update_access_key_response())
 }
 
 async fn list_access_keys(
@@ -211,21 +195,7 @@ async fn list_access_keys(
         .get_user(username)
         .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
-    let mut members = String::new();
-    for k in &user.access_keys {
-        let status = match k.status {
-            KeyStatus::Active => "Active",
-            KeyStatus::Inactive => "Inactive",
-        };
-        members.push_str(&format!(
-            "<member><AccessKeyId>{}</AccessKeyId><Status>{}</Status></member>",
-            k.access_key_id, status
-        ));
-    }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListAccessKeysResponse><ListAccessKeysResult><AccessKeyMetadata>{}</AccessKeyMetadata></ListAccessKeysResult></ListAccessKeysResponse>",
-        members
-    ))
+    Ok(xml::list_access_keys_response(&user))
 }
 
 async fn put_user_policy(
@@ -248,7 +218,7 @@ async fn put_user_policy(
         .put_user_policy(username, policy_name, doc)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><PutUserPolicyResponse/>".into())
+    Ok(xml::put_user_policy_response())
 }
 
 async fn get_user_policy(
@@ -272,10 +242,7 @@ async fn get_user_policy(
         .find(|p| p.policy_name == *policy_name)
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let doc = serde_json::to_string(&policy.document).map_err(S3Error::internal)?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><GetUserPolicyResponse><GetUserPolicyResult><PolicyDocument>{}</PolicyDocument></GetUserPolicyResult></GetUserPolicyResponse>",
-        quick_xml::escape::escape(&doc)
-    ))
+    Ok(xml::get_user_policy_response(&doc))
 }
 
 async fn delete_user_policy(
@@ -293,7 +260,7 @@ async fn delete_user_policy(
         .delete_user_policy(username, policy_name)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteUserPolicyResponse/>".into())
+    Ok(xml::delete_user_policy_response())
 }
 
 async fn list_user_policies(
@@ -308,14 +275,7 @@ async fn list_user_policies(
         .get_user(username)
         .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
-    let mut members = String::new();
-    for p in &user.inline_policies {
-        members.push_str(&format!("<member>{}</member>", p.policy_name));
-    }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListUserPoliciesResponse><ListUserPoliciesResult><PolicyNames>{}</PolicyNames></ListUserPoliciesResult></ListUserPoliciesResponse>",
-        members
-    ))
+    Ok(xml::list_user_policies_response(&user))
 }
 
 async fn create_policy(
@@ -335,10 +295,7 @@ async fn create_policy(
         .create_managed_policy(name, doc)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><CreatePolicyResponse><CreatePolicyResult><Policy><PolicyId>{}</PolicyId><PolicyName>{}</PolicyName><Arn>{}</Arn></Policy></CreatePolicyResult></CreatePolicyResponse>",
-        policy.policy_id, policy.policy_name, policy.arn
-    ))
+    Ok(xml::create_policy_response(&policy))
 }
 
 async fn delete_policy(
@@ -353,7 +310,7 @@ async fn delete_policy(
         .delete_managed_policy(name)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeletePolicyResponse/>".into())
+    Ok(xml::delete_policy_response())
 }
 
 async fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<String, S3Error> {
@@ -366,27 +323,12 @@ async fn get_policy(state: &AppState, form: &HashMap<String, String>) -> Result<
         .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
     let doc = serde_json::to_string(&policy.document).map_err(S3Error::internal)?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><GetPolicyResponse><GetPolicyResult><Policy><PolicyName>{}</PolicyName><Arn>{}</Arn><PolicyDocument>{}</PolicyDocument></Policy></GetPolicyResult></GetPolicyResponse>",
-        policy.policy_name,
-        policy.arn,
-        quick_xml::escape::escape(&doc)
-    ))
+    Ok(xml::get_policy_response(&policy, &doc))
 }
 
 async fn list_policies(state: &AppState) -> Result<String, S3Error> {
     let policies = state.user_store.list_managed_policies().await;
-    let mut members = String::new();
-    for p in policies {
-        members.push_str(&format!(
-            "<member><PolicyName>{}</PolicyName><Arn>{}</Arn></member>",
-            p.policy_name, p.arn
-        ));
-    }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListPoliciesResponse><ListPoliciesResult><Policies>{}</Policies></ListPoliciesResult></ListPoliciesResponse>",
-        members
-    ))
+    Ok(xml::list_policies_response(&policies))
 }
 
 async fn attach_user_policy(
@@ -404,7 +346,7 @@ async fn attach_user_policy(
         .attach_user_policy(username, arn)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><AttachUserPolicyResponse/>".into())
+    Ok(xml::attach_user_policy_response())
 }
 
 async fn detach_user_policy(
@@ -422,7 +364,7 @@ async fn detach_user_policy(
         .detach_user_policy(username, arn)
         .await
         .map_err(|e| S3Error::invalid_argument(&e))?;
-    Ok("<?xml version=\"1.0\" encoding=\"UTF-8\"?><DetachUserPolicyResponse/>".into())
+    Ok(xml::detach_user_policy_response())
 }
 
 async fn list_attached_user_policies(
@@ -437,12 +379,5 @@ async fn list_attached_user_policies(
         .get_user(username)
         .await
         .ok_or_else(|| S3Error::invalid_argument("NoSuchEntity"))?;
-    let mut members = String::new();
-    for arn in &user.attached_policies {
-        members.push_str(&format!("<member><PolicyArn>{}</PolicyArn></member>", arn));
-    }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListAttachedUserPoliciesResponse><ListAttachedUserPoliciesResult><AttachedPolicies>{}</AttachedPolicies></ListAttachedUserPoliciesResult></ListAttachedUserPoliciesResponse>",
-        members
-    ))
+    Ok(xml::list_attached_user_policies_response(&user))
 }

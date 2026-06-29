@@ -98,25 +98,11 @@ pub async fn create_bucket(
     )
     .await?;
 
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
-
-    let meta = BucketMeta {
-        name: bucket.clone(),
-        created_at: now,
-        versioning: false,
-        cors_rules: None,
-        owner_id: principal.canonical_id.clone(),
-        owner_display_name: principal.display_name.clone(),
-        acl: Some(crate::iam::Acl::private(
-            &principal.canonical_id,
-            &principal.display_name,
-        )),
-        policy: None,
-        public_read: false,
-        public_list: false,
-    };
+    let meta = BucketMeta::new_for_owner(
+        bucket.clone(),
+        principal.canonical_id.clone(),
+        principal.display_name.clone(),
+    );
 
     let created = state
         .storage
