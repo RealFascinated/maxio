@@ -75,6 +75,7 @@ impl CachingIamStore {
 
     fn evict_user_policies(&self, username: &str) {
         self.policies_cache.remove(username);
+        self.user_cache.remove(username);
     }
 
     fn entry_valid(expires_at: Instant) -> bool {
