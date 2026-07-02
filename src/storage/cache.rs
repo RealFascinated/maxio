@@ -68,14 +68,18 @@ impl CacheLayer {
             metrics: None,
         };
         if let Some((entries, dirty)) = layer.load_index().await? {
-            // Trust the on-disk index for eviction sizing; reconcile in the background so
-            // PUTs are not blocked for minutes on large caches (596k+ entries).
+            // Trust the on-disk index for eviction sizing and dirty writeback state;
+            // reconcile with the filesystem in the background so PUTs and writeback
+            // flush are not blocked for minutes on large caches (596k+ entries).
             layer.apply_index(entries, dirty).await;
             layer.index_loaded.store(true, Ordering::Release);
             layer.scan_complete.store(true, Ordering::Release);
             layer.scan_ready.notify_waiters();
+            layer.dirty_scan_complete.store(true, Ordering::Release);
+            layer.dirty_scan_ready.notify_waiters();
             tracing::info!(
                 entries = layer.state.entry_count(),
+                dirty = layer.state.dirty_count(),
                 "cache: loaded LRU index, reconciling with filesystem"
             );
         } else if cfg!(test) {
@@ -128,17 +132,15 @@ impl CacheLayer {
     }
 
     async fn wait_until_scan_complete(&self) {
-        if self.scan_complete.load(Ordering::Acquire) {
-            return;
+        while !self.scan_complete.load(Ordering::Acquire) {
+            self.scan_ready.notified().await;
         }
-        self.scan_ready.notified().await;
     }
 
     async fn wait_until_dirty_scan_complete(&self) {
-        if self.dirty_scan_complete.load(Ordering::Acquire) {
-            return;
+        while !self.dirty_scan_complete.load(Ordering::Acquire) {
+            self.dirty_scan_ready.notified().await;
         }
-        self.dirty_scan_ready.notified().await;
     }
 
     /// Walks the cache directory to rebuild or reconcile LRU state.
@@ -243,7 +245,10 @@ impl CacheLayer {
             tracing::warn!("cache: index save after merge: {e}");
         }
         self.merge_scan_complete.store(true, Ordering::Release);
-        if self.writeback {
+        // Index load already seeded the dirty set; per-object flush reconciles with
+        // the data directory. Re-scanning every key here blocks on hundreds of
+        // thousands of stat calls against a slow data volume.
+        if self.writeback && !self.index_loaded.load(Ordering::Acquire) {
             self.scan_dirty_entries().await;
         }
         self.dirty_scan_complete.store(true, Ordering::Release);
@@ -418,13 +423,15 @@ impl CacheLayer {
 
         let start = Instant::now();
         let dirty_keys: Vec<ObjectKey> = self.state.all_dirty().into_iter().collect();
-        if dirty_keys.is_empty() {
+        let dirty_count = dirty_keys.len();
+        if dirty_count == 0 {
             self.writeback_halted.store(false, Ordering::Relaxed);
             return Ok(());
         }
 
         let mut had_failure = false;
         let mut flushed_bytes = 0u64;
+        let mut flushed_objects = 0u64;
         for (bucket, key) in dirty_keys {
             let cache_path = self.object_path(&bucket, &key);
             let data_path = super::blob::object_path_in(&self.data_buckets_dir, &bucket, &key);
@@ -443,6 +450,7 @@ impl CacheLayer {
                     .len();
                 if data_size == size {
                     self.mark_clean(&bucket, &key, size).await;
+                    flushed_objects += 1;
                     continue;
                 }
             }
@@ -461,6 +469,7 @@ impl CacheLayer {
             match fs::copy(&cache_path, &data_path).await {
                 Ok(_) => {
                     flushed_bytes += size;
+                    flushed_objects += 1;
                     if let Some(m) = &self.metrics {
                         m.record_drive_write_op();
                     }
@@ -494,6 +503,13 @@ impl CacheLayer {
         if let Some(m) = &self.metrics {
             m.record_cache_flush(cache_name::OBJECT_DISK, true, flushed_bytes, elapsed);
         }
+        tracing::info!(
+            flushed_objects,
+            flushed_bytes,
+            dirty_count,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "cache: writeback flush complete"
+        );
         Ok(())
     }
 

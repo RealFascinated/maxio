@@ -114,6 +114,59 @@ async fn cache_flush_dirty_after_restart() {
 }
 
 #[tokio::test]
+async fn cache_flush_dirty_immediately_after_index_load() {
+    let cache_root = TempDir::new().unwrap();
+    let data_root = TempDir::new().unwrap();
+    let data_buckets = data_root.path().join("buckets");
+    tokio::fs::create_dir_all(&data_buckets).await.unwrap();
+
+    let cache_path = cache_root
+        .path()
+        .join("buckets")
+        .join("bucket-a")
+        .join("obj.txt");
+    tokio::fs::create_dir_all(cache_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&cache_path, b"cached payload")
+        .await
+        .unwrap();
+
+    let layer = Arc::new(
+        CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            1024 * 1024,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap(),
+    );
+    layer.mark_dirty("bucket-a", "obj.txt", 14).await;
+    layer.save_index().await.unwrap();
+    drop(layer);
+
+    let layer = Arc::new(
+        CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            1024 * 1024,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap(),
+    );
+
+    let data_path = data_buckets.join("bucket-a").join("obj.txt");
+    layer.flush_dirty().await.unwrap();
+
+    let data = tokio::fs::read(&data_path).await.unwrap();
+    assert_eq!(data, b"cached payload");
+}
+
+#[tokio::test]
 async fn cache_reserve_space_flushes_dirty_when_no_clean_entries() {
     let cache_root = TempDir::new().unwrap();
     let data_root = TempDir::new().unwrap();
