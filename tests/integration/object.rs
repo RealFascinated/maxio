@@ -233,6 +233,38 @@ async fn test_put_object_aws_chunked_encoding() {
 }
 
 #[tokio::test]
+async fn test_put_object_aws_chunked_trailer_encoding() {
+    // mcli --checksum uses STREAMING-UNSIGNED-PAYLOAD-TRAILER
+    let base_url = start_server().await;
+
+    s3_request("PUT", &format!("{}/mybucket", base_url), vec![]).await;
+
+    let data = b"checksum test data\n";
+    let trailer = "x-amz-checksum-crc32:HBXdnw==";
+    let resp = s3_put_chunked_trailer(
+        &format!("{}/mybucket/trailer-chunked.txt", base_url),
+        data,
+        trailer,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = s3_request(
+        "GET",
+        &format!("{}/mybucket/trailer-chunked.txt", base_url),
+        vec![],
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(
+        body.as_ref(),
+        data,
+        "Trailer chunked upload content should be decoded"
+    );
+}
+
+#[tokio::test]
 async fn test_put_object_response_headers() {
     let base_url = start_server().await;
 

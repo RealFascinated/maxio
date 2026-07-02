@@ -9,7 +9,6 @@ pub struct S3Error {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum S3ErrorCode {
     AccessDenied,
     BadDigest,

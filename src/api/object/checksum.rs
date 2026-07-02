@@ -41,8 +41,36 @@ pub(super) fn add_checksum_header(
     }
 }
 
+fn streaming_payload_mode(sha256: &str) -> Option<bool> {
+    match sha256 {
+        "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" => Some(false),
+        "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER" | "STREAMING-UNSIGNED-PAYLOAD-TRAILER" => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+async fn read_trailer_lines<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut tokio::io::BufReader<R>,
+) -> std::io::Result<()> {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            break;
+        }
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 async fn read_aws_chunk<R: tokio::io::AsyncRead + Unpin>(
     mut reader: tokio::io::BufReader<R>,
+    has_trailers: bool,
 ) -> std::io::Result<(Option<Vec<u8>>, tokio::io::BufReader<R>)> {
     let mut line = String::new();
     let n = reader.read_line(&mut line).await?;
@@ -54,14 +82,18 @@ async fn read_aws_chunk<R: tokio::io::AsyncRead + Unpin>(
     let chunk_size = usize::from_str_radix(size_str.trim(), 16)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunk size"))?;
     if chunk_size == 0 {
-        // AWS spec: `0;chunk-signature=…\r\n\r\n`. Some clients omit the final CRLF;
-        // accept EOF here (matches the pre-streaming decoder).
-        let mut crlf = [0u8; 2];
-        if reader.read_exact(&mut crlf).await.is_ok() && crlf != [b'\r', b'\n'] {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid chunk terminator",
-            ));
+        if has_trailers {
+            read_trailer_lines(&mut reader).await?;
+        } else {
+            // AWS spec: `0;chunk-signature=…\r\n\r\n`. Some clients omit the final CRLF;
+            // accept EOF here (matches the pre-streaming decoder).
+            let mut crlf = [0u8; 2];
+            if reader.read_exact(&mut crlf).await.is_ok() && crlf != [b'\r', b'\n'] {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid chunk terminator",
+                ));
+            }
         }
         return Ok((None, reader));
     }
@@ -76,24 +108,22 @@ pub(crate) async fn body_to_reader(
     headers: &HeaderMap,
     body: Body,
 ) -> Result<std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>, S3Error> {
-    let is_aws_chunked = headers
+    let has_trailers = headers
         .get("x-amz-content-sha256")
         .and_then(|v| v.to_str().ok())
-        == Some("STREAMING-AWS4-HMAC-SHA256-PAYLOAD");
+        .and_then(streaming_payload_mode);
 
     let stream = body.into_data_stream();
     let raw_reader = tokio_util::io::StreamReader::new(
         stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
     );
 
-    if is_aws_chunked {
+    if let Some(has_trailers) = has_trailers {
         let chunked = futures::stream::try_unfold(
-            tokio::io::BufReader::new(raw_reader),
-            |reader| async move {
-                let (chunk, reader) = read_aws_chunk(reader).await?;
-                let item: std::io::Result<Option<(bytes::Bytes, _)>> =
-                    Ok(chunk.map(|c| (bytes::Bytes::from(c), reader)));
-                item
+            (tokio::io::BufReader::new(raw_reader), has_trailers),
+            |(reader, has_trailers)| async move {
+                let (chunk, reader) = read_aws_chunk(reader, has_trailers).await?;
+                Ok::<_, std::io::Error>(chunk.map(|c| (bytes::Bytes::from(c), (reader, has_trailers))))
             },
         );
         Ok(Box::pin(tokio_util::io::StreamReader::new(chunked)))

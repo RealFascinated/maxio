@@ -567,11 +567,6 @@ impl CacheLayer {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn spawn_trim_task(self: Arc<Self>) {
-        self.spawn_eviction_task();
-    }
-
     /// Periodically persists the LRU index so restarts re-discover fewer files.
     pub fn spawn_index_save_task(self: Arc<Self>) {
         tokio::spawn(async move {

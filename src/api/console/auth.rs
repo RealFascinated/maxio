@@ -8,13 +8,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use crate::auth::signature_v4;
 use crate::server::AppState;
 
 use super::access::session_capabilities;
 use super::session::{
-    ConsoleSession, TOKEN_MAX_AGE_SECS, constant_time_eq, cookies_require_https, extract_client_ip,
-    extract_cookie, generate_token, make_cookie, resolve_session_access_key,
-    session_from_access_key,
+    ConsoleSession, TOKEN_MAX_AGE_SECS, cookies_require_https, extract_client_ip, extract_cookie,
+    generate_token, make_cookie, resolve_session_access_key, session_from_access_key,
 };
 
 pub(crate) async fn console_auth_middleware(
@@ -67,11 +67,11 @@ pub async fn login(
     }
 
     // Use constant-time comparison to prevent timing side-channel attacks
-    let key_match = constant_time_eq(
+    let key_match = signature_v4::constant_time_eq(
         body.access_key.as_bytes(),
         state.config.access_key.as_bytes(),
     );
-    let secret_match = constant_time_eq(
+    let secret_match = signature_v4::constant_time_eq(
         body.secret_key.as_bytes(),
         state.config.secret_key.as_bytes(),
     );

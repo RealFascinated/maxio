@@ -639,6 +639,106 @@ pub async fn s3_put_chunked(url: &str, data: &[u8]) -> reqwest::Response {
         .unwrap()
 }
 
+/// Build a PUT with STREAMING-UNSIGNED-PAYLOAD-TRAILER (mcli --checksum format).
+pub async fn s3_put_chunked_trailer(url: &str, data: &[u8], trailer: &str) -> reqwest::Response {
+    let parsed = reqwest::Url::parse(url).unwrap();
+    let host = parsed.host_str().unwrap();
+    let port = parsed.port().unwrap();
+    let host_header = format!("{}:{}", host, port);
+    let path = parsed.path();
+    let query = parsed.query().unwrap_or("");
+
+    let now = chrono::Utc::now();
+    let date_stamp = now.format("%Y%m%d").to_string();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+
+    let payload_hash = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
+
+    let mut sign_headers = vec![
+        ("content-encoding".to_string(), "aws-chunked".to_string()),
+        (
+            "content-type".to_string(),
+            "application/octet-stream".to_string(),
+        ),
+        ("host".to_string(), host_header.clone()),
+        ("x-amz-content-sha256".to_string(), payload_hash.to_string()),
+        ("x-amz-date".to_string(), amz_date.clone()),
+        (
+            "x-amz-decoded-content-length".to_string(),
+            data.len().to_string(),
+        ),
+        ("x-amz-trailer".to_string(), trailer.to_string()),
+    ];
+    sign_headers.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let signed_headers: Vec<&str> = sign_headers.iter().map(|(k, _)| k.as_str()).collect();
+    let signed_headers_str = signed_headers.join(";");
+
+    let canonical_headers: String = sign_headers
+        .iter()
+        .map(|(k, v)| format!("{}:{}\n", k, v.trim()))
+        .collect();
+
+    let canonical_request = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        "PUT", path, query, canonical_headers, signed_headers_str, payload_hash
+    );
+
+    let scope = format!("{}/{}/s3/aws4_request", date_stamp, REGION);
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{}\n{}\n{}",
+        amz_date,
+        scope,
+        hex::encode(Sha256::digest(canonical_request.as_bytes()))
+    );
+
+    let key = format!("AWS4{}", SECRET_KEY);
+    let mut mac = HmacSha256::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(date_stamp.as_bytes());
+    let date_key = mac.finalize().into_bytes();
+    let mut mac = HmacSha256::new_from_slice(&date_key).unwrap();
+    mac.update(REGION.as_bytes());
+    let date_region_key = mac.finalize().into_bytes();
+    let mut mac = HmacSha256::new_from_slice(&date_region_key).unwrap();
+    mac.update(b"s3");
+    let date_region_service_key = mac.finalize().into_bytes();
+    let mut mac = HmacSha256::new_from_slice(&date_region_service_key).unwrap();
+    mac.update(b"aws4_request");
+    let signing_key = mac.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&signing_key).unwrap();
+    mac.update(string_to_sign.as_bytes());
+    let seed_signature = hex::encode(mac.finalize().into_bytes());
+
+    let auth = format!(
+        "AWS4-HMAC-SHA256 Credential={}/{},SignedHeaders={},Signature={}",
+        ACCESS_KEY, scope, signed_headers_str, seed_signature
+    );
+
+    let mut chunked_body = Vec::new();
+    chunked_body.extend_from_slice(format!("{:x}\r\n", data.len()).as_bytes());
+    chunked_body.extend_from_slice(data);
+    chunked_body.extend_from_slice(b"\r\n");
+    chunked_body.extend_from_slice(b"0\r\n");
+    chunked_body.extend_from_slice(format!("{trailer}\r\n").as_bytes());
+    chunked_body.extend_from_slice(b"\r\n");
+
+    client()
+        .put(url)
+        .header("host", &host_header)
+        .header("x-amz-date", &amz_date)
+        .header("x-amz-content-sha256", payload_hash)
+        .header("x-amz-decoded-content-length", data.len().to_string())
+        .header("content-encoding", "aws-chunked")
+        .header("x-amz-trailer", trailer)
+        .header("authorization", &auth)
+        .header("content-type", "application/octet-stream")
+        .body(chunked_body)
+        .send()
+        .await
+        .unwrap()
+}
+
 pub async fn s3_request_as(
     method: &str,
     url: &str,

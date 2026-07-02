@@ -446,7 +446,6 @@ struct VersionRow {
     id: Uuid,
     key: String,
     version_id: String,
-    #[allow(dead_code)]
     is_current: bool,
     size: i64,
     etag: String,

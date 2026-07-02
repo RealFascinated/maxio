@@ -17,8 +17,6 @@ pub struct Statement {
 
 #[derive(Debug, Clone)]
 pub struct PolicyDocument {
-    #[allow(dead_code)]
-    pub version: String,
     pub statements: Vec<Statement>,
 }
 
@@ -47,10 +45,7 @@ pub fn parse_policy_document(raw: &PolicyDocumentRaw) -> Result<PolicyDocument, 
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(PolicyDocument {
-        version: raw.version.clone(),
-        statements,
-    })
+    Ok(PolicyDocument { statements })
 }
 
 pub fn parse_policy_json(json: &str) -> Result<PolicyDocument, String> {

@@ -7,6 +7,7 @@ use axum::http::HeaderMap;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
+use crate::auth::signature_v4;
 use crate::iam::types::KeyStatus;
 use crate::server::AppState;
 
@@ -128,7 +129,7 @@ fn verify_token(token: &str, secret_key: &str) -> Option<String> {
     mac.update(format!("{}:{}", access_key_id, issued_hex).as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
 
-    if constant_time_eq(signature.as_bytes(), expected.as_bytes()) {
+    if signature_v4::constant_time_eq(signature.as_bytes(), expected.as_bytes()) {
         Some(access_key_id.to_string())
     } else {
         None
@@ -148,10 +149,8 @@ pub(crate) async fn session_from_access_key(
     state: &AppState,
     access_key_id: &str,
 ) -> Option<ConsoleSession> {
-    if crate::auth::signature_v4::constant_time_eq(
-        access_key_id.as_bytes(),
-        state.config.access_key.as_bytes(),
-    ) {
+    if signature_v4::constant_time_eq(access_key_id.as_bytes(), state.config.access_key.as_bytes())
+    {
         return Some(ConsoleSession::root(state.config.access_key.clone()));
     }
 
@@ -222,17 +221,6 @@ impl ConsoleSession {
             }
         }
     }
-}
-
-pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 pub(crate) fn extract_cookie(headers: &HeaderMap) -> Option<String> {

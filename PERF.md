@@ -196,6 +196,42 @@ Logs: `/home/liam/Desktop/stuff/maxio/logs/phase3-run{1,2,3}.log`
 
 ---
 
+## Production log analysis (2026-07-02)
+
+Sample from a `--cache-dir` deployment with ~597k cache entries and heavy concurrent PUTs
+to `wild-survival-pl3xmap`.
+
+### What the logs actually mean
+
+| Phase | Typical | Spike seen | Root cause |
+|-------|---------|------------|------------|
+| `auth_sigv4` | was ~same as `http_request` | 108ms | **Bug (fixed):** timer included handler/storage time, not auth only |
+| `auth_resolve_credentials` | &lt;1ms (root) | 8.9ms | IAM access key → Postgres lookup under pool contention |
+| `db_pool_get` | &lt;1ms | 6.8ms | 64-connection pool saturated by concurrent PUTs + async metadata flushes |
+| `storage_put_object` | 5–15ms | 5–108ms | Disk/cache writeback + burst after cache merge unblocked waiters |
+| `async_upsert_object` | background | 8–12ms | Expected for deferred metadata; competes for DB pool |
+| `cache: merged index` | — | 6530ms / 596k entries | Full filesystem walk on restart; **was blocking all PUTs until done (fixed)** |
+
+### Fixes applied from production
+
+1. **`auth_sigv4` timing** — stop timer before `next.run()` so it reflects credential resolve + verify only.
+2. **Cache index merge no longer blocks writers** — when `.lru-index.bin` loads, `scan_complete` is set immediately;
+   merge reconciles in the background.
+3. **Sharded disk cache state + async `mark_dirty`** — PUT no longer takes a global lock on 596k-entry LRU; updates
+   coalesce in a background worker (1ms / 256 ops). Eviction runs continuously in its own task with O(1) clean-LRU
+   pops instead of O(n) `min_by_key` scans on the request path.
+4. **Deferred read-cache write** — `write_through_read_cache` moved off the PutObject hot path into async metadata flush.
+
+### If spikes persist
+
+- **`auth_resolve_credentials` ~9ms** — workload uses IAM keys, not root. Ensure `CachingIamStore` TTL is reasonable;
+  check Postgres latency and consider raising `db_pool_size` if async flushes + sync reads contend.
+- **`storage_put_object` 30–108ms`** — many concurrent PUTs to one bucket on writeback cache; check backing disk
+  (ZFS/array) and cache size vs eviction pressure.
+- **403 on `GET /{bucket}/`** — policy/IAM deny on ListBucket; unrelated to perf.
+
+---
+
 ## Remaining opportunities
 
 1. **Lightweight `fetch_put_bucket_context`** — return 4 fields without cloning policy/ACL JSON

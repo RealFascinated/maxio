@@ -96,10 +96,9 @@ impl Shard {
     }
 
     fn mark_dirty(&mut self, key: ObjectKey, size: u64) -> (i64, i64) {
-        let mut entry_delta = 0i64;
         let mut dirty_delta = 0i64;
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry_delta = size as i64 - entry.size as i64;
+        let entry_delta = if let Some(entry) = self.entries.get_mut(&key) {
+            let delta = size as i64 - entry.size as i64;
             self.total_size = self.total_size.saturating_sub(entry.size) + size;
             entry.size = size;
             if !entry.dirty {
@@ -108,6 +107,7 @@ impl Shard {
                 dirty_delta = 1;
                 self.unlink_clean(&key);
             }
+            delta
         } else {
             self.entries.insert(
                 key,
@@ -119,18 +119,17 @@ impl Shard {
                 },
             );
             self.total_size += size;
-            entry_delta = size as i64;
             self.dirty_count += 1;
             dirty_delta = 1;
-        }
+            size as i64
+        };
         (entry_delta, dirty_delta)
     }
 
     fn mark_clean(&mut self, key: &ObjectKey, size: u64) -> (i64, i64) {
-        let mut entry_delta = 0i64;
         let mut dirty_delta = 0i64;
-        if let Some(entry) = self.entries.get_mut(key) {
-            entry_delta = size as i64 - entry.size as i64;
+        let entry_delta = if let Some(entry) = self.entries.get_mut(key) {
+            let delta = size as i64 - entry.size as i64;
             self.total_size = self.total_size.saturating_sub(entry.size) + size;
             entry.size = size;
             if entry.dirty {
@@ -139,6 +138,7 @@ impl Shard {
                 dirty_delta = -1;
             }
             self.link_clean_head(key);
+            delta
         } else {
             let key = key.clone();
             self.entries.insert(
@@ -151,9 +151,9 @@ impl Shard {
                 },
             );
             self.total_size += size;
-            entry_delta = size as i64;
             self.link_clean_head(&key);
-        }
+            size as i64
+        };
         (entry_delta, dirty_delta)
     }
 
@@ -566,23 +566,15 @@ enum StateOp {
 
 #[derive(Clone)]
 pub struct CacheStateHandle {
-    state: Arc<DiskCacheState>,
     op_tx: mpsc::UnboundedSender<StateOp>,
 }
 
 impl CacheStateHandle {
     pub fn spawn(state: Arc<DiskCacheState>) -> Self {
         let (op_tx, op_rx) = mpsc::unbounded_channel();
-        let handle = Self {
-            state: Arc::clone(&state),
-            op_tx,
-        };
+        let handle = Self { op_tx };
         tokio::spawn(run_state_worker(state, op_rx));
         handle
-    }
-
-    pub fn state(&self) -> &Arc<DiskCacheState> {
-        &self.state
     }
 
     pub fn mark_dirty(&self, bucket: &str, key: &str, size: u64) {

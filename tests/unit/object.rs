@@ -2,7 +2,7 @@ use maxio::api::object::{
     ConditionalResult, check_conditions, etag_matches, parse_delete_objects_xml,
 };
 use maxio::iam::{ROOT_CANONICAL_ID, ROOT_DISPLAY_NAME};
-use maxio::storage::{BatchDeleteObject, ObjectMeta};
+use maxio::storage::ObjectMeta;
 
 #[test]
 fn parse_delete_objects_xml_reads_version_id() {
