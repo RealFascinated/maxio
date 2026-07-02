@@ -123,7 +123,9 @@ pub(crate) async fn body_to_reader(
             (tokio::io::BufReader::new(raw_reader), has_trailers),
             |(reader, has_trailers)| async move {
                 let (chunk, reader) = read_aws_chunk(reader, has_trailers).await?;
-                Ok::<_, std::io::Error>(chunk.map(|c| (bytes::Bytes::from(c), (reader, has_trailers))))
+                Ok::<_, std::io::Error>(
+                    chunk.map(|c| (bytes::Bytes::from(c), (reader, has_trailers))),
+                )
             },
         );
         Ok(Box::pin(tokio_util::io::StreamReader::new(chunked)))

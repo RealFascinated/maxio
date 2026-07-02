@@ -97,7 +97,7 @@ impl Shard {
 
     fn mark_dirty(&mut self, key: ObjectKey, size: u64) -> (i64, i64) {
         let mut dirty_delta = 0i64;
-        let entry_delta = if let Some(entry) = self.entries.get_mut(&key) {
+        let size_delta = if let Some(entry) = self.entries.get_mut(&key) {
             let delta = size as i64 - entry.size as i64;
             self.total_size = self.total_size.saturating_sub(entry.size) + size;
             entry.size = size;
@@ -123,12 +123,12 @@ impl Shard {
             dirty_delta = 1;
             size as i64
         };
-        (entry_delta, dirty_delta)
+        (size_delta, dirty_delta)
     }
 
     fn mark_clean(&mut self, key: &ObjectKey, size: u64) -> (i64, i64) {
         let mut dirty_delta = 0i64;
-        let entry_delta = if let Some(entry) = self.entries.get_mut(key) {
+        let size_delta = if let Some(entry) = self.entries.get_mut(key) {
             let delta = size as i64 - entry.size as i64;
             self.total_size = self.total_size.saturating_sub(entry.size) + size;
             entry.size = size;
@@ -154,7 +154,7 @@ impl Shard {
             self.link_clean_head(&key);
             size as i64
         };
-        (entry_delta, dirty_delta)
+        (size_delta, dirty_delta)
     }
 
     fn record_hit(&mut self, key: ObjectKey, size: u64) -> i64 {
@@ -222,24 +222,26 @@ impl Shard {
         }
     }
 
-    fn retain_bucket(&mut self, bucket: &str) -> (i64, i64) {
+    fn retain_bucket(&mut self, bucket: &str) -> (i64, i64, i64) {
         let keys: Vec<ObjectKey> = self
             .entries
             .keys()
             .filter(|(b, _)| b == bucket)
             .cloned()
             .collect();
-        let mut entry_delta = 0i64;
+        let mut size_delta = 0i64;
+        let mut entry_count_delta = 0i64;
         let mut dirty_delta = 0i64;
         for key in keys {
             if let Some((size, dirty)) = self.remove(&key) {
-                entry_delta -= size as i64;
+                size_delta -= size as i64;
+                entry_count_delta -= 1;
                 if dirty {
                     dirty_delta -= 1;
                 }
             }
         }
-        (entry_delta, dirty_delta)
+        (size_delta, entry_count_delta, dirty_delta)
     }
 }
 
@@ -273,21 +275,29 @@ impl DiskCacheState {
         }
     }
 
-    fn apply_shard_deltas(&self, entry_delta: i64, dirty_delta: i64, dirty_bytes_delta: i64) {
-        if entry_delta != 0 {
-            if entry_delta > 0 {
-                self.entry_count
-                    .fetch_add(entry_delta as usize, Ordering::Relaxed);
+    fn apply_shard_deltas(
+        &self,
+        size_delta: i64,
+        entry_count_delta: i64,
+        dirty_delta: i64,
+        dirty_bytes_delta: i64,
+    ) {
+        if size_delta != 0 {
+            if size_delta > 0 {
+                self.total_size
+                    .fetch_add(size_delta as u64, Ordering::Relaxed);
             } else {
-                self.entry_count
-                    .fetch_sub((-entry_delta) as usize, Ordering::Relaxed);
+                self.total_size
+                    .fetch_sub((-size_delta) as u64, Ordering::Relaxed);
             }
-            if entry_delta > 0 {
-                self.total_size
-                    .fetch_add(entry_delta as u64, Ordering::Relaxed);
+        }
+        if entry_count_delta != 0 {
+            if entry_count_delta > 0 {
+                self.entry_count
+                    .fetch_add(entry_count_delta as usize, Ordering::Relaxed);
             } else {
-                self.total_size
-                    .fetch_sub((-entry_delta) as u64, Ordering::Relaxed);
+                self.entry_count
+                    .fetch_sub((-entry_count_delta) as usize, Ordering::Relaxed);
             }
         }
         if dirty_delta != 0 {
@@ -329,36 +339,49 @@ impl DiskCacheState {
     pub fn mark_dirty_sync(&self, bucket: &str, key: &str, size: u64) {
         let key = (bucket.to_string(), key.to_string());
         let mut shard = self.shards[shard_index(&key)].lock().unwrap();
+        let is_new = !shard.entries.contains_key(&key);
         let old = shard.entries.get(&key).map(|e| (e.size, e.dirty));
-        let (entry_delta, dirty_delta) = shard.mark_dirty(key, size);
+        let (size_delta, dirty_delta) = shard.mark_dirty(key, size);
         drop(shard);
         let dirty_bytes_delta = match old {
             None => size as i64,
             Some((_old_size, false)) => size as i64,
             Some((old_size, true)) => size as i64 - old_size as i64,
         };
-        self.apply_shard_deltas(entry_delta, dirty_delta, dirty_bytes_delta);
+        self.apply_shard_deltas(
+            size_delta,
+            if is_new { 1 } else { 0 },
+            dirty_delta,
+            dirty_bytes_delta,
+        );
     }
 
     pub fn mark_clean_sync(&self, bucket: &str, key: &str, size: u64) {
         let key = (bucket.to_string(), key.to_string());
         let mut shard = self.shards[shard_index(&key)].lock().unwrap();
+        let is_new = !shard.entries.contains_key(&key);
         let old_dirty = shard
             .entries
             .get(&key)
             .and_then(|e| e.dirty.then_some(e.size));
-        let (entry_delta, dirty_delta) = shard.mark_clean(&key, size);
+        let (size_delta, dirty_delta) = shard.mark_clean(&key, size);
         drop(shard);
         let dirty_bytes_delta = old_dirty.map(|s| -(s as i64)).unwrap_or(0);
-        self.apply_shard_deltas(entry_delta, dirty_delta, dirty_bytes_delta);
+        self.apply_shard_deltas(
+            size_delta,
+            if is_new { 1 } else { 0 },
+            dirty_delta,
+            dirty_bytes_delta,
+        );
     }
 
     pub fn record_hit_sync(&self, bucket: &str, key: &str, size: u64) {
         let key = (bucket.to_string(), key.to_string());
         let mut shard = self.shards[shard_index(&key)].lock().unwrap();
-        let entry_delta = shard.record_hit(key, size);
+        let is_new = !shard.entries.contains_key(&key);
+        let size_delta = shard.record_hit(key, size);
         drop(shard);
-        self.apply_shard_deltas(entry_delta, 0, 0);
+        self.apply_shard_deltas(size_delta, if is_new { 1 } else { 0 }, 0, 0);
     }
 
     pub fn remove_sync(&self, bucket: &str, key: &str) -> Option<u64> {
@@ -367,7 +390,7 @@ impl DiskCacheState {
         let removed = shard.remove(&key);
         drop(shard);
         if let Some((size, dirty)) = removed {
-            self.apply_shard_deltas(-(size as i64), if dirty { -1 } else { 0 }, 0);
+            self.apply_shard_deltas(-(size as i64), -1, if dirty { -1 } else { 0 }, 0);
             if dirty {
                 self.dirty_bytes.fetch_sub(size, Ordering::Relaxed);
             }
@@ -468,15 +491,17 @@ impl DiskCacheState {
     }
 
     pub fn purge_bucket_sync(&self, bucket: &str) {
-        let mut entry_delta = 0i64;
+        let mut size_delta = 0i64;
+        let mut entry_count_delta = 0i64;
         let mut dirty_delta = 0i64;
         for shard in &self.shards {
             let mut guard = shard.lock().unwrap();
-            let (e, d) = guard.retain_bucket(bucket);
-            entry_delta += e;
+            let (s, e, d) = guard.retain_bucket(bucket);
+            size_delta += s;
+            entry_count_delta += e;
             dirty_delta += d;
         }
-        self.apply_shard_deltas(entry_delta, dirty_delta, 0);
+        self.apply_shard_deltas(size_delta, entry_count_delta, dirty_delta, 0);
         self.recalc_dirty_bytes();
     }
 

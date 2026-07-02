@@ -9,6 +9,7 @@ use maxio::metrics::MetricsRegistry;
 use maxio::metrics::cache_name::OBJECT_DISK;
 use maxio::storage::blob::{BlobStorage, IO_BUFFER_SIZE, stream_to_writer};
 use maxio::storage::cache::{CacheLayer, decode_index, encode_index};
+use maxio::storage::disk_cache_state::DiskCacheState;
 use maxio::storage::{ObjectMeta, PartMeta, validate_bucket_name};
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, BufWriter, ReadBuf};
@@ -50,6 +51,22 @@ fn cache_index_roundtrip() {
     let (decoded_entries, decoded_dirty) = decode_index(&data).unwrap();
     assert_eq!(decoded_entries, entries);
     assert_eq!(decoded_dirty, dirty);
+}
+
+#[test]
+fn disk_cache_state_entry_count_tracks_objects_not_bytes() {
+    let state = DiskCacheState::new();
+    state.record_hit_sync("bucket-a", "small.txt", 128);
+    state.record_hit_sync("bucket-a", "large.bin", 64 * 1024 * 1024);
+    assert_eq!(state.entry_count(), 2);
+    assert_eq!(state.total_size(), 128 + 64 * 1024 * 1024);
+
+    state.mark_dirty_sync("bucket-a", "small.txt", 256);
+    assert_eq!(state.entry_count(), 2);
+
+    state.remove_sync("bucket-a", "large.bin");
+    assert_eq!(state.entry_count(), 1);
+    assert_eq!(state.total_size(), 256);
 }
 
 #[tokio::test]
@@ -158,6 +175,7 @@ async fn blob_read_miss_populates_cache_and_records_metrics() {
         .unwrap();
     assert_eq!(disk.misses, 1);
     assert_eq!(disk.hits, 0);
+    assert_eq!(disk.entries, 1);
 
     blobs
         .open_object("bucket-a", "obj.txt", &object_meta)
