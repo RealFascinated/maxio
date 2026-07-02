@@ -232,7 +232,8 @@ pub async fn get_object_for_read(
         meta.checksum_algorithm = checksum_from_db(&algo);
         meta.checksum_value = Some(value);
     }
-    ctx.object_read_cache().insert(bucket_name, key, meta.clone());
+    ctx.object_read_cache()
+        .insert(bucket_name, key, meta.clone());
     crate::perf::done_detail("get_object_for_read", started, bucket_name);
     Ok(meta)
 }

@@ -5,8 +5,8 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::time::{MissedTickBehavior, interval};
 
 use super::DbContext;
-use crate::db::repos::flush_deferred_upsert;
 use crate::db::repos::PutBucketContext;
+use crate::db::repos::flush_deferred_upsert;
 use crate::storage::ObjectMeta;
 
 const FLUSH_INTERVAL_MS: u64 = 2;
