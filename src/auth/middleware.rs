@@ -108,9 +108,8 @@ pub async fn auth_middleware(
     }
 
     request.extensions_mut().insert(principal);
-    let response = next.run(request).await;
     crate::perf::done("auth_sigv4", started);
-    Ok(response)
+    Ok(next.run(request).await)
 }
 
 async fn resolve_credentials(

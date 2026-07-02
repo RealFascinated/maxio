@@ -1,5 +1,6 @@
 pub mod blob;
 pub mod cache;
+pub mod disk_cache_state;
 pub mod hashing;
 pub mod lifecycle;
 pub mod metadata;

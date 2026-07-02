@@ -1,16 +1,15 @@
 use super::StorageError;
+use super::disk_cache_state::{CacheStateHandle, DiskCacheState, ObjectKey};
 use crate::metrics::{MetricsRegistry, cache_name};
 use futures::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs;
-use tokio::sync::{Mutex, Notify};
-
-type ObjectKey = (String, String);
+use tokio::sync::Notify;
 
 const INDEX_MAGIC: &[u8; 4] = b"MXIO";
 const INDEX_VERSION: u8 = 1;
@@ -22,9 +21,8 @@ pub struct CacheLayer {
     max_size: u64,
     writeback: bool,
     flush_interval: Duration,
-    lru: Mutex<LruState>,
-    dirty: Mutex<HashSet<ObjectKey>>,
-    dirty_bytes: AtomicU64,
+    state: Arc<DiskCacheState>,
+    state_handle: CacheStateHandle,
     writeback_halted: AtomicBool,
     scan_complete: AtomicBool,
     scan_ready: Notify,
@@ -33,12 +31,9 @@ pub struct CacheLayer {
     /// Set when LRU was seeded from .lru-index.bin; tells spawn_scan_task to run
     /// a merge scan (discover/drop) rather than a full replace scan.
     index_loaded: AtomicBool,
+    /// Merge scan finished (index-loaded restarts only). Writers use `scan_complete`.
+    merge_scan_complete: AtomicBool,
     metrics: Option<Arc<MetricsRegistry>>,
-}
-
-struct LruState {
-    entries: HashMap<ObjectKey, (Instant, u64)>,
-    total_size: u64,
 }
 
 impl CacheLayer {
@@ -52,6 +47,8 @@ impl CacheLayer {
         let cache_dir = PathBuf::from(cache_dir);
         let buckets_dir = cache_dir.join("buckets");
         fs::create_dir_all(&buckets_dir).await?;
+        let state = Arc::new(DiskCacheState::new());
+        let state_handle = CacheStateHandle::spawn(Arc::clone(&state));
         let layer = Self {
             cache_dir,
             buckets_dir,
@@ -59,37 +56,32 @@ impl CacheLayer {
             max_size,
             writeback,
             flush_interval,
-            lru: Mutex::new(LruState {
-                entries: HashMap::new(),
-                total_size: 0,
-            }),
-            dirty: Mutex::new(HashSet::new()),
-            dirty_bytes: AtomicU64::new(0),
+            state,
+            state_handle,
             writeback_halted: AtomicBool::new(false),
             scan_complete: AtomicBool::new(false),
             scan_ready: Notify::new(),
             dirty_scan_complete: AtomicBool::new(false),
             dirty_scan_ready: Notify::new(),
             index_loaded: AtomicBool::new(false),
+            merge_scan_complete: AtomicBool::new(false),
             metrics: None,
         };
         if let Some((entries, dirty)) = layer.load_index().await? {
-            // Apply index state (LRU entries + dirty set) but leave scan_complete=false.
-            // spawn_scan_task will run a merge scan to reconcile with the filesystem
-            // before marking scan_complete, ensuring total_size is accurate before
-            // reserve_space or the trimmer can run.
+            // Trust the on-disk index for eviction sizing; reconcile in the background so
+            // PUTs are not blocked for minutes on large caches (596k+ entries).
             layer.apply_index(entries, dirty).await;
-            layer.recalc_dirty_bytes().await;
             layer.index_loaded.store(true, Ordering::Release);
+            layer.scan_complete.store(true, Ordering::Release);
+            layer.scan_ready.notify_waiters();
             tracing::info!(
-                entries = layer.lru.lock().await.entries.len(),
+                entries = layer.state.entry_count(),
                 "cache: loaded LRU index, reconciling with filesystem"
             );
         } else if cfg!(test) {
             let found = layer.scan_lru_entries().await?;
             layer.apply_lru_entries(found).await;
             layer.scan_dirty_entries().await;
-            layer.recalc_dirty_bytes().await;
             layer.scan_complete.store(true, Ordering::Release);
             layer.dirty_scan_complete.store(true, Ordering::Release);
         }
@@ -119,19 +111,13 @@ impl CacheLayer {
     }
 
     async fn apply_index(&self, entries: Vec<(String, String, u64)>, dirty: HashSet<ObjectKey>) {
-        self.apply_lru_entries(entries).await;
-        *self.dirty.lock().await = dirty;
+        self.state.apply_bulk(&entries, &dirty);
     }
 
     pub async fn save_index(&self) -> Result<(), anyhow::Error> {
-        let lru = self.lru.lock().await;
-        let dirty = self.dirty.lock().await;
-        let entries: Vec<(String, String, u64)> = lru
-            .entries
-            .iter()
-            .map(|((bucket, key), (_, size))| (bucket.clone(), key.clone(), *size))
-            .collect();
-        drop(lru);
+        self.state_handle.drain().await;
+        let entries = self.state.all_entries();
+        let dirty = self.state.all_dirty();
 
         let path = self.index_path();
         let tmp = path.with_extension("bin.tmp");
@@ -162,7 +148,11 @@ impl CacheLayer {
     ///
     /// In both cases sets `scan_complete` when done so pending operations can proceed.
     pub fn spawn_scan_task(self: Arc<Self>) {
-        if self.scan_complete.load(Ordering::Acquire) {
+        if self.index_loaded.load(Ordering::Acquire) {
+            if self.merge_scan_complete.load(Ordering::Acquire) {
+                return;
+            }
+        } else if self.scan_complete.load(Ordering::Acquire) {
             return;
         }
         tokio::spawn(async move {
@@ -179,7 +169,7 @@ impl CacheLayer {
         match self.scan_lru_entries().await {
             Ok(found) => {
                 self.apply_lru_entries(found).await;
-                let entries = self.lru.lock().await.entries.len();
+                let entries = self.state.entry_count();
                 self.scan_complete.store(true, Ordering::Release);
                 self.scan_ready.notify_waiters();
                 tracing::info!(
@@ -193,8 +183,7 @@ impl CacheLayer {
                 if self.writeback {
                     let dirty_start = Instant::now();
                     self.scan_dirty_entries().await;
-                    self.recalc_dirty_bytes().await;
-                    let dirty_count = self.dirty.lock().await.len();
+                    let dirty_count = self.state.dirty_count();
                     self.dirty_scan_complete.store(true, Ordering::Release);
                     self.dirty_scan_ready.notify_waiters();
                     tracing::debug!(
@@ -228,14 +217,12 @@ impl CacheLayer {
         // Snapshot LRU keys before the filesystem walk. Entries evicted by
         // concurrent reserve_space calls (shouldn't happen yet since scan_complete
         // is still false at this point) would otherwise be re-added as phantoms.
-        let pre_scan_keys: HashSet<ObjectKey> =
-            self.lru.lock().await.entries.keys().cloned().collect();
+        let pre_scan_keys = self.state.all_keys();
         let found = match self.scan_lru_entries().await {
             Ok(f) => f,
             Err(e) => {
                 tracing::error!("cache: merge scan failed: {e}");
-                self.scan_complete.store(true, Ordering::Release);
-                self.scan_ready.notify_waiters();
+                self.merge_scan_complete.store(true, Ordering::Release);
                 self.dirty_scan_complete.store(true, Ordering::Release);
                 self.dirty_scan_ready.notify_waiters();
                 return;
@@ -243,35 +230,8 @@ impl CacheLayer {
         };
         let on_disk: HashMap<ObjectKey, u64> =
             found.into_iter().map(|(b, k, s)| ((b, k), s)).collect();
-        let now = Instant::now();
-        let mut lru = self.lru.lock().await;
-        let mut dirty = self.dirty.lock().await;
-        // Drop entries whose files no longer exist on disk.
-        let stale: Vec<ObjectKey> = pre_scan_keys
-            .iter()
-            .filter(|k| !on_disk.contains_key(*k) && lru.entries.contains_key(*k))
-            .cloned()
-            .collect();
-        let mut removed: u64 = 0;
-        for key in &stale {
-            if let Some((_, size)) = lru.entries.remove(key) {
-                lru.total_size = lru.total_size.saturating_sub(size);
-            }
-            dirty.remove(key);
-            removed += 1;
-        }
-        // Add files on disk that were never in the index.
-        let mut added: u64 = 0;
-        for (key, size) in &on_disk {
-            if !pre_scan_keys.contains(key) && !lru.entries.contains_key(key) {
-                lru.entries.insert(key.clone(), (now, *size));
-                lru.total_size += size;
-                added += 1;
-            }
-        }
-        let entries = lru.entries.len();
-        drop(dirty);
-        drop(lru);
+        let (removed, added) = self.state.merge_reconcile(&pre_scan_keys, &on_disk);
+        let entries = self.state.entry_count();
         tracing::info!(
             removed,
             added,
@@ -282,13 +242,9 @@ impl CacheLayer {
         if let Err(e) = self.save_index().await {
             tracing::warn!("cache: index save after merge: {e}");
         }
-        // Mark scan complete — total_size is now accurate, trimmer and
-        // reserve_space can safely run.
-        self.scan_complete.store(true, Ordering::Release);
-        self.scan_ready.notify_waiters();
+        self.merge_scan_complete.store(true, Ordering::Release);
         if self.writeback {
             self.scan_dirty_entries().await;
-            self.recalc_dirty_bytes().await;
         }
         self.dirty_scan_complete.store(true, Ordering::Release);
         self.dirty_scan_ready.notify_waiters();
@@ -308,12 +264,8 @@ impl CacheLayer {
     }
 
     pub async fn purge_bucket(&self, bucket: &str) {
-        let mut lru = self.lru.lock().await;
-        lru.entries.retain(|(b, _), _| b != bucket);
-        lru.total_size = lru.entries.values().map(|(_, size)| *size).sum();
-        drop(lru);
-        self.dirty.lock().await.retain(|(b, _)| b != bucket);
-        self.recalc_dirty_bytes().await;
+        self.state_handle.drain().await;
+        self.state.purge_bucket_sync(bucket);
     }
 
     pub fn object_path(&self, bucket: &str, key: &str) -> PathBuf {
@@ -334,21 +286,11 @@ impl CacheLayer {
     }
 
     async fn apply_lru_entries(&self, found: Vec<(String, String, u64)>) {
-        let now = Instant::now();
-        let total_size: u64 = found.iter().map(|(_, _, size)| *size).sum();
-        let mut lru = self.lru.lock().await;
-        lru.entries = found
-            .into_iter()
-            .map(|(bucket, key, size)| ((bucket, key), (now, size)))
-            .collect();
-        lru.total_size = total_size;
+        self.state.apply_bulk(&found, &HashSet::new());
     }
 
     async fn scan_dirty_entries(&self) {
-        let candidates: Vec<ObjectKey> = {
-            let lru = self.lru.lock().await;
-            lru.entries.keys().cloned().collect()
-        };
+        let candidates: Vec<ObjectKey> = self.state.all_keys().into_iter().collect();
         let data_buckets_dir = self.data_buckets_dir.clone();
         let dirty: HashSet<ObjectKey> = stream::iter(candidates)
             .map(|(bucket, key)| {
@@ -366,47 +308,26 @@ impl CacheLayer {
             .filter_map(|entry| async move { entry })
             .collect()
             .await;
-        *self.dirty.lock().await = dirty;
+        self.state.set_dirty_set(dirty);
     }
 
     pub async fn record_read_hit(&self, bucket: &str, key: &str, size: u64) {
         if let Some(m) = &self.metrics {
             m.record_cache_hit(cache_name::OBJECT_DISK);
         }
-        self.record_access_inner(bucket, key, size).await;
-    }
-
-    async fn record_access_inner(&self, bucket: &str, key: &str, size: u64) {
-        let mut lru = self.lru.lock().await;
-        let entry_key = (bucket.to_string(), key.to_string());
-        if let Some((_, old_size)) = lru.entries.insert(entry_key, (Instant::now(), size)) {
-            lru.total_size = lru.total_size.saturating_sub(old_size);
-        }
-        lru.total_size += size;
-    }
-
-    async fn recalc_dirty_bytes(&self) {
-        let lru = self.lru.lock().await;
-        let dirty = self.dirty.lock().await;
-        let bytes: u64 = dirty
-            .iter()
-            .filter_map(|k| lru.entries.get(k).map(|(_, size)| *size))
-            .sum();
-        self.dirty_bytes.store(bytes, Ordering::Relaxed);
+        self.state_handle.record_hit(bucket, key, size);
     }
 
     async fn sync_gauges(&self) {
         let Some(m) = &self.metrics else {
             return;
         };
-        let lru = self.lru.lock().await;
-        let dirty = self.dirty.lock().await;
         m.set_cache_state(
             cache_name::OBJECT_DISK,
-            lru.total_size,
-            lru.entries.len(),
-            dirty.len(),
-            self.dirty_bytes.load(Ordering::Relaxed),
+            self.state.total_size(),
+            self.state.entry_count(),
+            self.state.dirty_count(),
+            self.state.dirty_bytes(),
         );
         m.set_cache_writeback_halted(
             cache_name::OBJECT_DISK,
@@ -415,71 +336,27 @@ impl CacheLayer {
     }
 
     pub async fn remove_entry(&self, bucket: &str, key: &str) {
-        let entry_key = (bucket.to_string(), key.to_string());
-        let removed_size = {
-            let mut lru = self.lru.lock().await;
-            lru.entries.remove(&entry_key).map(|(_, size)| {
-                lru.total_size = lru.total_size.saturating_sub(size);
-                size
-            })
-        };
-        if self.dirty.lock().await.remove(&entry_key) {
-            if let Some(size) = removed_size {
-                self.dirty_bytes.fetch_sub(size, Ordering::Relaxed);
-            }
-        }
+        self.state_handle.remove(bucket, key).await;
     }
 
     pub async fn mark_dirty(&self, bucket: &str, key: &str, size: u64) {
-        let entry_key = (bucket.to_string(), key.to_string());
-        let old_size = {
-            let lru = self.lru.lock().await;
-            lru.entries.get(&entry_key).map(|(_, s)| *s)
-        };
-        self.record_access_inner(bucket, key, size).await;
-        let mut dirty = self.dirty.lock().await;
-        if dirty.insert(entry_key) {
-            self.dirty_bytes.fetch_add(size, Ordering::Relaxed);
-        } else if let Some(old) = old_size {
-            if size != old {
-                self.dirty_bytes
-                    .fetch_add(size.saturating_sub(old), Ordering::Relaxed);
-            }
-        }
+        self.state_handle.mark_dirty(bucket, key, size);
     }
 
     pub async fn mark_clean(&self, bucket: &str, key: &str, size: u64) {
-        let entry_key = (bucket.to_string(), key.to_string());
-        self.record_access_inner(bucket, key, size).await;
-        // Look up size from lru before taking dirty, preserving the lru→dirty lock
-        // order used everywhere else and preventing an AB-BA deadlock with
-        // reserve_space/sync_gauges/recalc_dirty_bytes which all take lru then dirty.
-        let bytes = {
-            let lru = self.lru.lock().await;
-            lru.entries.get(&entry_key).map(|(_, s)| *s).unwrap_or(size)
-        };
-        if self.dirty.lock().await.remove(&entry_key) {
-            self.dirty_bytes.fetch_sub(bytes, Ordering::Relaxed);
-        }
+        self.state_handle.drain().await;
+        self.state.mark_clean_sync(bucket, key, size);
     }
 
     pub async fn reserve_space(&self, needed: u64) -> Result<Vec<PathBuf>, StorageError> {
         self.wait_until_scan_complete().await;
+        self.state_handle.drain().await;
         let mut evicted = Vec::new();
         loop {
-            let victim = {
-                let lru = self.lru.lock().await;
-                if lru.total_size + needed <= self.max_size {
-                    break;
-                }
-                let dirty = self.dirty.lock().await;
-                lru.entries
-                    .iter()
-                    .filter(|(k, _)| !dirty.contains(*k))
-                    .min_by_key(|(_, (access, _))| *access)
-                    .map(|(k, (_, size))| (k.clone(), *size))
-            };
-            let Some((key, size)) = victim else {
+            if self.state.total_size() + needed <= self.max_size {
+                break;
+            }
+            let Some((key, size)) = self.state.pop_clean_lru() else {
                 return Err(StorageError::InvalidKey(
                     "cache full and no clean entries to evict".into(),
                 ));
@@ -493,11 +370,7 @@ impl CacheLayer {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => return Err(StorageError::Io(e)),
             }
-            {
-                let mut lru = self.lru.lock().await;
-                lru.entries.remove(&key);
-                lru.total_size = lru.total_size.saturating_sub(size);
-            }
+            let _ = size;
             evicted.push(path);
         }
         Ok(evicted)
@@ -524,7 +397,7 @@ impl CacheLayer {
         if let Some(m) = &self.metrics {
             m.record_drive_read_op();
         }
-        self.record_access_inner(bucket, key, size).await;
+        self.state_handle.record_hit(bucket, key, size);
         Ok(cache_path)
     }
 
@@ -534,9 +407,10 @@ impl CacheLayer {
         }
         self.wait_until_scan_complete().await;
         self.wait_until_dirty_scan_complete().await;
+        self.state_handle.drain().await;
 
         let start = Instant::now();
-        let dirty_keys: Vec<ObjectKey> = self.dirty.lock().await.iter().cloned().collect();
+        let dirty_keys: Vec<ObjectKey> = self.state.all_dirty().into_iter().collect();
         if dirty_keys.is_empty() {
             self.writeback_halted.store(false, Ordering::Relaxed);
             return Ok(());
@@ -550,10 +424,7 @@ impl CacheLayer {
             let size = match fs::metadata(&cache_path).await {
                 Ok(m) => m.len(),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    self.dirty
-                        .lock()
-                        .await
-                        .remove(&(bucket.clone(), key.clone()));
+                    self.state.remove_sync(&bucket, &key);
                     continue;
                 }
                 Err(e) => return Err(StorageError::Io(e)),
@@ -635,38 +506,70 @@ impl CacheLayer {
         });
     }
 
-    /// Periodically evicts LRU clean entries when `total_size` exceeds `max_size`.
-    pub fn spawn_trim_task(self: Arc<Self>) {
+    /// Continuously evicts LRU clean entries when `total_size` exceeds `max_size`.
+    pub fn spawn_eviction_task(self: Arc<Self>) {
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(30));
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                let size_before = {
-                    let lru = self.lru.lock().await;
-                    lru.total_size
-                };
-                if size_before <= self.max_size {
+                if self.state.total_size() <= self.max_size {
                     continue;
                 }
+                let size_before = self.state.total_size();
                 tracing::info!(
                     size_gb = size_before as f64 / 1e9,
                     max_gb = self.max_size as f64 / 1e9,
-                    "cache: over limit, trimming"
+                    "cache: over limit, evicting in background"
                 );
-                match self.reserve_space(0).await {
-                    Ok(_) => {
-                        let size_after = self.lru.lock().await.total_size;
-                        tracing::info!(
-                            freed_gb = size_before.saturating_sub(size_after) as f64 / 1e9,
-                            size_gb = size_after as f64 / 1e9,
-                            "cache: trim complete"
-                        );
+                let mut evicted = 0u64;
+                while self.state.total_size() > self.max_size {
+                    match self.evict_one_clean().await {
+                        Ok(true) => {
+                            evicted += 1;
+                            if evicted % 64 == 0 {
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                        Ok(false) => break,
+                        Err(e) => {
+                            tracing::warn!("cache eviction failed: {e}");
+                            break;
+                        }
                     }
-                    Err(e) => tracing::warn!("cache trim failed: {e}"),
+                }
+                if evicted > 0 {
+                    let size_after = self.state.total_size();
+                    tracing::info!(
+                        evicted,
+                        freed_gb = size_before.saturating_sub(size_after) as f64 / 1e9,
+                        size_gb = size_after as f64 / 1e9,
+                        "cache: eviction complete"
+                    );
                 }
             }
         });
+    }
+
+    async fn evict_one_clean(&self) -> Result<bool, StorageError> {
+        self.state_handle.drain().await;
+        let Some((key, _size)) = self.state.pop_clean_lru() else {
+            return Ok(false);
+        };
+        if let Some(m) = &self.metrics {
+            m.record_cache_eviction(cache_name::OBJECT_DISK);
+        }
+        let path = self.object_path(&key.0, &key.1);
+        match fs::remove_file(&path).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(e) => Err(StorageError::Io(e)),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn spawn_trim_task(self: Arc<Self>) {
+        self.spawn_eviction_task();
     }
 
     /// Periodically persists the LRU index so restarts re-discover fewer files.

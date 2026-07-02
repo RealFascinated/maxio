@@ -57,7 +57,6 @@ pub fn defer_object_upsert(
     meta: &ObjectMeta,
     put_ctx: Option<PutBucketContext>,
 ) {
-    write_through_read_cache(ctx, bucket_name, meta);
     ctx.async_meta_writer().enqueue(bucket_name, meta, put_ctx);
 }
 
@@ -71,6 +70,7 @@ pub(crate) async fn flush_deferred_upsert(
     if !staged_write_still_current(ctx, &bucket_name, &meta.key, &staged_at) {
         return;
     }
+    write_through_read_cache(ctx, &bucket_name, &meta);
     let started = crate::perf::start();
     let result = upsert_object_inner(ctx, &bucket_name, &meta, put_ctx.as_ref(), false).await;
     crate::perf::done_detail("async_upsert_object", started, &bucket_name);
