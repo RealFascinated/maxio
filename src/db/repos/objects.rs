@@ -72,7 +72,7 @@ pub(crate) async fn flush_deferred_upsert(
         return;
     }
     let started = crate::perf::start();
-    let result = upsert_object_inner(&ctx, &bucket_name, &meta, put_ctx.as_ref(), false).await;
+    let result = upsert_object_inner(ctx, &bucket_name, &meta, put_ctx.as_ref(), false).await;
     crate::perf::done_detail("async_upsert_object", started, &bucket_name);
     if let Err(e) = result {
         tracing::warn!(
