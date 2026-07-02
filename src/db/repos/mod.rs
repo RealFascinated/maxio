@@ -37,9 +37,13 @@ pub(crate) type AclGrantRow = (
 pub(crate) async fn get_conn(
     pool: &DbPool,
 ) -> Result<impl std::ops::DerefMut<Target = AsyncPgConnection> + Send, StorageError> {
-    pool.get()
+    let started = crate::perf::start();
+    let conn = pool
+        .get()
         .await
-        .map_err(|e| StorageError::Io(std::io::Error::other(e)))
+        .map_err(|e| StorageError::Io(std::io::Error::other(e)))?;
+    crate::perf::done("db_pool_get", started);
+    Ok(conn)
 }
 
 pub(crate) fn db_err(e: impl std::fmt::Display) -> StorageError {

@@ -477,6 +477,7 @@ async fn blob_small_flat_write_uses_buffered_path() {
             "small.bin",
             Box::pin(std::io::Cursor::new(payload.clone())),
             None,
+            Some(4096),
         )
         .await
         .unwrap();

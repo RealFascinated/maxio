@@ -167,6 +167,7 @@ impl ObjectStorage {
         content_type: &str,
         body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+        content_length: Option<u64>,
     ) -> Result<PutResult, StorageError> {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
@@ -212,7 +213,7 @@ impl ObjectStorage {
 
         let written = self
             .blobs
-            .write_flat_object_temp(bucket, key, body, checksum)
+            .write_flat_object_temp(bucket, key, body, checksum, content_length)
             .await?;
 
         let mut object_meta = ObjectMeta {
@@ -702,13 +703,16 @@ impl Storage for ObjectStorage {
         content_type: &str,
         body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+        content_length: Option<u64>,
     ) -> Result<PutResult, StorageError> {
         let t = std::time::Instant::now();
         let result = self
-            .put_object_inner(bucket, key, content_type, body, checksum)
+            .put_object_inner(bucket, key, content_type, body, checksum, content_length)
             .await;
         let bytes = result.as_ref().map(|r| r.size).unwrap_or(0);
-        self.record("put_object", t.elapsed(), bytes);
+        let elapsed = t.elapsed();
+        self.record("put_object", elapsed, bytes);
+        crate::perf::done_detail("storage_put_object", t, bucket);
         result
     }
 
@@ -730,7 +734,9 @@ impl Storage for ObjectStorage {
         }
         .await;
         let bytes = result.as_ref().map(|(_, meta)| meta.size).unwrap_or(0);
-        self.record("get_object", t.elapsed(), bytes);
+        let elapsed = t.elapsed();
+        self.record("get_object", elapsed, bytes);
+        crate::perf::done_detail("storage_get_object", t, bucket);
         result
     }
 

@@ -206,7 +206,7 @@ pub(super) async fn copy_object(
     // Write destination
     let result = state
         .storage
-        .put_object(&bucket, &key, &content_type, reader, checksum)
+        .put_object(&bucket, &key, &content_type, reader, checksum, None)
         .await
         .map_err(|e| match e {
             StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),

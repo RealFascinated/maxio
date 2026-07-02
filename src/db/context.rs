@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
+
 use super::DbPool;
 use super::bucket_cache::BucketCache;
 use super::multipart_cache::MultipartCache;
@@ -14,6 +16,8 @@ pub struct DbContext {
     bucket_cache: Arc<BucketCache>,
     multipart_cache: Arc<MultipartCache>,
     object_read_cache: Arc<ObjectReadCache>,
+    /// Limits concurrent background metadata upserts (async-meta-write path).
+    async_meta_slots: Arc<Semaphore>,
 }
 
 impl DbContext {
@@ -33,6 +37,7 @@ impl DbContext {
                 metrics,
                 limits.object_read_max_entries,
             )),
+            async_meta_slots: Arc::new(Semaphore::new(32)),
         }
     }
 
@@ -54,5 +59,9 @@ impl DbContext {
 
     pub fn object_read_cache(&self) -> &ObjectReadCache {
         &self.object_read_cache
+    }
+
+    pub fn async_meta_slots(&self) -> &Arc<Semaphore> {
+        &self.async_meta_slots
     }
 }

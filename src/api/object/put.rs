@@ -91,9 +91,21 @@ pub async fn put_object(
     let checksum = extract_checksum(&headers);
     let inline_tags = parse_amz_tagging_header(&headers)?;
 
+    let content_length = headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok());
+
     let result = state
         .storage
-        .put_object(&bucket, &key, content_type, reader, checksum)
+        .put_object(
+            &bucket,
+            &key,
+            content_type,
+            reader,
+            checksum,
+            content_length,
+        )
         .await
         .map_err(|e| match e {
             StorageError::NotFound(_) => S3Error::no_such_bucket(&bucket),

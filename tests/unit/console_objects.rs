@@ -105,6 +105,7 @@ async fn folder_delete_stats_counts_nested_objects() {
             "application/x-directory",
             Box::pin(tokio::io::empty()),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -115,6 +116,7 @@ async fn folder_delete_stats_counts_nested_objects() {
             "image/jpeg",
             bytes(b"photo-data"),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -124,6 +126,7 @@ async fn folder_delete_stats_counts_nested_objects() {
             "photos/nested/note.txt",
             "text/plain",
             bytes(b"note"),
+            None,
             None,
         )
         .await
@@ -149,6 +152,7 @@ async fn deleting_last_console_file_preserves_parent_folder_marker() {
             "folder/file.txt",
             "text/plain",
             bytes(b"hello"),
+            None,
             None,
         )
         .await
@@ -182,6 +186,7 @@ async fn deleting_folder_marker_does_not_recreate_it() {
             "folder/",
             "application/x-directory",
             Box::pin(tokio::io::empty()),
+            None,
             None,
         )
         .await
@@ -235,11 +240,11 @@ async fn batch_delete_keys_removes_objects() {
     create_test_bucket(storage.as_ref(), "bucket").await;
 
     storage
-        .put_object("bucket", "a.txt", "text/plain", bytes(b"a"), None)
+        .put_object("bucket", "a.txt", "text/plain", bytes(b"a"), None, None)
         .await
         .unwrap();
     storage
-        .put_object("bucket", "b.txt", "text/plain", bytes(b"b"), None)
+        .put_object("bucket", "b.txt", "text/plain", bytes(b"b"), None, None)
         .await
         .unwrap();
 

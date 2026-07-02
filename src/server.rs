@@ -157,9 +157,15 @@ async fn http_metrics_middleware(
 
     let response = next.run(req).await;
 
+    let elapsed = start.elapsed();
     state
         .metrics
-        .record_http(&method, &route, response.status().as_str(), start.elapsed());
+        .record_http(&method, &route, response.status().as_str(), elapsed);
+    crate::perf::log(
+        "http_request",
+        elapsed,
+        &format!("{method} {route} {}", response.status()),
+    );
 
     response
 }

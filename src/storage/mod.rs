@@ -242,7 +242,8 @@ pub fn is_valid_bucket_name(name: &str) -> bool {
     true
 }
 
-/// Normalize object metadata defaults for owner/acl fields.
+/// Normalize object metadata defaults for owner fields.
+/// Object ACL is implicit-private when absent; do not materialize `object_acl_grants` rows here.
 pub fn normalize_object_meta(
     meta: &mut ObjectMeta,
     bucket_owner_id: &str,
@@ -253,12 +254,6 @@ pub fn normalize_object_meta(
     }
     if meta.owner_display_name.is_empty() {
         meta.owner_display_name = bucket_owner_name.to_string();
-    }
-    if meta.acl.is_none() {
-        meta.acl = Some(crate::iam::Acl::private(
-            &meta.owner_id,
-            &meta.owner_display_name,
-        ));
     }
 }
 

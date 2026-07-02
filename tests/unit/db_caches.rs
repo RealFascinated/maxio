@@ -13,6 +13,7 @@ fn sample_bucket_entry() -> CachedBucketEntry {
         policy: None,
         acl: None,
         cors_rules: vec![],
+        cors_loaded: true,
     }
 }
 

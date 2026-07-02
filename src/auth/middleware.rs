@@ -21,28 +21,32 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, S3Error> {
-    let method = request.method().as_str().to_string();
-    let uri = request.uri().to_string();
-    let query = request.uri().query().unwrap_or("").to_string();
+    let started = crate::perf::start();
+    let query = request.uri().query().unwrap_or("");
 
-    tracing::debug!("{} {}", method, uri);
+    tracing::debug!("{} {}", request.method(), request.uri());
 
-    if query.contains("X-Amz-Signature=") {
-        return handle_presigned(&state, &method, &query, request, next).await;
+    if request
+        .uri()
+        .query()
+        .is_some_and(|q| q.contains("X-Amz-Signature="))
+    {
+        let response = handle_presigned(&state, request, next).await?;
+        crate::perf::done("auth_presigned", started);
+        return Ok(response);
     }
+
+    let method = request.method().as_str();
+    let path = request.uri().path();
 
     let has_auth_header = request.headers().get("authorization").is_some();
 
-    if !has_auth_header
-        && is_public_bypass_allowed(&state, &method, request.uri().path(), &query).await
-    {
-        tracing::debug!(
-            "Public bucket bypass for {} {}",
-            method,
-            request.uri().path()
-        );
+    if !has_auth_header && is_public_bypass_allowed(&state, method, path, query).await {
+        tracing::debug!("Public bucket bypass for {} {}", method, path);
         request.extensions_mut().insert(Principal::anonymous());
-        return Ok(next.run(request).await);
+        let response = next.run(request).await;
+        crate::perf::done("auth_public_bypass", started);
+        return Ok(response);
     }
 
     let auth_header = match request.headers().get("authorization") {
@@ -77,8 +81,10 @@ pub async fn auth_middleware(
         ));
     }
 
-    let path = request.uri().path().to_string();
+    let path = request.uri().path();
+    let cred_started = crate::perf::start();
     let (secret_key, principal) = resolve_credentials(&state, &parsed.access_key).await?;
+    crate::perf::done("auth_resolve_credentials", cred_started);
 
     let signing_key = state.signing_key_cache.get_or_derive(
         &parsed.access_key,
@@ -86,14 +92,16 @@ pub async fn auth_middleware(
         &parsed.region,
         &secret_key,
     );
+    let verify_started = crate::perf::start();
     let valid = signature_v4::verify_with_signing_key(
-        &method,
-        &path,
-        &query,
+        method,
+        path,
+        query,
         request.headers(),
         &parsed,
         &signing_key,
     );
+    crate::perf::done("auth_verify_sigv4", verify_started);
 
     if !valid {
         return Err(S3Error::signature_mismatch());
@@ -101,6 +109,7 @@ pub async fn auth_middleware(
 
     request.extensions_mut().insert(principal);
     let response = next.run(request).await;
+    crate::perf::done("auth_sigv4", started);
     Ok(response)
 }
 
@@ -189,11 +198,11 @@ fn has_query_key(query: &str, key: &str) -> bool {
 
 async fn handle_presigned(
     state: &AppState,
-    method: &str,
-    query: &str,
     mut request: Request,
     next: Next,
 ) -> Result<Response, S3Error> {
+    let method = request.method().as_str();
+    let query = request.uri().query().unwrap_or("");
     let (parsed, timestamp, expires_secs) =
         signature_v4::parse_presigned_query(query).map_err(|e| S3Error::access_denied(e))?;
 
@@ -211,7 +220,7 @@ async fn handle_presigned(
         ));
     }
 
-    let path = request.uri().path().to_string();
+    let path = request.uri().path();
     let (secret_key, principal) = resolve_credentials(state, &parsed.access_key).await?;
 
     let signing_key = state.signing_key_cache.get_or_derive(
@@ -222,7 +231,7 @@ async fn handle_presigned(
     );
     let valid = signature_v4::verify_presigned_with_signing_key(
         method,
-        &path,
+        path,
         query,
         request.headers(),
         &parsed,

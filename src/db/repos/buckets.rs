@@ -85,6 +85,7 @@ pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, S
             policy: meta.policy.clone(),
             acl: meta.acl.clone(),
             cors_rules: meta.cors_rules.clone().unwrap_or_default(),
+            cors_loaded: true,
         },
     );
     Ok(true)
@@ -312,9 +313,12 @@ pub async fn get_bucket_cors(
 ) -> Result<Option<Vec<CorsRule>>, StorageError> {
     validate_bucket_name(bucket)?;
     if let Some(entry) = ctx.bucket_cache().get(bucket) {
-        return Ok(Some(entry.cors_rules));
+        if entry.cors_loaded {
+            return Ok(Some(entry.cors_rules));
+        }
+    } else {
+        ctx.bucket_cache().record_miss();
     }
-    ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
     let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
@@ -343,9 +347,11 @@ pub async fn fetch_put_bucket_context(
     }
 
     ctx.bucket_cache().record_miss();
+    let started = crate::perf::start();
     let mut conn = get_conn(ctx.pool()).await?;
-    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+    let entry = load_bucket_cache_entry_core(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
+    crate::perf::done_detail("fetch_put_bucket_context", started, bucket);
     Ok(entry.into())
 }
 
@@ -361,12 +367,22 @@ pub async fn fetch_bucket_auth_context(
 
     ctx.bucket_cache().record_miss();
     let mut conn = get_conn(ctx.pool()).await?;
-    let entry = load_bucket_cache_entry(&mut conn, bucket).await?;
+    let entry = load_bucket_cache_entry_core(&mut conn, bucket).await?;
     ctx.bucket_cache().insert(bucket, entry.clone());
     Ok(entry.into())
 }
 
 pub(crate) async fn load_bucket_cache_entry(
+    conn: &mut diesel_async::AsyncPgConnection,
+    name: &str,
+) -> Result<CachedBucketEntry, StorageError> {
+    let mut entry = load_bucket_cache_entry_core(conn, name).await?;
+    entry.cors_rules = load_bucket_cors_rules(conn, entry.id).await?;
+    entry.cors_loaded = true;
+    Ok(entry)
+}
+
+async fn load_bucket_cache_entry_core(
     conn: &mut diesel_async::AsyncPgConnection,
     name: &str,
 ) -> Result<CachedBucketEntry, StorageError> {
@@ -389,8 +405,25 @@ pub(crate) async fn load_bucket_cache_entry(
 
     let (policy, acl) = load_bucket_auth_parts(conn, row.0, &row.3, &row.4).await?;
 
+    Ok(CachedBucketEntry {
+        id: row.0,
+        versioning: row.1,
+        versioning_suspended: row.2,
+        owner_id: row.3,
+        owner_display_name: row.4,
+        policy,
+        acl,
+        cors_rules: Vec::new(),
+        cors_loaded: false,
+    })
+}
+
+async fn load_bucket_cors_rules(
+    conn: &mut diesel_async::AsyncPgConnection,
+    bucket_id: Uuid,
+) -> Result<Vec<CorsRule>, StorageError> {
     let cors_rows: Vec<CorsRuleRow> = bucket_cors_rules::table
-        .filter(bucket_cors_rules::bucket_id.eq(row.0))
+        .filter(bucket_cors_rules::bucket_id.eq(bucket_id))
         .select((
             bucket_cors_rules::allowed_origins,
             bucket_cors_rules::allowed_methods,
@@ -401,18 +434,7 @@ pub(crate) async fn load_bucket_cache_entry(
         .load(conn)
         .await
         .map_err(db_err)?;
-    let cors_rules = cors_rows_into_rules(cors_rows);
-
-    Ok(CachedBucketEntry {
-        id: row.0,
-        versioning: row.1,
-        versioning_suspended: row.2,
-        owner_id: row.3,
-        owner_display_name: row.4,
-        policy,
-        acl,
-        cors_rules,
-    })
+    Ok(cors_rows_into_rules(cors_rows))
 }
 
 pub async fn get_versioning_state(

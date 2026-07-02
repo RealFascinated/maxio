@@ -131,7 +131,7 @@ pub async fn upload_object(
 
     match state
         .storage
-        .put_object(&bucket, &key, content_type, Box::pin(reader), None)
+        .put_object(&bucket, &key, content_type, Box::pin(reader), None, None)
         .await
     {
         Ok(result) => (
@@ -323,6 +323,7 @@ pub async fn create_folder(
             &key,
             "application/x-directory",
             Box::pin(tokio::io::empty()),
+            None,
             None,
         )
         .await

@@ -25,6 +25,7 @@ pub mod embedded;
 pub mod error;
 pub mod iam;
 pub mod metrics;
+pub mod perf;
 pub mod server;
 pub mod stats;
 pub mod storage;

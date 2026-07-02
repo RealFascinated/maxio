@@ -18,6 +18,7 @@ pub struct CachedBucketEntry {
     pub policy: Option<String>,
     pub acl: Option<Acl>,
     pub cors_rules: Vec<CorsRule>,
+    pub cors_loaded: bool,
 }
 
 /// In-memory bucket → metadata cache to avoid repeated Postgres lookups.
@@ -64,6 +65,9 @@ impl BucketCache {
     }
 
     pub fn set_cors(&self, name: &str, rules: Vec<CorsRule>) {
-        self.map.get_mut(name, |entry| entry.cors_rules = rules);
+        self.map.get_mut(name, |entry| {
+            entry.cors_rules = rules;
+            entry.cors_loaded = true;
+        });
     }
 }

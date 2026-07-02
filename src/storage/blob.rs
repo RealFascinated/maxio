@@ -272,10 +272,17 @@ impl BlobStorage {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let needs_create = !self.known_dirs.lock().unwrap().contains(&parent);
+        let needs_create = {
+            let mut dirs = self.known_dirs.lock().unwrap();
+            if dirs.contains(&parent) {
+                false
+            } else {
+                dirs.insert(parent.clone());
+                true
+            }
+        };
         if needs_create {
             fs::create_dir_all(&parent).await?;
-            self.known_dirs.lock().unwrap().insert(parent);
         }
         Ok(())
     }
@@ -286,10 +293,26 @@ impl BlobStorage {
         key: &str,
         mut body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+        content_length: Option<u64>,
     ) -> Result<WrittenPayload, StorageError> {
         let write_base = self.write_buckets_dir()?;
         let obj_path = object_path_in(write_base, bucket, key);
         self.ensure_object_parent_dir(&obj_path).await?;
+
+        if let Some(size) = content_length {
+            if size > SMALL_OBJECT_THRESHOLD {
+                return self
+                    .write_flat_object_temp_streaming(obj_path, Vec::new(), body, checksum)
+                    .await;
+            }
+            let mut data = Vec::with_capacity(size as usize);
+            body.read_to_end(&mut data)
+                .await
+                .map_err(StorageError::Io)?;
+            return self
+                .write_flat_object_temp_buffered(obj_path, data, checksum)
+                .await;
+        }
 
         let mut chunk = [0u8; SMALL_WRITE_READ_CHUNK];
         let mut prefix = Vec::with_capacity(SMALL_WRITE_READ_CHUNK);

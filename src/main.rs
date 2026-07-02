@@ -26,6 +26,7 @@ mod embedded;
 mod error;
 mod iam;
 mod metrics;
+mod perf;
 mod server;
 mod stats;
 mod storage;

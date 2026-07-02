@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::db::DbContext;
 use crate::db::object_read_cache::ReadCacheLookup;
@@ -62,11 +63,20 @@ pub fn defer_object_upsert(
     let bucket_name = bucket_name.to_string();
     let meta = meta.clone();
     let staged_at = meta.last_modified.clone();
+    let slots = Arc::clone(ctx.async_meta_slots());
     tokio::spawn(async move {
+        let started = crate::perf::start();
+        let _permit = match slots.acquire().await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
         if !staged_write_still_current(&ctx, &bucket_name, &meta.key, &staged_at) {
             return;
         }
-        if let Err(e) = upsert_object(&ctx, &bucket_name, &meta, put_ctx.as_ref()).await {
+        let result =
+            upsert_object_inner(&ctx, &bucket_name, &meta, put_ctx.as_ref(), false).await;
+        crate::perf::done_detail("async_upsert_object", started, &bucket_name);
+        if let Err(e) = result {
             tracing::warn!(
                 bucket = %bucket_name,
                 key = %meta.key,
@@ -83,6 +93,16 @@ pub async fn upsert_object(
     meta: &ObjectMeta,
     put_ctx: Option<&PutBucketContext>,
 ) -> Result<(), StorageError> {
+    upsert_object_inner(ctx, bucket_name, meta, put_ctx, true).await
+}
+
+async fn upsert_object_inner(
+    ctx: &DbContext,
+    bucket_name: &str,
+    meta: &ObjectMeta,
+    put_ctx: Option<&PutBucketContext>,
+    refresh_read_cache: bool,
+) -> Result<(), StorageError> {
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = if let Some(put) = put_ctx {
         put.bucket_id
@@ -93,7 +113,9 @@ pub async fn upsert_object(
     };
     let last_modified = parse_ts(&meta.last_modified)?;
     do_upsert_object(&mut conn, bucket_id, meta, last_modified).await?;
-    write_through_read_cache(ctx, bucket_name, meta);
+    if refresh_read_cache {
+        write_through_read_cache(ctx, bucket_name, meta);
+    }
     Ok(())
 }
 
@@ -185,6 +207,7 @@ pub async fn get_object_for_read(
     }
 
     ctx.object_read_cache().record_miss();
+    let started = crate::perf::start();
     let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = if let Some(entry) = ctx.bucket_cache().get(bucket_name) {
         entry.id
@@ -192,10 +215,11 @@ pub async fn get_object_for_read(
         resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
     };
 
-    let row: ObjectRow = objects::table
+    let row: ObjectReadRow = objects::table
+        .left_join(object_checksums::table.on(objects::id.eq(object_checksums::object_id)))
         .filter(objects::bucket_id.eq(bucket_id))
         .filter(objects::key.eq(key))
-        .select(ObjectRow::as_select())
+        .select(ObjectReadRow::as_select())
         .first(&mut conn)
         .await
         .map_err(|e| match e {
@@ -206,21 +230,14 @@ pub async fn get_object_for_read(
             other => db_err(other),
         })?;
 
-    let checksum: Option<(String, String)> = object_checksums::table
-        .filter(object_checksums::object_id.eq(row.id))
-        .select((object_checksums::algorithm, object_checksums::value))
-        .first(&mut conn)
-        .await
-        .optional()
-        .map_err(db_err)?;
-
-    let mut meta = row_into_read_meta(row);
-    if let Some((algo, value)) = checksum {
+    let mut meta = row_into_read_meta(row.object);
+    if let (Some(algo), Some(value)) = (row.checksum_algorithm, row.checksum_value) {
         meta.checksum_algorithm = checksum_from_db(&algo);
         meta.checksum_value = Some(value);
     }
     ctx.object_read_cache()
         .insert(bucket_name, key, meta.clone());
+    crate::perf::done_detail("get_object_for_read", started, bucket_name);
     Ok(meta)
 }
 
@@ -536,6 +553,17 @@ pub(crate) struct ObjectRow {
     pub version_id: Option<String>,
     pub is_delete_marker: bool,
     pub part_sizes: Option<Vec<i64>>,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+struct ObjectReadRow {
+    #[diesel(embed)]
+    object: ObjectRow,
+    #[diesel(select_expression = object_checksums::algorithm.nullable())]
+    checksum_algorithm: Option<String>,
+    #[diesel(select_expression = object_checksums::value.nullable())]
+    checksum_value: Option<String>,
 }
 
 async fn replace_object_tags(

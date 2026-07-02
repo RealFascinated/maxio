@@ -69,6 +69,7 @@ pub trait Storage: Send + Sync {
         content_type: &str,
         body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+        content_length: Option<u64>,
     ) -> Result<PutResult, StorageError>;
     async fn get_object(
         &self,

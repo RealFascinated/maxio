@@ -39,6 +39,7 @@ async fn test_list_objects_page_db_pagination() {
                 "text/plain",
                 Box::pin(std::io::Cursor::new(b"x")),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -113,6 +114,7 @@ async fn test_list_objects_delimited_page_skips_dense_folders() {
                 "text/plain",
                 Box::pin(std::io::Cursor::new(b"x")),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -126,6 +128,7 @@ async fn test_list_objects_delimited_page_skips_dense_folders() {
                 "text/plain",
                 Box::pin(std::io::Cursor::new(b"x")),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -138,6 +141,7 @@ async fn test_list_objects_delimited_page_skips_dense_folders() {
                 key,
                 "application/x-directory",
                 Box::pin(tokio::io::empty()),
+                None,
                 None,
             )
             .await
@@ -216,6 +220,7 @@ async fn test_put_rollback_when_publish_fails() {
             "blocked.txt",
             "text/plain",
             Box::pin(std::io::Cursor::new(b"data")),
+            None,
             None,
         )
         .await;
@@ -303,7 +308,14 @@ async fn test_orphan_meta_scan_and_delete() {
 
     let body: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"orphan test".to_vec()));
     storage
-        .put_object("orphan-bucket", "missing.txt", "text/plain", body, None)
+        .put_object(
+            "orphan-bucket",
+            "missing.txt",
+            "text/plain",
+            body,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -387,7 +399,7 @@ async fn test_lifecycle_sweep_expires_current_objects() {
 
     let body: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"stale object".to_vec()));
     storage
-        .put_object("lc-sweep-bucket", "old.txt", "text/plain", body, None)
+        .put_object("lc-sweep-bucket", "old.txt", "text/plain", body, None, None)
         .await
         .unwrap();
 
@@ -457,14 +469,14 @@ async fn test_lifecycle_sweep_expires_noncurrent_versions() {
 
     let put_v1: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"v1".to_vec()));
     let r1 = storage
-        .put_object("lc-nc-bucket", "obj.txt", "text/plain", put_v1, None)
+        .put_object("lc-nc-bucket", "obj.txt", "text/plain", put_v1, None, None)
         .await
         .unwrap();
     let vid1 = r1.version_id.unwrap();
 
     let put_v2: maxio::storage::ByteStream = Box::pin(std::io::Cursor::new(b"v2".to_vec()));
     storage
-        .put_object("lc-nc-bucket", "obj.txt", "text/plain", put_v2, None)
+        .put_object("lc-nc-bucket", "obj.txt", "text/plain", put_v2, None, None)
         .await
         .unwrap();
 

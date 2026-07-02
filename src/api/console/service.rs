@@ -162,6 +162,7 @@ pub async fn preserve_empty_parent_folder_after_object_delete(
             "application/x-directory",
             Box::pin(tokio::io::empty()),
             None,
+            None,
         )
         .await?;
     Ok(())
