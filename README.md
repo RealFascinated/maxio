@@ -122,7 +122,6 @@ Open `http://localhost:9000/ui/` in your browser. Default credentials: `maxioadm
 | `MAXIO_MAX_CONSOLE_BODY_BYTES` | `--max-console-body-bytes` | `1048576` | Max request body size for console JSON/form API routes; object uploads are streaming and not covered by this limit |
 | `MAXIO_METRICS_TOKEN` | `--metrics-token` | _(empty)_ | Bearer token for `GET /metrics`; when empty the endpoint returns 403 |
 | `MAXIO_PUBLIC_URL` | `--public-url` | _(none)_ | Public S3 base URL for presigned links behind a reverse proxy, e.g. `https://s3.example.com` |
-| `MAXIO_ASYNC_META_WRITE` | `--async-meta-write` | `false` | Commit metadata to Postgres in the background after bytes are durable; improves PUT throughput (incompatible with bucket versioning) |
 | `MAXIO_DB_POOL_SIZE` | `--db-pool-size` | `64` | Max Postgres connection pool size |
 | `MAXIO_DB_PREPARED_STATEMENT_CACHE` | `--db-prepared-statement-cache` | `true` | Cache prepared SQL statements on each pool connection |
 | `MAXIO_CACHE_DIR` | `--cache-dir` | _(none)_ | Optional SSD cache directory for object bytes |

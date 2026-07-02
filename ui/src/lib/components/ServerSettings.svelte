@@ -83,18 +83,10 @@
     <Card.Header>
       <Card.Title class="dark:text-white">Orphaned metadata</Card.Title>
       <Card.Description>
-        Metadata rows whose object bytes are missing on disk. This can happen after a crash while
-        <code class="text-sm">MAXIO_ASYNC_META_WRITE</code> is enabled — bytes are written first and metadata is committed in the background.
+        Metadata rows whose object bytes are missing on disk. This can happen after manual changes on the filesystem or an interrupted repair.
       </Card.Description>
     </Card.Header>
     <Card.Content class="space-y-4">
-      {#if hasScanned && scanQuery.data?.asyncMetaWrite}
-        <Callout type="warning">
-          Async metadata writes are enabled on this server. A crash during a PUT can leave metadata
-          without matching object bytes until repaired here.
-        </Callout>
-      {/if}
-
       <div class="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"

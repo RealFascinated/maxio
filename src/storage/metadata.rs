@@ -71,13 +71,6 @@ pub trait MetadataStore: Send + Sync {
         meta: &ObjectMeta,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<(), StorageError>;
-    /// Stage read metadata and flush the Postgres row in the background (async meta path).
-    fn defer_object_upsert(
-        &self,
-        bucket: &str,
-        meta: &ObjectMeta,
-        put_ctx: Option<&PutBucketContext>,
-    );
     async fn get_object_meta(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError>;
     async fn get_object_for_read(
         &self,

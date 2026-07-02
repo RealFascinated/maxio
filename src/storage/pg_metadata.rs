@@ -275,15 +275,6 @@ impl MetadataStore for PgMetadataStore {
         })
     }
 
-    fn defer_object_upsert(
-        &self,
-        bucket: &str,
-        meta: &ObjectMeta,
-        put_ctx: Option<&PutBucketContext>,
-    ) {
-        repos::defer_object_upsert(&self.ctx, bucket, meta, put_ctx.cloned());
-    }
-
     async fn get_object_meta(&self, bucket: &str, key: &str) -> Result<ObjectMeta, StorageError> {
         meta_op!(
             self,

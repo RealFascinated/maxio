@@ -21,7 +21,6 @@ pub struct ObjectStorage {
     blobs: BlobStorage,
     meta: Arc<dyn MetadataStore>,
     metrics: Option<Arc<MetricsRegistry>>,
-    async_meta_write: bool,
 }
 
 impl ObjectStorage {
@@ -30,17 +29,11 @@ impl ObjectStorage {
             blobs,
             meta,
             metrics: None,
-            async_meta_write: false,
         }
     }
 
     pub fn with_metrics(mut self, metrics: Arc<MetricsRegistry>) -> Self {
         self.metrics = Some(metrics);
-        self
-    }
-
-    pub fn with_async_meta_write(mut self) -> Self {
-        self.async_meta_write = true;
         self
     }
 
@@ -90,24 +83,6 @@ impl ObjectStorage {
         versioned: bool,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
-        // Fast path: rename bytes into place first, then commit metadata asynchronously.
-        // Only safe when versioning is off — versioned puts need the DB write to be
-        // synchronous so that insert_version + archive_version are ordered correctly.
-        if self.async_meta_write && !versioned {
-            self.publish_written_payload(bucket, key, &written, written.size)
-                .await?;
-            self.meta.defer_object_upsert(bucket, &object_meta, put_ctx);
-            return Ok(PutResult {
-                size: written.size,
-                etag: object_meta.etag.clone(),
-                last_modified: object_meta.last_modified.clone(),
-                version_id: object_meta.version_id.take(),
-                checksum_algorithm: written.checksum_algorithm,
-                checksum_value: written.checksum_value,
-            });
-        }
-
-        // Sync path: publish bytes first, then commit metadata before returning.
         self.publish_written_payload(bucket, key, &written, written.size)
             .await?;
         if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {

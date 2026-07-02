@@ -43,7 +43,6 @@ pub async fn scan_orphan_meta_api(State(state): State<AppState>) -> impl IntoRes
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
-                    "asyncMetaWrite": state.config.async_meta_write,
                     "count": list.len(),
                     "orphans": list,
                 })),

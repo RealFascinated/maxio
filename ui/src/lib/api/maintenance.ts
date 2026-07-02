@@ -7,7 +7,6 @@ export interface OrphanMetaEntry {
 }
 
 export interface OrphanMetaScanResult {
-  asyncMetaWrite: boolean
   count: number
   orphans: OrphanMetaEntry[]
 }

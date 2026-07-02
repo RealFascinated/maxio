@@ -1,4 +1,3 @@
-pub mod async_meta_writer;
 pub mod bucket_cache;
 pub mod context;
 pub mod multipart_cache;

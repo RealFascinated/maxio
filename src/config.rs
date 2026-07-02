@@ -120,12 +120,6 @@ pub struct Config {
     #[arg(long, env = "MAXIO_PUBLIC_URL")]
     pub public_url: Option<String>,
 
-    /// Return 200 after bytes are durable on disk, commit metadata to Postgres in the background.
-    /// Improves PUT throughput significantly at the cost of a narrow inconsistency window on crash.
-    /// Incompatible with bucket versioning (versioning takes the synchronous path regardless).
-    #[arg(long, env = "MAXIO_ASYNC_META_WRITE", default_value = "false")]
-    pub async_meta_write: bool,
-
     /// Max Postgres connection pool size (MAXIO_DB_POOL_SIZE).
     #[arg(long, env = "MAXIO_DB_POOL_SIZE", default_value = "64")]
     pub db_pool_size: u32,

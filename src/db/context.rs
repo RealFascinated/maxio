@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use super::DbPool;
-use super::async_meta_writer::{self, AsyncMetaWriter};
 use super::bucket_cache::BucketCache;
 use super::multipart_cache::MultipartCache;
 use super::object_read_cache::ObjectReadCache;
@@ -15,7 +14,6 @@ pub struct DbContext {
     bucket_cache: Arc<BucketCache>,
     multipart_cache: Arc<MultipartCache>,
     object_read_cache: Arc<ObjectReadCache>,
-    async_meta_writer: AsyncMetaWriter,
 }
 
 impl DbContext {
@@ -24,8 +22,7 @@ impl DbContext {
         metrics: Option<Arc<MetricsRegistry>>,
         limits: MemoryCacheLimits,
     ) -> Self {
-        let (tx, rx) = async_meta_writer::new_channel();
-        let ctx = Self {
+        Self {
             pool,
             bucket_cache: Arc::new(BucketCache::new(metrics.clone(), limits.bucket_max_entries)),
             multipart_cache: Arc::new(MultipartCache::new(
@@ -36,10 +33,7 @@ impl DbContext {
                 metrics,
                 limits.object_read_max_entries,
             )),
-            async_meta_writer: AsyncMetaWriter::from_sender(tx),
-        };
-        async_meta_writer::start_worker(rx, ctx.clone());
-        ctx
+        }
     }
 
     pub fn pool(&self) -> &DbPool {
@@ -60,9 +54,5 @@ impl DbContext {
 
     pub fn object_read_cache(&self) -> &ObjectReadCache {
         &self.object_read_cache
-    }
-
-    pub(crate) fn async_meta_writer(&self) -> &AsyncMetaWriter {
-        &self.async_meta_writer
     }
 }

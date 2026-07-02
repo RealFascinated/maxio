@@ -103,14 +103,6 @@ pub async fn start_postgres() -> (testcontainers::ContainerAsync<Postgres>, Stri
 }
 
 pub async fn create_storage(data_dir: &str, database_url: &str) -> Arc<dyn Storage> {
-    create_storage_with_async_meta(data_dir, database_url, false).await
-}
-
-pub async fn create_storage_with_async_meta(
-    data_dir: &str,
-    database_url: &str,
-    async_meta_write: bool,
-) -> Arc<dyn Storage> {
     maxio::db::run_migrations(database_url).await.unwrap();
     let pool = maxio::db::create_pool(database_url, Default::default())
         .await
@@ -120,11 +112,7 @@ pub async fn create_storage_with_async_meta(
         maxio::config::MemoryCacheLimits::default(),
     ));
     let blobs = BlobStorage::new(data_dir).await.unwrap();
-    let mut storage = ObjectStorage::new(blobs, meta);
-    if async_meta_write {
-        storage = storage.with_async_meta_write();
-    }
-    Arc::new(storage)
+    Arc::new(ObjectStorage::new(blobs, meta))
 }
 
 pub fn test_config(data_dir: String, database_url: String, default_buckets: &str) -> Config {
@@ -150,7 +138,6 @@ pub fn test_config(data_dir: String, database_url: String, default_buckets: &str
         signing_key_cache_max_entries: 10_000,
         iam_cache_max_entries: 10_000,
         public_url: None,
-        async_meta_write: false,
         db_pool_size: 64,
         db_prepared_statement_cache: true,
     }
@@ -186,16 +173,11 @@ pub async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> A
 
 /// Spin up a test server on a random port.
 pub async fn start_server() -> ServerHandle {
-    start_server_with_async_meta(false).await
-}
-
-pub async fn start_server_with_metrics_token() -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
     let (postgres, database_url) = start_postgres().await;
     let storage = create_storage(&data_dir, &database_url).await;
-    let mut config = test_config(data_dir.clone(), database_url, "");
-    config.metrics_token = "metrics-test-token".into();
+    let config = test_config(data_dir.clone(), database_url, "");
 
     let state = test_app_state(storage, Arc::new(config)).await;
 
@@ -223,13 +205,13 @@ pub async fn start_server_with_metrics_token() -> ServerHandle {
     }
 }
 
-pub async fn start_server_with_async_meta(async_meta_write: bool) -> ServerHandle {
+pub async fn start_server_with_metrics_token() -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
     let (postgres, database_url) = start_postgres().await;
-    let storage = create_storage_with_async_meta(&data_dir, &database_url, async_meta_write).await;
+    let storage = create_storage(&data_dir, &database_url).await;
     let mut config = test_config(data_dir.clone(), database_url, "");
-    config.async_meta_write = async_meta_write;
+    config.metrics_token = "metrics-test-token".into();
 
     let state = test_app_state(storage, Arc::new(config)).await;
 
