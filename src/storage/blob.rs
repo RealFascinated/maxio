@@ -7,6 +7,7 @@ use rand::RngExt;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 
@@ -301,7 +302,7 @@ impl BlobStorage {
         if let Some(size) = content_length {
             if size > SMALL_OBJECT_THRESHOLD {
                 return self
-                    .write_flat_object_temp_streaming(obj_path, Vec::new(), body, checksum)
+                    .write_flat_object_temp_streaming(bucket, obj_path, Vec::new(), body, checksum)
                     .await;
             }
             let mut data = Vec::with_capacity(size as usize);
@@ -309,7 +310,7 @@ impl BlobStorage {
                 .await
                 .map_err(StorageError::Io)?;
             return self
-                .write_flat_object_temp_buffered(obj_path, data, checksum)
+                .write_flat_object_temp_buffered(bucket, obj_path, data, checksum)
                 .await;
         }
 
@@ -323,22 +324,24 @@ impl BlobStorage {
             prefix.extend_from_slice(&chunk[..n]);
             if prefix.len() as u64 > SMALL_OBJECT_THRESHOLD {
                 return self
-                    .write_flat_object_temp_streaming(obj_path, prefix, body, checksum)
+                    .write_flat_object_temp_streaming(bucket, obj_path, prefix, body, checksum)
                     .await;
             }
         }
 
-        self.write_flat_object_temp_buffered(obj_path, prefix, checksum)
+        self.write_flat_object_temp_buffered(bucket, obj_path, prefix, checksum)
             .await
     }
 
     async fn write_flat_object_temp_buffered(
         &self,
+        bucket: &str,
         obj_path: PathBuf,
         data: Vec<u8>,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
     ) -> Result<WrittenPayload, StorageError> {
         let size = data.len() as u64;
+        let started = crate::perf::start();
         let (etag, checksum_algorithm, checksum_value) = digest_flat_write(&data, checksum)?;
 
         let write_path = temp_sibling_path(&obj_path);
@@ -349,6 +352,7 @@ impl BlobStorage {
 
         tmp_guard.disarm();
         self.record_drive_write();
+        crate::perf::done_detail("storage_write_object", started, bucket);
 
         Ok(WrittenPayload {
             size,
@@ -362,6 +366,7 @@ impl BlobStorage {
 
     async fn write_flat_object_temp_streaming(
         &self,
+        bucket: &str,
         obj_path: PathBuf,
         mut prefix: Vec<u8>,
         mut body: ByteStream,
@@ -370,6 +375,7 @@ impl BlobStorage {
         let write_path = temp_sibling_path(&obj_path);
         let mut tmp_guard = TempPathGuard::new(write_path.clone());
 
+        let write_started = Instant::now();
         let file = fs::File::create(&write_path).await?;
         let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
         let mut hasher = EtagMd5::new();
@@ -378,6 +384,7 @@ impl BlobStorage {
             .map(|(algo, _)| ChecksumHasher::new(*algo));
         let mut size: u64 = 0;
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
+        let mut write_elapsed = write_started.elapsed();
 
         let mut update = |slice: &[u8]| {
             hasher.update(slice);
@@ -388,7 +395,11 @@ impl BlobStorage {
         };
 
         update(&prefix);
-        writer.write_all(&prefix).await?;
+        {
+            let t = Instant::now();
+            writer.write_all(&prefix).await?;
+            write_elapsed += t.elapsed();
+        }
         prefix.clear();
 
         loop {
@@ -397,15 +408,24 @@ impl BlobStorage {
                 break;
             }
             update(&buf[..n]);
+            let t = Instant::now();
             writer.write_all(&buf[..n]).await?;
+            write_elapsed += t.elapsed();
         }
-        writer.flush().await?;
+        {
+            let t = Instant::now();
+            writer.flush().await?;
+            write_elapsed += t.elapsed();
+        }
 
+        let hash_started = Instant::now();
         let (etag, checksum_algorithm, checksum_value) =
             finalize_flat_write_hashes(hasher, checksum_hasher, checksum)?;
+        write_elapsed += hash_started.elapsed();
 
         tmp_guard.disarm();
         self.record_drive_write();
+        crate::perf::log("storage_write_object", write_elapsed, bucket);
 
         Ok(WrittenPayload {
             size,

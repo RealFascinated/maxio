@@ -1,5 +1,8 @@
 //! Request-phase timing logs. Enable with `RUST_LOG=maxio::perf=trace` (all phases)
 //! or `RUST_LOG=maxio::perf=warn` (slow phases only, threshold 5ms).
+//!
+//! Put path: `storage_write_object` (hash + temp write), `storage_publish_object`
+//! (rename + cache update). Client body reads are intentionally untimed.
 
 use std::time::{Duration, Instant};
 

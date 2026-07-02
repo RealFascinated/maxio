@@ -113,6 +113,44 @@ async fn cache_flush_dirty_after_restart() {
     assert_eq!(data, b"cached payload");
 }
 
+#[tokio::test]
+async fn cache_reserve_space_flushes_dirty_when_no_clean_entries() {
+    let cache_root = TempDir::new().unwrap();
+    let data_root = TempDir::new().unwrap();
+    let data_buckets = data_root.path().join("buckets");
+    tokio::fs::create_dir_all(&data_buckets).await.unwrap();
+
+    let cache = Arc::new(
+        CacheLayer::new(
+            cache_root.path().to_str().unwrap(),
+            data_buckets.clone(),
+            500,
+            true,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap(),
+    );
+    cache.clone().spawn_scan_task();
+
+    for (key, len) in [("a.txt", 200usize), ("b.txt", 200), ("c.txt", 200)] {
+        let payload = vec![b'x'; len];
+        let cache_path = cache.object_path("bucket-a", key);
+        tokio::fs::create_dir_all(cache_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&cache_path, &payload).await.unwrap();
+        cache.mark_dirty("bucket-a", key, len as u64).await;
+    }
+
+    cache.reserve_space(100).await.unwrap();
+
+    for key in ["a.txt", "b.txt", "c.txt"] {
+        let data_path = data_buckets.join("bucket-a").join(key);
+        assert!(tokio::fs::try_exists(&data_path).await.unwrap());
+    }
+}
+
 fn blob_meta(size: u64) -> ObjectMeta {
     ObjectMeta {
         key: "obj.txt".to_string(),

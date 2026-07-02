@@ -352,11 +352,18 @@ impl CacheLayer {
         self.wait_until_scan_complete().await;
         self.state_handle.drain().await;
         let mut evicted = Vec::new();
+        let mut flushed = false;
         loop {
             if self.state.total_size() + needed <= self.max_size {
                 break;
             }
             let Some((key, size)) = self.state.pop_clean_lru() else {
+                if self.writeback && !flushed && self.state.dirty_count() > 0 {
+                    flushed = true;
+                    self.flush_dirty().await?;
+                    self.state_handle.drain().await;
+                    continue;
+                }
                 return Err(StorageError::InvalidKey(
                     "cache full and no clean entries to evict".into(),
                 ));
@@ -511,44 +518,71 @@ impl CacheLayer {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(1));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut warned_stuck = false;
             loop {
                 ticker.tick().await;
                 if self.state.total_size() <= self.max_size {
+                    warned_stuck = false;
                     continue;
                 }
                 let size_before = self.state.total_size();
-                tracing::info!(
-                    size_gb = size_before as f64 / 1e9,
-                    max_gb = self.max_size as f64 / 1e9,
-                    "cache: over limit, evicting in background"
-                );
-                let mut evicted = 0u64;
-                while self.state.total_size() > self.max_size {
-                    match self.evict_one_clean().await {
-                        Ok(true) => {
-                            evicted += 1;
-                            if evicted.is_multiple_of(64) {
-                                tokio::task::yield_now().await;
-                            }
-                        }
-                        Ok(false) => break,
-                        Err(e) => {
-                            tracing::warn!("cache eviction failed: {e}");
-                            break;
-                        }
+                match self.trim_to_limit().await {
+                    Ok(evicted) if evicted > 0 => {
+                        warned_stuck = false;
+                        let size_after = self.state.total_size();
+                        tracing::info!(
+                            evicted,
+                            freed_gb = size_before.saturating_sub(size_after) as f64 / 1e9,
+                            size_gb = size_after as f64 / 1e9,
+                            max_gb = self.max_size as f64 / 1e9,
+                            "cache: eviction complete"
+                        );
                     }
-                }
-                if evicted > 0 {
-                    let size_after = self.state.total_size();
-                    tracing::info!(
-                        evicted,
-                        freed_gb = size_before.saturating_sub(size_after) as f64 / 1e9,
-                        size_gb = size_after as f64 / 1e9,
-                        "cache: eviction complete"
-                    );
+                    Ok(_) if !warned_stuck => {
+                        warned_stuck = true;
+                        tracing::warn!(
+                            size_gb = self.state.total_size() as f64 / 1e9,
+                            max_gb = self.max_size as f64 / 1e9,
+                            dirty_count = self.state.dirty_count(),
+                            dirty_gb = self.state.dirty_bytes() as f64 / 1e9,
+                            writeback_halted = self.writeback_halted.load(Ordering::Relaxed),
+                            "cache: over limit but cannot evict further"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("cache eviction failed: {e}"),
                 }
             }
         });
+    }
+
+    /// Evict clean LRU entries until `total_size <= max_size`. Flushes dirty entries
+    /// once when writeback is enabled and no clean victims remain.
+    async fn trim_to_limit(&self) -> Result<u64, StorageError> {
+        self.state_handle.drain().await;
+        let mut evicted = 0u64;
+        let mut flushed = false;
+        while self.state.total_size() > self.max_size {
+            match self.evict_one_clean().await {
+                Ok(true) => {
+                    evicted += 1;
+                    if evicted.is_multiple_of(64) {
+                        tokio::task::yield_now().await;
+                    }
+                }
+                Ok(false) => {
+                    if self.writeback && !flushed && self.state.dirty_count() > 0 {
+                        flushed = true;
+                        self.flush_dirty().await?;
+                        self.state_handle.drain().await;
+                        continue;
+                    }
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(evicted)
     }
 
     async fn evict_one_clean(&self) -> Result<bool, StorageError> {

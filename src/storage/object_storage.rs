@@ -62,6 +62,25 @@ impl ObjectStorage {
             .to_string()
     }
 
+    async fn publish_written_payload(
+        &self,
+        bucket: &str,
+        key: &str,
+        written: &super::blob::WrittenPayload,
+        size: u64,
+    ) -> Result<(), StorageError> {
+        let started = crate::perf::start();
+        BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await?;
+        if let Some(ref m) = self.metrics {
+            m.record_drive_write_op();
+        }
+        self.blobs
+            .complete_object_write(bucket, key, &written.final_path, size)
+            .await?;
+        crate::perf::done_detail("storage_publish_object", started, bucket);
+        Ok(())
+    }
+
     async fn finalize_written_object(
         &self,
         bucket: &str,
@@ -75,33 +94,22 @@ impl ObjectStorage {
         // Only safe when versioning is off — versioned puts need the DB write to be
         // synchronous so that insert_version + archive_version are ordered correctly.
         if self.async_meta_write && !versioned {
-            BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await?;
-            if let Some(ref m) = self.metrics {
-                m.record_drive_write_op();
-            }
-
-            let result = PutResult {
+            self.publish_written_payload(bucket, key, &written, written.size)
+                .await?;
+            self.meta.defer_object_upsert(bucket, &object_meta, put_ctx);
+            return Ok(PutResult {
                 size: written.size,
                 etag: object_meta.etag.clone(),
                 last_modified: object_meta.last_modified.clone(),
                 version_id: object_meta.version_id.take(),
                 checksum_algorithm: written.checksum_algorithm,
                 checksum_value: written.checksum_value,
-            };
-
-            self.meta.defer_object_upsert(bucket, &object_meta, put_ctx);
-
-            self.blobs
-                .complete_object_write(bucket, key, &written.final_path, written.size)
-                .await?;
-            return Ok(result);
+            });
         }
 
         // Sync path: publish bytes first, then commit metadata before returning.
-        BlobStorage::publish_temp_payload(&written.tmp_path, &written.final_path).await?;
-        if let Some(ref m) = self.metrics {
-            m.record_drive_write_op();
-        }
+        self.publish_written_payload(bucket, key, &written, written.size)
+            .await?;
         if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {
             let _ = BlobStorage::remove_published_payload(&written.final_path).await;
             return Err(e);
@@ -118,10 +126,6 @@ impl ObjectStorage {
                 )
                 .await?;
         }
-
-        self.blobs
-            .complete_object_write(bucket, key, &written.final_path, written.size)
-            .await?;
 
         Ok(PutResult {
             size: written.size,
@@ -711,9 +715,7 @@ impl Storage for ObjectStorage {
             .put_object_inner(bucket, key, content_type, body, checksum, content_length)
             .await;
         let bytes = result.as_ref().map(|r| r.size).unwrap_or(0);
-        let elapsed = t.elapsed();
-        self.record("put_object", elapsed, bytes);
-        crate::perf::done_detail("storage_put_object", t, bucket);
+        self.record("put_object", t.elapsed(), bytes);
         result
     }
 
