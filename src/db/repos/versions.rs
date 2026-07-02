@@ -5,7 +5,7 @@ use crate::db::schema::{
     object_version_acl_grants, object_version_checksums, object_version_tags, object_versions,
     objects,
 };
-use crate::storage::{ObjectMeta, StorageError};
+use crate::storage::{ChecksumAlgorithm, ObjectMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Text, Uuid as SqlUuid};
@@ -13,9 +13,8 @@ use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    AclGrantRow, checksum_from_db, checksum_to_db, db_err, encode_grantee, escape_like, format_ts,
-    get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db,
-    resolve_bucket_id,
+    AclGrantRow, db_err, encode_grantee, escape_like, format_ts, get_conn, grants_to_acl, parse_ts,
+    part_sizes_from_db, part_sizes_to_db, permission_to_db, resolve_bucket_id,
 };
 
 #[derive(diesel::QueryableByName)]
@@ -528,7 +527,7 @@ async fn version_row_into_meta(
     };
 
     let (checksum_algorithm, checksum_value) = match checksum {
-        Some((algo, value)) => (checksum_from_db(&algo), Some(value)),
+        Some((algo, value)) => (ChecksumAlgorithm::from_header_str(&algo), Some(value)),
         None => (None, None),
     };
 
@@ -644,7 +643,7 @@ async fn replace_version_checksum(
         diesel::insert_into(object_version_checksums::table)
             .values((
                 object_version_checksums::object_version_id.eq(version_id),
-                object_version_checksums::algorithm.eq(checksum_to_db(algo)),
+                object_version_checksums::algorithm.eq(algo.db_name()),
                 object_version_checksums::value.eq(val),
             ))
             .execute(conn)

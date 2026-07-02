@@ -1,5 +1,6 @@
 pub mod blob;
 pub mod cache;
+pub mod checksum;
 pub mod disk_cache_state;
 pub mod hashing;
 pub mod lifecycle;
@@ -9,6 +10,7 @@ pub mod orphans;
 pub mod pg_metadata;
 pub mod traits;
 
+pub use checksum::ChecksumAlgorithm;
 pub use lifecycle::{LifecycleAction, LifecycleRule};
 pub use metadata::MetadataStore;
 pub use object_storage::ObjectStorage;
@@ -29,35 +31,6 @@ pub fn validate_bucket_name(name: &str) -> Result<(), StorageError> {
         Err(StorageError::InvalidKey(format!(
             "invalid bucket name: {name}"
         )))
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ChecksumAlgorithm {
-    CRC32,
-    CRC32C,
-    SHA1,
-    SHA256,
-}
-
-impl ChecksumAlgorithm {
-    pub fn header_name(&self) -> &'static str {
-        match self {
-            Self::CRC32 => "x-amz-checksum-crc32",
-            Self::CRC32C => "x-amz-checksum-crc32c",
-            Self::SHA1 => "x-amz-checksum-sha1",
-            Self::SHA256 => "x-amz-checksum-sha256",
-        }
-    }
-
-    pub fn from_header_str(s: &str) -> Option<Self> {
-        match s.to_uppercase().as_str() {
-            "CRC32" => Some(Self::CRC32),
-            "CRC32C" => Some(Self::CRC32C),
-            "SHA1" => Some(Self::SHA1),
-            "SHA256" => Some(Self::SHA256),
-            _ => None,
-        }
     }
 }
 

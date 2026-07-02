@@ -3,6 +3,8 @@
     clippy::redundant_pattern_matching
 )]
 
+#[path = "unit/checksum.rs"]
+mod checksum;
 #[path = "unit/config.rs"]
 mod config;
 #[path = "unit/console_objects.rs"]

@@ -11,10 +11,11 @@ use crate::api::authz::{check_bucket_access, check_object_access};
 use crate::error::S3Error;
 use crate::iam::principal::Principal;
 use crate::server::AppState;
+use crate::storage::checksum::{
+    decode_request_body, extract_upload_checksum, stored_checksum_matches_trailer,
+};
 use crate::storage::{ChecksumAlgorithm, StorageError};
 use crate::xml::{response::to_xml, types::*};
-
-use super::object::{body_to_reader, extract_checksum};
 
 const COMPLETE_BODY_MAX: usize = 1024 * 1024;
 const DEFAULT_MAX_PARTS: usize = 1000;
@@ -89,13 +90,24 @@ pub async fn upload_part(
         .parse::<u32>()
         .map_err(|_| S3Error::invalid_part("invalid part number"))?;
 
-    let checksum = extract_checksum(&headers);
-    let reader = body_to_reader(&headers, body).await?;
+    let decoded = decode_request_body(&headers, body).await?;
+    let checksum = extract_upload_checksum(&headers);
+    let trailer_handle = decoded.trailer_lines_handle();
     let part = state
         .storage
-        .upload_part(&bucket, upload_id, part_number, reader, checksum)
+        .upload_part(&bucket, upload_id, part_number, decoded.reader, checksum)
         .await
         .map_err(map_storage_err)?;
+
+    if let Some(handle) = trailer_handle {
+        let mismatch = {
+            let lines = handle.lock().unwrap();
+            !stored_checksum_matches_trailer(&lines, part.checksum_value.as_deref())
+        };
+        if mismatch {
+            return Err(S3Error::bad_checksum("x-amz-checksum"));
+        }
+    }
 
     let _ = key;
     let mut builder = Response::builder()

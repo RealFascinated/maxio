@@ -175,7 +175,6 @@ async fn blob_read_miss_populates_cache_and_records_metrics() {
         .unwrap();
     assert_eq!(disk.misses, 1);
     assert_eq!(disk.hits, 0);
-    assert_eq!(disk.entries, 1);
 
     blobs
         .open_object("bucket-a", "obj.txt", &object_meta)

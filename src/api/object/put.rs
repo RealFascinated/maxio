@@ -7,16 +7,17 @@ use axum::{
     response::Response,
 };
 
+use super::copy::{copy_object, upload_part_copy};
+use super::tagging::{parse_amz_tagging_header, put_object_tagging, put_object_tags};
 use crate::api::authz::check_object_access;
 use crate::api::{acl, multipart};
 use crate::error::S3Error;
 use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::StorageError;
-
-use super::checksum::{body_to_reader, extract_checksum};
-use super::copy::{copy_object, upload_part_copy};
-use super::tagging::{parse_amz_tagging_header, put_object_tagging, put_object_tags};
+use crate::storage::checksum::{
+    decode_request_body, extract_upload_checksum, stored_checksum_matches_trailer,
+};
 
 pub async fn put_object(
     State(state): State<AppState>,
@@ -81,14 +82,14 @@ pub async fn put_object(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
 
-    let reader = body_to_reader(&headers, body).await?;
+    let decoded = decode_request_body(&headers, body).await?;
 
     let content_md5 = headers
         .get("content-md5")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let checksum = extract_checksum(&headers);
+    let checksum = extract_upload_checksum(&headers);
     let inline_tags = parse_amz_tagging_header(&headers)?;
 
     let content_length = headers
@@ -96,13 +97,14 @@ pub async fn put_object(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok());
 
+    let trailer_handle = decoded.trailer_lines_handle();
     let result = state
         .storage
         .put_object(
             &bucket,
             &key,
             content_type,
-            reader,
+            decoded.reader,
             checksum,
             content_length,
         )
@@ -113,6 +115,17 @@ pub async fn put_object(
             StorageError::ChecksumMismatch(_) => S3Error::bad_checksum("x-amz-checksum"),
             _ => S3Error::internal(e),
         })?;
+
+    if let Some(handle) = trailer_handle {
+        let mismatch = {
+            let lines = handle.lock().unwrap();
+            !stored_checksum_matches_trailer(&lines, result.checksum_value.as_deref())
+        };
+        if mismatch {
+            let _ = state.storage.delete_object(&bucket, &key).await;
+            return Err(S3Error::bad_checksum("x-amz-checksum"));
+        }
+    }
 
     if let Some(ref expected_md5) = content_md5 {
         use base64::Engine;

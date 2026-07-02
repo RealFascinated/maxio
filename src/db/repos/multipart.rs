@@ -1,14 +1,12 @@
 use crate::db::DbContext;
 use crate::db::schema::{multipart_parts, multipart_uploads};
-use crate::storage::{MultipartUploadMeta, PartMeta, StorageError};
+use crate::storage::{ChecksumAlgorithm, MultipartUploadMeta, PartMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel_async::RunQueryDsl;
 
-use super::{
-    checksum_from_db, checksum_to_db, db_err, format_ts, get_conn, parse_ts, resolve_bucket_id,
-};
+use super::{db_err, format_ts, get_conn, parse_ts, resolve_bucket_id};
 
 type PartRow = (
     i32,
@@ -83,7 +81,7 @@ fn row_to_multipart_meta(
         key: row.1,
         content_type: row.2,
         initiated: format_ts(row.3),
-        checksum_algorithm: row.4.and_then(|s| checksum_from_db(&s)),
+        checksum_algorithm: row.4.and_then(|s| ChecksumAlgorithm::from_header_str(&s)),
     }
 }
 
@@ -114,7 +112,7 @@ async fn load_parts_rows(
                 etag,
                 size: size as u64,
                 last_modified: format_ts(last_modified),
-                checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
+                checksum_algorithm: algo.and_then(|s| ChecksumAlgorithm::from_header_str(&s)),
                 checksum_value: value,
             },
         )
@@ -136,7 +134,7 @@ pub async fn insert_multipart_upload(
             multipart_uploads::key.eq(&meta.key),
             multipart_uploads::content_type.eq(&meta.content_type),
             multipart_uploads::initiated.eq(initiated),
-            multipart_uploads::checksum_algorithm.eq(meta.checksum_algorithm.map(checksum_to_db)),
+            multipart_uploads::checksum_algorithm.eq(meta.checksum_algorithm.map(|a| a.db_name())),
         ))
         .execute(&mut conn)
         .await
@@ -215,7 +213,7 @@ pub async fn upsert_part(
             multipart_parts::etag.eq(&part.etag),
             multipart_parts::size.eq(part.size as i64),
             multipart_parts::last_modified.eq(last_modified),
-            multipart_parts::checksum_algorithm.eq(part.checksum_algorithm.map(checksum_to_db)),
+            multipart_parts::checksum_algorithm.eq(part.checksum_algorithm.map(|a| a.db_name())),
             multipart_parts::checksum_value.eq(&part.checksum_value),
         ))
         .on_conflict((multipart_parts::upload_id, multipart_parts::part_number))
@@ -224,7 +222,7 @@ pub async fn upsert_part(
             multipart_parts::etag.eq(&part.etag),
             multipart_parts::size.eq(part.size as i64),
             multipart_parts::last_modified.eq(last_modified),
-            multipart_parts::checksum_algorithm.eq(part.checksum_algorithm.map(checksum_to_db)),
+            multipart_parts::checksum_algorithm.eq(part.checksum_algorithm.map(|a| a.db_name())),
             multipart_parts::checksum_value.eq(&part.checksum_value),
         ))
         .execute(&mut conn)
@@ -280,7 +278,7 @@ pub async fn list_multipart_uploads(
                 key,
                 content_type,
                 initiated: format_ts(initiated),
-                checksum_algorithm: algo.and_then(|s| checksum_from_db(&s)),
+                checksum_algorithm: algo.and_then(|s| ChecksumAlgorithm::from_header_str(&s)),
             },
         )
         .collect())

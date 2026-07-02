@@ -1,4 +1,3 @@
-mod checksum;
 mod conditions;
 mod copy;
 mod delete;
@@ -7,7 +6,6 @@ mod post;
 mod put;
 mod tagging;
 
-pub(crate) use checksum::{body_to_reader, extract_checksum};
 #[allow(unused_imports)]
 pub use conditions::{ConditionalResult, check_conditions, etag_matches};
 #[allow(unused_imports)]

@@ -1,5 +1,5 @@
 use maxio::storage::ChecksumAlgorithm;
-use maxio::storage::hashing::ChecksumHasher;
+use maxio::storage::checksum::ChecksumHasher;
 
 use crate::common::*;
 
@@ -105,4 +105,42 @@ async fn test_put_object_sha256_checksum_accepted() {
     )
     .await;
     assert_eq!(put.status(), 200);
+}
+
+#[tokio::test]
+async fn test_put_object_crc64nvme_checksum_roundtrip() {
+    let base_url = start_server().await;
+    let bucket = "checksum-crc64-bucket";
+    let data = b"checksum test data";
+
+    assert_eq!(
+        s3_request("PUT", &format!("{}/{bucket}", base_url), vec![])
+            .await
+            .status(),
+        200
+    );
+
+    let crc64 = checksum_b64(data, ChecksumAlgorithm::CRC64NVME);
+    let put = s3_request_with_headers(
+        "PUT",
+        &format!("{}/{bucket}/crc64.txt", base_url),
+        data.to_vec(),
+        vec![
+            ("x-amz-checksum-algorithm", "CRC64NVME"),
+            ("x-amz-checksum-crc64nvme", &crc64),
+        ],
+    )
+    .await;
+    assert_eq!(put.status(), 200);
+
+    let head = s3_request("HEAD", &format!("{}/{bucket}/crc64.txt", base_url), vec![]).await;
+    assert_eq!(head.status(), 200);
+    assert_eq!(
+        head.headers()
+            .get("x-amz-checksum-crc64nvme")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        crc64
+    );
 }

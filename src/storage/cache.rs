@@ -527,7 +527,7 @@ impl CacheLayer {
                     match self.evict_one_clean().await {
                         Ok(true) => {
                             evicted += 1;
-                            if evicted % 64 == 0 {
+                            if evicted.is_multiple_of(64) {
                                 tokio::task::yield_now().await;
                             }
                         }

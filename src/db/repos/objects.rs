@@ -5,16 +5,15 @@ use crate::db::DbContext;
 use crate::db::object_read_cache::ReadCacheLookup;
 use crate::db::schema::{object_acl_grants, object_checksums, object_tags, objects};
 use crate::iam::Acl;
-use crate::storage::{ObjectMeta, StorageError};
+use crate::storage::{ChecksumAlgorithm, ObjectMeta, StorageError};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use uuid::Uuid;
 
 use super::{
-    AclGrantRow, PutBucketContext, checksum_from_db, checksum_to_db, db_err, encode_grantee,
-    format_ts, get_conn, grants_to_acl, parse_ts, part_sizes_from_db, part_sizes_to_db,
-    permission_to_db, resolve_bucket_id,
+    AclGrantRow, PutBucketContext, db_err, encode_grantee, format_ts, get_conn, grants_to_acl,
+    parse_ts, part_sizes_from_db, part_sizes_to_db, permission_to_db, resolve_bucket_id,
 };
 
 fn object_has_side_tables(meta: &ObjectMeta) -> bool {
@@ -229,7 +228,7 @@ pub async fn get_object_for_read(
 
     let mut meta = row_into_read_meta(row.object);
     if let (Some(algo), Some(value)) = (row.checksum_algorithm, row.checksum_value) {
-        meta.checksum_algorithm = checksum_from_db(&algo);
+        meta.checksum_algorithm = ChecksumAlgorithm::from_header_str(&algo);
         meta.checksum_value = Some(value);
     }
     ctx.object_read_cache()
@@ -514,7 +513,7 @@ pub(crate) async fn row_into_meta(
     };
 
     let (checksum_algorithm, checksum_value) = match checksum {
-        Some((algo, value)) => (checksum_from_db(&algo), Some(value)),
+        Some((algo, value)) => (ChecksumAlgorithm::from_header_str(&algo), Some(value)),
         None => (None, None),
     };
 
@@ -648,7 +647,7 @@ async fn replace_object_checksum(
         diesel::insert_into(object_checksums::table)
             .values((
                 object_checksums::object_id.eq(object_id),
-                object_checksums::algorithm.eq(checksum_to_db(algo)),
+                object_checksums::algorithm.eq(algo.db_name()),
                 object_checksums::value.eq(val),
             ))
             .execute(conn)

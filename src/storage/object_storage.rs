@@ -535,10 +535,11 @@ impl ObjectStorage {
 
         let (checksum_algorithm, checksum_value) =
             if let Some(algo) = upload_meta.checksum_algorithm {
-                (
-                    Some(algo),
-                    BlobStorage::composite_multipart_checksum(algo, &selected),
-                )
+                let part_values: Vec<String> = selected
+                    .iter()
+                    .filter_map(|p| p.checksum_value.clone())
+                    .collect();
+                (Some(algo), algo.composite_multipart(&part_values))
             } else {
                 (None, None)
             };

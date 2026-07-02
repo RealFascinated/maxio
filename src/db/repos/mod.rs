@@ -20,7 +20,6 @@ pub use versions::*;
 use crate::db::{BucketCache, CachedBucketEntry, DbPool};
 use crate::iam::Acl;
 use crate::iam::acl::{AclGrant, AclPermission, Grantee};
-use crate::storage::ChecksumAlgorithm;
 use crate::storage::StorageError;
 use chrono::{DateTime, Utc};
 use diesel_async::AsyncPgConnection;
@@ -62,19 +61,6 @@ pub(crate) fn parse_ts(s: &str) -> Result<DateTime<Utc>, StorageError> {
                 .map(|ndt| ndt.and_utc())
         })
         .map_err(|e| db_err(e))
-}
-
-pub(crate) fn checksum_to_db(algo: ChecksumAlgorithm) -> &'static str {
-    match algo {
-        ChecksumAlgorithm::CRC32 => "CRC32",
-        ChecksumAlgorithm::CRC32C => "CRC32C",
-        ChecksumAlgorithm::SHA1 => "SHA1",
-        ChecksumAlgorithm::SHA256 => "SHA256",
-    }
-}
-
-pub(crate) fn checksum_from_db(s: &str) -> Option<ChecksumAlgorithm> {
-    ChecksumAlgorithm::from_header_str(s)
 }
 
 pub(crate) fn permission_to_db(p: AclPermission) -> &'static str {

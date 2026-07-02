@@ -18,7 +18,7 @@ use crate::xml::{
     types::{CopyObjectResult, CopyPartResult},
 };
 
-use super::checksum::extract_checksum;
+use crate::storage::checksum::extract_upload_checksum;
 
 /// Parse the `x-amz-copy-source` header into (src_bucket, src_key).
 fn parse_copy_source(headers: &HeaderMap) -> Result<(String, String), S3Error> {
@@ -138,7 +138,7 @@ pub(super) async fn upload_part_copy(
         }
     };
 
-    let checksum = extract_checksum(&headers);
+    let checksum = extract_upload_checksum(&headers);
     let part = state
         .storage
         .upload_part(&bucket, upload_id, part_number, reader, checksum)

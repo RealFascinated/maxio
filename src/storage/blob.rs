@@ -1,9 +1,8 @@
-use base64::Engine;
-
 use super::cache::CacheLayer;
-use super::hashing::{ChecksumHasher, EtagMd5};
+use super::hashing::EtagMd5;
 use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
 use crate::metrics::MetricsRegistry;
+use crate::storage::checksum::ChecksumHasher;
 use rand::RngExt;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -756,31 +755,6 @@ impl BlobStorage {
             tmp_path: tmp_obj_path,
             final_path: obj_path,
         })
-    }
-
-    pub fn composite_multipart_checksum(
-        algo: ChecksumAlgorithm,
-        parts: &[PartMeta],
-    ) -> Option<String> {
-        let b64 = base64::engine::general_purpose::STANDARD;
-        let mut raw_checksums = Vec::new();
-        for part in parts {
-            if let Some(ref val) = part.checksum_value {
-                if let Ok(raw) = b64.decode(val) {
-                    raw_checksums.extend_from_slice(&raw);
-                }
-            }
-        }
-        if raw_checksums.is_empty() {
-            return None;
-        }
-        let mut composite_hasher = ChecksumHasher::new(algo);
-        composite_hasher.update(&raw_checksums);
-        Some(format!(
-            "{}-{}",
-            composite_hasher.finalize_base64(),
-            parts.len()
-        ))
     }
 
     pub async fn remove_upload_dir(

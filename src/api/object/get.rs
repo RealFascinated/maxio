@@ -15,11 +15,11 @@ use crate::iam::principal::Principal;
 use crate::server::AppState;
 use crate::storage::StorageError;
 
-use super::checksum::add_checksum_header;
 use super::conditions::{
     ConditionalResult, check_conditions, not_modified_response, parse_range, to_http_date,
 };
 use super::tagging::get_object_tagging;
+use crate::storage::checksum::add_checksum_header_from_meta;
 
 pub async fn get_object(
     State(state): State<AppState>,
@@ -204,7 +204,7 @@ pub async fn get_object(
     if let Some(vid) = &meta.version_id {
         builder = builder.header("x-amz-version-id", vid.as_str());
     }
-    builder = add_checksum_header(builder, &meta);
+    builder = add_checksum_header_from_meta(builder, &meta);
     Ok(builder.body(body).unwrap())
 }
 
@@ -298,6 +298,6 @@ pub async fn head_object(
     if let Some(vid) = &meta.version_id {
         builder = builder.header("x-amz-version-id", vid.as_str());
     }
-    builder = add_checksum_header(builder, &meta);
+    builder = add_checksum_header_from_meta(builder, &meta);
     Ok(builder.body(Body::empty()).unwrap())
 }
