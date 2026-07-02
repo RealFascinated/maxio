@@ -14,14 +14,14 @@ fn bucket_prefix(bucket: &str) -> String {
 
 #[derive(Debug, Clone)]
 enum ReadCacheValue {
-    Meta(Box<ObjectMeta>),
+    Meta(Arc<ObjectMeta>),
     Absent,
 }
 
 /// Result of a read-cache lookup before hitting Postgres.
 #[derive(Debug, Clone)]
 pub enum ReadCacheLookup {
-    Hit(Box<ObjectMeta>),
+    Hit(Arc<ObjectMeta>),
     Absent,
     Miss,
 }
@@ -52,7 +52,7 @@ impl ObjectReadCache {
 
     pub fn insert(&self, bucket: &str, key: &str, meta: ObjectMeta) {
         self.map
-            .insert(cache_key(bucket, key), ReadCacheValue::Meta(Box::new(meta)));
+            .insert(cache_key(bucket, key), ReadCacheValue::Meta(Arc::new(meta)));
     }
 
     pub fn mark_absent(&self, bucket: &str, key: &str) {

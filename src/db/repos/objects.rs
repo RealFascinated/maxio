@@ -58,33 +58,30 @@ pub fn defer_object_upsert(
     put_ctx: Option<PutBucketContext>,
 ) {
     write_through_read_cache(ctx, bucket_name, meta);
+    ctx.async_meta_writer().enqueue(bucket_name, meta, put_ctx);
+}
 
-    let ctx = ctx.clone();
-    let bucket_name = bucket_name.to_string();
-    let meta = meta.clone();
+pub(crate) async fn flush_deferred_upsert(
+    ctx: &DbContext,
+    bucket_name: String,
+    meta: ObjectMeta,
+    put_ctx: Option<PutBucketContext>,
+) {
     let staged_at = meta.last_modified.clone();
-    let slots = Arc::clone(ctx.async_meta_slots());
-    tokio::spawn(async move {
-        let started = crate::perf::start();
-        let _permit = match slots.acquire().await {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        if !staged_write_still_current(&ctx, &bucket_name, &meta.key, &staged_at) {
-            return;
-        }
-        let result =
-            upsert_object_inner(&ctx, &bucket_name, &meta, put_ctx.as_ref(), false).await;
-        crate::perf::done_detail("async_upsert_object", started, &bucket_name);
-        if let Err(e) = result {
-            tracing::warn!(
-                bucket = %bucket_name,
-                key = %meta.key,
-                error = %e,
-                "async metadata write failed"
-            );
-        }
-    });
+    if !staged_write_still_current(ctx, &bucket_name, &meta.key, &staged_at) {
+        return;
+    }
+    let started = crate::perf::start();
+    let result = upsert_object_inner(&ctx, &bucket_name, &meta, put_ctx.as_ref(), false).await;
+    crate::perf::done_detail("async_upsert_object", started, &bucket_name);
+    if let Err(e) = result {
+        tracing::warn!(
+            bucket = %bucket_name,
+            key = %meta.key,
+            error = %e,
+            "async metadata write failed"
+        );
+    }
 }
 
 pub async fn upsert_object(
@@ -201,7 +198,7 @@ pub async fn get_object_for_read(
     key: &str,
 ) -> Result<ObjectMeta, StorageError> {
     match ctx.object_read_cache().lookup(bucket_name, key) {
-        ReadCacheLookup::Hit(meta) => return Ok(*meta),
+        ReadCacheLookup::Hit(meta) => return Ok(Arc::unwrap_or_clone(meta)),
         ReadCacheLookup::Absent => return Err(StorageError::NotFound(key.to_string())),
         ReadCacheLookup::Miss => {}
     }
@@ -235,8 +232,7 @@ pub async fn get_object_for_read(
         meta.checksum_algorithm = checksum_from_db(&algo);
         meta.checksum_value = Some(value);
     }
-    ctx.object_read_cache()
-        .insert(bucket_name, key, meta.clone());
+    ctx.object_read_cache().insert(bucket_name, key, meta.clone());
     crate::perf::done_detail("get_object_for_read", started, bucket_name);
     Ok(meta)
 }
