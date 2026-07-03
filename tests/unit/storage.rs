@@ -54,6 +54,39 @@ fn cache_index_roundtrip() {
 }
 
 #[test]
+fn disk_cache_state_pop_clean_lru_without_mark_dirty() {
+    let state = DiskCacheState::new();
+    for i in 0..100 {
+        state.record_hit_sync("bucket-a", &format!("key-{i}"), 100);
+    }
+
+    let mut pops = 0usize;
+    while state.pop_clean_lru().is_some() {
+        pops += 1;
+    }
+    assert_eq!(pops, 100);
+}
+
+#[test]
+fn disk_cache_state_pop_clean_lru_after_mark_dirty() {
+    let state = DiskCacheState::new();
+    for i in 0..100 {
+        state.record_hit_sync("bucket-a", &format!("key-{i}"), 100);
+    }
+    for i in (0..100).step_by(2) {
+        state.mark_dirty_sync("bucket-a", &format!("key-{i}"), 100);
+    }
+
+    let mut pops = 0usize;
+    while state.pop_clean_lru().is_some() {
+        pops += 1;
+    }
+    assert_eq!(pops, 50, "every clean entry should be evictable");
+    assert_eq!(state.dirty_count(), 50);
+    assert_eq!(state.entry_count(), 50);
+}
+
+#[test]
 fn disk_cache_state_entry_count_tracks_objects_not_bytes() {
     let state = DiskCacheState::new();
     state.record_hit_sync("bucket-a", "small.txt", 128);

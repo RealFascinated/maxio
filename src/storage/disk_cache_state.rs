@@ -41,7 +41,11 @@ impl Shard {
         let Some(entry) = self.entries.get(key) else {
             return;
         };
-        if entry.dirty {
+        if entry.prev_clean.is_none()
+            && entry.next_clean.is_none()
+            && self.clean_head.as_ref() != Some(key)
+            && self.clean_tail.as_ref() != Some(key)
+        {
             return;
         }
         let (prev, next) = (entry.prev_clean.clone(), entry.next_clean.clone());
@@ -97,6 +101,10 @@ impl Shard {
 
     fn mark_dirty(&mut self, key: ObjectKey, size: u64) -> (i64, i64) {
         let mut dirty_delta = 0i64;
+        let was_dirty = self.entries.get(&key).is_some_and(|entry| entry.dirty);
+        if !was_dirty {
+            self.unlink_clean(&key);
+        }
         let size_delta = if let Some(entry) = self.entries.get_mut(&key) {
             let delta = size as i64 - entry.size as i64;
             self.total_size = self.total_size.saturating_sub(entry.size) + size;
@@ -105,7 +113,6 @@ impl Shard {
                 entry.dirty = true;
                 self.dirty_count += 1;
                 dirty_delta = 1;
-                self.unlink_clean(&key);
             }
             delta
         } else {
@@ -218,6 +225,24 @@ impl Shard {
         if dirty {
             self.dirty_count += 1;
         } else {
+            self.link_clean_head(&key);
+        }
+    }
+
+    fn rebuild_clean_lru(&mut self) {
+        self.clean_head = None;
+        self.clean_tail = None;
+        for entry in self.entries.values_mut() {
+            entry.prev_clean = None;
+            entry.next_clean = None;
+        }
+        let keys: Vec<ObjectKey> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.dirty)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
             self.link_clean_head(&key);
         }
     }
@@ -401,6 +426,20 @@ impl DiskCacheState {
     }
 
     pub fn pop_clean_lru(&self) -> Option<(ObjectKey, u64)> {
+        if let Some(victim) = self.pop_clean_lru_inner() {
+            return Some(victim);
+        }
+        if self.entry_count.load(Ordering::Relaxed) > self.dirty_count.load(Ordering::Relaxed) {
+            for shard in &self.shards {
+                let mut guard = shard.lock().unwrap();
+                guard.rebuild_clean_lru();
+            }
+            return self.pop_clean_lru_inner();
+        }
+        None
+    }
+
+    fn pop_clean_lru_inner(&self) -> Option<(ObjectKey, u64)> {
         for shard in &self.shards {
             let mut guard = shard.lock().unwrap();
             if let Some(victim) = guard.pop_clean_lru() {
@@ -685,5 +724,48 @@ fn apply_pending(state: &DiskCacheState, pending: &mut HashMap<ObjectKey, StateO
             }
             StateOp::Drain(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_shard() -> Shard {
+        Shard {
+            entries: HashMap::new(),
+            clean_head: None,
+            clean_tail: None,
+            total_size: 0,
+            dirty_count: 0,
+        }
+    }
+
+    fn keys_for_shard(target: usize, count: usize) -> Vec<ObjectKey> {
+        let mut keys = Vec::new();
+        let mut i = 0usize;
+        while keys.len() < count {
+            let key = ("bucket-a".to_string(), format!("k{i}"));
+            if shard_index(&key) == target {
+                keys.push(key);
+            }
+            i += 1;
+        }
+        keys
+    }
+
+    #[test]
+    fn shard_pop_all_after_record_hits() {
+        let keys = keys_for_shard(0, 10);
+        let mut shard = empty_shard();
+        for key in &keys {
+            shard.record_hit(key.clone(), 100);
+        }
+        assert_eq!(shard.entries.len(), keys.len());
+        let mut pops = 0usize;
+        while shard.pop_clean_lru().is_some() {
+            pops += 1;
+        }
+        assert_eq!(pops, keys.len());
     }
 }
