@@ -121,7 +121,7 @@ pub struct Config {
     pub public_url: Option<String>,
 
     /// Max Postgres connection pool size (MAXIO_DB_POOL_SIZE).
-    #[arg(long, env = "MAXIO_DB_POOL_SIZE", default_value = "64")]
+    #[arg(long, env = "MAXIO_DB_POOL_SIZE", default_value = "16")]
     pub db_pool_size: u32,
 
     /// Cache prepared SQL statements on each pool connection (MAXIO_DB_PREPARED_STATEMENT_CACHE).
@@ -143,7 +143,7 @@ pub struct PoolSettings {
 impl Default for PoolSettings {
     fn default() -> Self {
         Self {
-            max_size: 64,
+            max_size: 16,
             prepared_statement_cache: true,
         }
     }

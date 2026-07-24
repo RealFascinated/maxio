@@ -8,3 +8,4 @@
 
 /ui/build
 /ui/.svelte-kit
+.aider*
