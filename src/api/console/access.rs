@@ -1,9 +1,9 @@
-use axum::{Json, http::StatusCode, response::Response};
+use axum::{Json, http::StatusCode};
 
 use crate::api::authz::{check_bucket_access, check_object_access};
 use crate::server::AppState;
 
-use super::error::s3_error_to_response;
+use super::error::ConsoleError;
 use super::session::ConsoleSession;
 
 pub(crate) type ConsoleDeny = (StatusCode, Json<serde_json::Value>);
@@ -52,11 +52,11 @@ pub(crate) async fn console_bucket_check(
     session: &ConsoleSession,
     bucket: &str,
     action: &str,
-) -> Result<(), Response> {
+) -> Result<(), ConsoleError> {
     check_bucket_access(state, &session.principal(), bucket, action)
         .await
         .map(|_| ())
-        .map_err(s3_error_to_response)
+        .map_err(ConsoleError::S3)
 }
 
 pub(crate) async fn console_bucket_can(
@@ -97,11 +97,11 @@ pub(crate) async fn console_object_check(
     bucket: &str,
     key: &str,
     action: &str,
-) -> Result<(), Response> {
+) -> Result<(), ConsoleError> {
     check_object_access(state, &session.principal(), bucket, key, action)
         .await
         .map(|_| ())
-        .map_err(s3_error_to_response)
+        .map_err(ConsoleError::S3)
 }
 
 pub(crate) async fn session_capabilities(

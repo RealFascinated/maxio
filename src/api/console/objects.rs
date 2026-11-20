@@ -49,7 +49,7 @@ pub async fn list_objects(
     Query(params): Query<ListObjectsParams>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
-        return resp;
+        return resp.into_response();
     }
 
     let svc = ConsoleService {
@@ -109,7 +109,7 @@ pub async fn upload_object(
     body: axum::body::Body,
 ) -> impl IntoResponse {
     if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await {
-        return resp;
+        return resp.into_response();
     }
 
     let svc = ConsoleService {
@@ -164,7 +164,7 @@ pub async fn get_object_handler(
         _ => "s3:GetObject",
     };
     if let Err(resp) = console_object_check(&state, &session, &bucket, &key, action).await {
-        return resp;
+        return resp.into_response();
     }
 
     let svc = ConsoleService {
@@ -210,7 +210,7 @@ pub async fn delete_object_handler(
         ObjectDeleteOp::Current => "s3:DeleteObject",
     };
     if let Err(resp) = console_object_check(&state, &session, &bucket, &key, action).await {
-        return resp;
+        return resp.into_response();
     }
 
     let svc = ConsoleService {
@@ -254,13 +254,13 @@ pub async fn delete_objects_api(
     }
 
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
-        return resp;
+        return resp.into_response();
     }
     for key in &keys {
         if let Err(resp) =
             console_object_check(&state, &session, &bucket, key, "s3:DeleteObject").await
         {
-            return resp;
+            return resp.into_response();
         }
     }
 
@@ -313,7 +313,7 @@ pub async fn create_folder(
     };
 
     if let Err(resp) = console_object_check(&state, &session, &bucket, &key, "s3:PutObject").await {
-        return resp;
+        return resp.into_response();
     }
 
     match state
@@ -350,13 +350,13 @@ pub async fn preview_folder_delete(
     }
 
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
-        return resp;
+        return resp.into_response();
     }
     for prefix in &prefixes {
         if let Err(resp) =
             console_object_check(&state, &session, &bucket, prefix, "s3:DeleteObject").await
         {
-            return resp;
+            return resp.into_response();
         }
     }
 
@@ -391,12 +391,12 @@ pub async fn delete_folder(
     };
 
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:ListBucket").await {
-        return resp;
+        return resp.into_response();
     }
     if let Err(resp) =
         console_object_check(&state, &session, &bucket, &prefix, "s3:DeleteObject").await
     {
-        return resp;
+        return resp.into_response();
     }
 
     let svc = ConsoleService {

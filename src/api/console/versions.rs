@@ -31,7 +31,7 @@ pub async fn list_versions(
     )
     .await
     {
-        return resp;
+        return resp.into_response();
     }
 
     let all = match state

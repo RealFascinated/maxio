@@ -22,7 +22,7 @@ pub async fn get_versioning(
     if let Err(resp) =
         console_bucket_check(&state, &session, &bucket, "s3:GetBucketVersioning").await
     {
-        return resp;
+        return resp.into_response();
     }
 
     match state.storage.get_versioning_state(&bucket).await {
@@ -53,7 +53,7 @@ pub async fn set_versioning(
     if let Err(resp) =
         console_bucket_check(&state, &session, &bucket, "s3:PutBucketVersioning").await
     {
-        return resp;
+        return resp.into_response();
     }
 
     let versioning = if body.enabled {
@@ -81,7 +81,7 @@ pub async fn get_public(
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:GetBucketPolicy").await {
-        return resp;
+        return resp.into_response();
     }
 
     match state.storage.get_bucket_policy(&bucket).await {
@@ -114,7 +114,7 @@ pub async fn get_cors(
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:GetBucketCors").await {
-        return resp;
+        return resp.into_response();
     }
 
     match state.storage.get_bucket_cors(&bucket).await {
@@ -146,7 +146,7 @@ pub async fn set_cors(
     Json(body): Json<SetCorsRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:PutBucketCors").await {
-        return resp;
+        return resp.into_response();
     }
 
     let result = if body.enabled {
@@ -175,7 +175,7 @@ pub async fn set_public(
     Json(body): Json<SetPublicRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:PutBucketPolicy").await {
-        return resp;
+        return resp.into_response();
     }
 
     let existing = match state.storage.get_bucket_policy(&bucket).await {
@@ -215,7 +215,7 @@ pub async fn get_policy(
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:GetBucketPolicy").await {
-        return resp;
+        return resp.into_response();
     }
 
     match state.storage.get_bucket_policy(&bucket).await {
@@ -244,7 +244,7 @@ pub async fn set_policy(
     Json(body): Json<SetPolicyRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:PutBucketPolicy").await {
-        return resp;
+        return resp.into_response();
     }
 
     match apply_bucket_policy(&state, &bucket, &body.document).await {
@@ -261,7 +261,7 @@ pub async fn delete_policy(
     if let Err(resp) =
         console_bucket_check(&state, &session, &bucket, "s3:DeleteBucketPolicy").await
     {
-        return resp;
+        return resp.into_response();
     }
 
     let existing = match state.storage.get_bucket_policy(&bucket).await {
@@ -296,7 +296,7 @@ pub async fn get_lifecycle(
     if let Err(resp) =
         console_bucket_check(&state, &session, &bucket, "s3:GetLifecycleConfiguration").await
     {
-        return resp;
+        return resp.into_response();
     }
 
     match state.storage.get_bucket_lifecycle(&bucket).await {
@@ -323,7 +323,7 @@ pub async fn set_lifecycle(
     if let Err(resp) =
         console_bucket_check(&state, &session, &bucket, "s3:PutLifecycleConfiguration").await
     {
-        return resp;
+        return resp.into_response();
     }
 
     for rule in &body.rules {

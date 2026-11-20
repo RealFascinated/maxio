@@ -120,7 +120,7 @@ pub async fn delete_bucket_api(
     Path(bucket): Path<String>,
 ) -> impl IntoResponse {
     if let Err(resp) = console_bucket_check(&state, &session, &bucket, "s3:DeleteBucket").await {
-        return resp;
+        return resp.into_response();
     }
 
     match state.storage.delete_bucket(&bucket).await {

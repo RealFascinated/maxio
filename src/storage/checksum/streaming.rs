@@ -125,7 +125,7 @@ async fn read_aws_chunk<R: tokio::io::AsyncRead + Unpin>(
             read_trailer_lines(&mut reader).await?
         } else {
             let mut crlf = [0u8; 2];
-            if reader.read_exact(&mut crlf).await.is_ok() && crlf != [b'\r', b'\n'] {
+            if reader.read_exact(&mut crlf).await.is_ok() && crlf != *b"\r\n" {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "invalid chunk terminator",

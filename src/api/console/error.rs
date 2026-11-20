@@ -12,6 +12,7 @@ pub enum ConsoleError {
     Storage(StorageError),
     BadRequest(String),
     Unauthorized(String),
+    S3(S3Error),
 }
 
 impl IntoResponse for ConsoleError {
@@ -28,6 +29,7 @@ impl IntoResponse for ConsoleError {
             )
                 .into_response(),
             Self::Storage(err) => storage_error_response(err),
+            Self::S3(err) => s3_error_to_response(err),
         }
     }
 }

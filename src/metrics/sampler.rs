@@ -87,14 +87,14 @@ pub fn spawn_sampler(
                 .history()
                 .set_window_percentiles(window_percentiles(window));
 
-            if tick_count % TICKS_PER_MINUTE as u64 == 0
+            if tick_count.is_multiple_of(TICKS_PER_MINUTE as u64)
                 && let Some(minute) = rollup(window)
                 && let Err(e) = repos::insert_metrics_sample(&pool, &minute).await
             {
                 tracing::warn!("persisting metrics sample failed: {e}");
             }
 
-            if tick_count % TICKS_PER_HOUR == 0 {
+            if tick_count.is_multiple_of(TICKS_PER_HOUR) {
                 let cutoff = chrono::Utc::now() - chrono::Duration::days(DB_RETENTION_DAYS);
                 if let Err(e) = repos::prune_metrics_samples(&pool, cutoff).await {
                     tracing::warn!("pruning metrics samples failed: {e}");

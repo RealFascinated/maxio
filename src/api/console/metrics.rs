@@ -40,7 +40,7 @@ pub async fn get_metrics_api(
     let mut snapshot = state.metrics.snapshot();
     let mut stats = visible_bucket_stats(&state, &session).await;
     snapshot.storage_totals = crate::metrics::StorageTotalsSnapshot::from_bucket_stats(&stats);
-    stats.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    stats.sort_by_key(|stat| std::cmp::Reverse(stat.size_bytes));
     snapshot.buckets = stats
         .into_iter()
         .map(|s| BucketUsageSnapshot {
