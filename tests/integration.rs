@@ -32,6 +32,8 @@ mod console_admin_extended;
 mod console_buckets;
 #[path = "integration/console_upload.rs"]
 mod console_upload;
+#[path = "integration/jobs.rs"]
+mod jobs;
 
 #[path = "integration/copy.rs"]
 mod copy;

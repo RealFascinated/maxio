@@ -25,6 +25,7 @@ mod db;
 mod embedded;
 mod error;
 mod iam;
+mod jobs;
 mod metrics;
 mod perf;
 mod server;
@@ -33,7 +34,6 @@ mod storage;
 mod xml;
 
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -64,34 +64,10 @@ async fn main() -> anyhow::Result<()> {
     let state = app::build_app_state(config.clone()).await?;
     let cache_for_shutdown = state.cache.clone();
 
-    // Background housekeeping: abort stale multipart uploads (>7 days) and
-    // remove leftover temp files from crashed writes. Runs once at startup,
-    // then hourly.
-    {
-        let storage = state.storage.clone();
-        tokio::spawn(async move {
-            let stale_after = chrono::Duration::days(7);
-            let mut ticker = tokio::time::interval(Duration::from_secs(3600));
-            loop {
-                ticker.tick().await;
-                let (uploads, temps) = storage.housekeeping_sweep(stale_after).await;
-                if uploads > 0 || temps > 0 {
-                    tracing::info!(
-                        "housekeeping: removed {} stale upload(s), {} temp file(s)",
-                        uploads,
-                        temps
-                    );
-                }
-                match storage.lifecycle_sweep().await {
-                    Ok(deleted) if deleted > 0 => {
-                        tracing::info!("lifecycle: expired {} object(s)/version(s)", deleted);
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("lifecycle sweep failed: {}", e),
-                }
-            }
-        });
+    if let Err(e) = state.jobs.resume().await {
+        tracing::warn!("resuming jobs failed: {e}");
     }
+    state.jobs.spawn_schedules();
 
     let app = server::build_router(state);
 

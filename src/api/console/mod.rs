@@ -5,6 +5,7 @@ mod auth;
 mod bucket_settings;
 mod buckets;
 mod error;
+mod jobs;
 mod maintenance;
 mod metrics;
 mod objects;
@@ -36,12 +37,13 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use bucket_settings::{
-    delete_policy, get_compression, get_cors, get_lifecycle, get_policy, get_public,
-    get_versioning, set_compression, set_cors, set_lifecycle, set_policy, set_public,
+    delete_policy, get_compression, get_compression_estimate, get_cors, get_lifecycle, get_policy,
+    get_public, get_versioning, set_compression, set_cors, set_lifecycle, set_policy, set_public,
     set_versioning,
 };
 use buckets::{create_bucket, delete_bucket_api, list_buckets};
-use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
+use jobs::{cancel_job, get_job, list_jobs, start_job};
+use maintenance::scan_orphan_meta_api;
 use metrics::{get_metrics_api, get_metrics_history_api};
 use objects::{
     create_folder, delete_folder, delete_object_handler, delete_objects_api, get_object_handler,
@@ -62,10 +64,6 @@ pub fn console_router(state: AppState) -> Router<AppState> {
 
     let admin_routes: Router<AppState> = Router::new()
         .route("/maintenance/orphan-meta", get(scan_orphan_meta_api))
-        .route(
-            "/maintenance/orphan-meta/repair",
-            post(repair_orphan_meta_api),
-        )
         .route("/metrics", get(get_metrics_api))
         .route("/metrics/history", get(get_metrics_history_api))
         .route("/users", get(admin::list_users_api))
@@ -123,6 +121,12 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         .route("/buckets/{bucket}/versioning", put(set_versioning))
         .route("/buckets/{bucket}/compression", get(get_compression))
         .route("/buckets/{bucket}/compression", put(set_compression))
+        .route(
+            "/buckets/{bucket}/compression/estimate",
+            get(get_compression_estimate),
+        )
+        .route("/jobs", get(list_jobs).post(start_job))
+        .route("/jobs/{id}", get(get_job).delete(cancel_job))
         .route("/buckets/{bucket}/public", get(get_public))
         .route("/buckets/{bucket}/public", put(set_public))
         .route("/buckets/{bucket}/policy", get(get_policy))

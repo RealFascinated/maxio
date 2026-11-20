@@ -11,16 +11,6 @@ export interface OrphanMetaScanResult {
   orphans: OrphanMetaEntry[]
 }
 
-export interface OrphanMetaRepairResult {
-  removed: number
-}
-
 export async function scanOrphanMeta(): Promise<OrphanMetaScanResult> {
   return apiFetch<OrphanMetaScanResult>('/api/maintenance/orphan-meta')
-}
-
-export async function repairOrphanMeta(): Promise<OrphanMetaRepairResult> {
-  return apiFetch<OrphanMetaRepairResult>('/api/maintenance/orphan-meta/repair', {
-    method: 'POST',
-  })
 }

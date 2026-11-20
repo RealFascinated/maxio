@@ -9,7 +9,7 @@ use crate::api::bucket::apply_bucket_policy;
 use crate::error::S3Error;
 use crate::server::AppState;
 use crate::storage::compression::Compression;
-use crate::storage::{LifecycleRule, VersioningState};
+use crate::storage::{LifecycleRule, StorageError, VersioningState};
 
 use super::access::console_bucket_check;
 use super::error::s3_error_to_response;
@@ -134,6 +134,32 @@ pub async fn set_compression(
             Json(serde_json::json!({"error": e.to_string()})),
         )
             .into_response(),
+    }
+}
+
+fn compression_error_response(e: StorageError) -> axum::response::Response {
+    let status = match e {
+        StorageError::NotFound(_) => StatusCode::NOT_FOUND,
+        StorageError::InvalidKey(_) => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+}
+
+pub async fn get_compression_estimate(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:GetBucketVersioning").await
+    {
+        return resp.into_response();
+    }
+
+    match state.storage.estimate_compression(&bucket).await {
+        Ok(estimate) => (StatusCode::OK, Json(estimate)).into_response(),
+        Err(e) => compression_error_response(e),
     }
 }
 

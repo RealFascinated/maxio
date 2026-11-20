@@ -164,7 +164,7 @@ Page area is `p-4` inside the shell and scrolls on its own; nothing renders unde
 
 ## App shell
 
-- Rail: 48px icon rail, tooltips on hover, expands to 208px (`[` toggles, persisted in `localStorage['sidebar-collapsed']`). Opaque `bg-panel`, one right hairline, never overlays content. Items 32px: Buckets, Users, Policies, Metrics, Settings (footer). Active item is a neutral `bg-selected` fill with foreground text. Root-only items hide for non-root users.
+- Rail: 48px icon rail, tooltips on hover, expands to 208px (`[` toggles, persisted in `localStorage['sidebar-collapsed']`). Opaque `bg-panel`, one right hairline, never overlays content. Items 32px: Buckets, Users, Policies, Metrics, Jobs, Settings (footer). Active item is a neutral `bg-selected` fill with foreground text. Root-only items hide for non-root users.
 - Mobile (<1024px): rail hidden; the menu button opens an off-canvas left drawer with a backdrop.
 - Top bar: 40px. Route-derived breadcrumbs (`components/app/topbar/breadcrumbs.ts`), search button (`⌘K`), theme toggle, account menu (theme choice, keyboard shortcuts, sign out).
 - Theme: `light | system | dark`, stored in `localStorage['theme']`, default dark.
@@ -180,7 +180,7 @@ Page area is `p-4` inside the shell and scrolls on its own; nothing renders unde
 | `⌘K`, `/` | Command palette |
 | `?` | Shortcut help |
 | `[` | Toggle sidebar |
-| `g b` `g u` `g p` `g m` `g s` | Go to Buckets, Users, Policies, Metrics, Settings |
+| `g b` `g u` `g p` `g m` `g j` `g s` | Go to Buckets, Users, Policies, Metrics, Jobs, Settings |
 
 The palette's "Create bucket" navigates to `/?new`; the buckets page opens its create dialog when `new` is present in the query.
 

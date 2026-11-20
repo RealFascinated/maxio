@@ -10,6 +10,7 @@ const sectionLabels: Record<string, string> = {
   users: 'Users',
   policies: 'Policies',
   metrics: 'Metrics',
+  jobs: 'Jobs',
   settings: 'Settings',
   design: 'Design',
 }

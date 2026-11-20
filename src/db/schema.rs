@@ -243,8 +243,25 @@ diesel::joinable!(iam_access_keys -> iam_users (user_username));
 diesel::joinable!(iam_user_inline_policies -> iam_users (user_username));
 diesel::joinable!(iam_user_policy_attachments -> iam_users (user_username));
 
+diesel::table! {
+    jobs (id) {
+        id -> Uuid,
+        kind -> Text,
+        scope -> Nullable<Text>,
+        status -> Text,
+        trigger -> Text,
+        processed -> Int8,
+        total -> Nullable<Int8>,
+        detail -> Jsonb,
+        error -> Nullable<Text>,
+        started_at -> Timestamptz,
+        finished_at -> Nullable<Timestamptz>,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     buckets,
+    jobs,
     bucket_policies,
     bucket_cors_rules,
     bucket_lifecycle_rules,

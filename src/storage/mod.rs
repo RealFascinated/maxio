@@ -2,6 +2,7 @@ pub mod blob;
 pub mod cache;
 pub mod checksum;
 pub mod compression;
+pub mod compression_job;
 pub mod disk_cache_state;
 pub mod hashing;
 pub mod lifecycle;
@@ -167,9 +168,18 @@ pub struct ObjectMeta {
 }
 
 impl ObjectMeta {
-    /// Byte length of the payload file on disk.
-    pub fn stored_size(&self) -> u64 {
-        self.compressed_size.unwrap_or(self.size)
+    /// Whether a payload file of `len` bytes belongs to this object.
+    ///
+    /// `compressed_size` is recorded before the file is swapped, so until the swap lands
+    /// (or after a crash in between) the file is still raw. A compressed file is always
+    /// strictly smaller than the object, which makes the length unambiguous.
+    pub fn accepts_stored_len(&self, len: u64) -> bool {
+        len == self.size || Some(len) == self.compressed_size
+    }
+
+    /// Whether a payload file of `len` bytes holds LZ4 blocks rather than raw bytes.
+    pub fn is_compressed_len(&self, len: u64) -> bool {
+        Some(len) == self.compressed_size
     }
 }
 

@@ -1,3 +1,5 @@
+import type { ListJobsParams } from './jobs'
+
 export const authKeys = {
   all: ['auth'] as const,
   check: () => [...authKeys.all, 'check'] as const,
@@ -62,4 +64,10 @@ export const metricsKeys = {
 export const maintenanceKeys = {
   all: ['maintenance'] as const,
   orphanMeta: () => [...maintenanceKeys.all, 'orphan-meta'] as const,
+}
+
+export const jobKeys = {
+  all: ['jobs'] as const,
+  list: (params: ListJobsParams = {}) => [...jobKeys.all, 'list', params] as const,
+  detail: (id: string) => [...jobKeys.all, 'detail', id] as const,
 }

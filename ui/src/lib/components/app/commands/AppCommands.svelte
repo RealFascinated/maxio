@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation'
   import { createQuery } from '@tanstack/svelte-query'
   import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
+  import ClipboardList from 'lucide-svelte/icons/clipboard-list'
   import Database from 'lucide-svelte/icons/database'
   import Keyboard from 'lucide-svelte/icons/keyboard'
   import LogOut from 'lucide-svelte/icons/log-out'
@@ -41,6 +42,7 @@
         { id: 'go-users', label: 'Go to Users', group: 'Navigate', icon: UsersIcon, shortcut: 'g u', onSelect: go(routes.users()) },
         { id: 'go-policies', label: 'Go to Policies', group: 'Navigate', icon: Shield, shortcut: 'g p', onSelect: go(routes.policies()) },
         { id: 'go-metrics', label: 'Go to Metrics', group: 'Navigate', icon: BarChart2, shortcut: 'g m', onSelect: go(routes.metrics()) },
+        { id: 'go-jobs', label: 'Go to Jobs', group: 'Navigate', icon: ClipboardList, shortcut: 'g j', onSelect: go(routes.jobs()) },
         { id: 'go-settings', label: 'Go to Settings', group: 'Navigate', icon: Settings, shortcut: 'g s', onSelect: go(routes.serverSettings()) },
       )
     }
@@ -68,6 +70,7 @@
       ['g u', 'Go to Users', routes.users(), true],
       ['g p', 'Go to Policies', routes.policies(), true],
       ['g m', 'Go to Metrics', routes.metrics(), true],
+      ['g j', 'Go to Jobs', routes.jobs(), true],
       ['g s', 'Go to Settings', routes.serverSettings(), true],
     ]
     const unregister = [

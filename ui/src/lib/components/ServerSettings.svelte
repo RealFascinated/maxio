@@ -11,10 +11,14 @@
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import RefreshCw from 'lucide-svelte/icons/refresh-cw'
   import { toast, toastApiError } from '$lib/toast'
-  import { maintenanceKeys } from '$lib/api/keys'
-  import { repairOrphanMeta, scanOrphanMeta } from '$lib/api/maintenance'
+  import { maintenanceKeys, jobKeys } from '$lib/api/keys'
+  import { startJob } from '$lib/api/jobs'
+  import { scanOrphanMeta } from '$lib/api/maintenance'
+  import { routes } from '$lib/navigation'
+  import { queryClient } from '$lib/query/client'
   let showRepairConfirm = $state(false)
   let hasScanned = $state(false)
+  let repairStarted = $state(false)
 
   const scanQuery = createQuery(() => ({
     queryKey: maintenanceKeys.orphanMeta(),
@@ -29,18 +33,14 @@
   }
 
   const repairMutation = createMutation(() => ({
-    mutationFn: repairOrphanMeta,
-    onSuccess: async (data) => {
-      toast.success(
-        data.removed === 0
-          ? 'No orphaned metadata to remove'
-          : `Removed ${data.removed} orphaned metadata rows`,
-      )
-      const result = await scanQuery.refetch()
-      if (!result.isError) hasScanned = true
+    mutationFn: () => startJob({ kind: 'orphanMetaRepair' }),
+    onSuccess: () => {
+      repairStarted = true
+      toast.success('Orphan metadata repair started')
+      queryClient.invalidateQueries({ queryKey: jobKeys.all })
     },
     onError: (error) => {
-      console.error('repairOrphanMeta failed:', error)
+      console.error('startJob failed:', error)
       toastApiError(error, 'Repair failed')
     },
   }))
@@ -91,6 +91,9 @@
           Repair
         </Button>
       {/if}
+      {#if repairStarted}
+        <Button variant="link" size="xs" href={routes.jobs()}>View in Jobs</Button>
+      {/if}
       {#if hasScanned && scanQuery.data}
         {#if scanQuery.data.count === 0}
           <Badge variant="success" label="No orphans found" />
@@ -134,7 +137,7 @@
 <ConfirmDialog
   bind:open={showRepairConfirm}
   title="Repair orphaned metadata"
-  description={`Deletes ${scanQuery.data?.count ?? 0} metadata rows with missing object bytes.`}
+  description={`Starts a background repair for ${scanQuery.data?.count ?? 0} metadata rows with missing object bytes.`}
   confirmLabel="Repair"
   confirmVariant="destructive"
   loading={repairMutation.isPending}

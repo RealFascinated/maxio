@@ -17,9 +17,57 @@ const DELETE_BLOB_CONCURRENCY: usize = 32;
 const LIFECYCLE_SWEEP_BATCH: i64 = 500;
 use crate::metrics::MetricsRegistry;
 
+/// Serializes writers of the same object: PUT/delete/version changes and the compression
+/// rewrite all swap a payload file and its metadata row, which must not interleave.
+/// Keys share a fixed set of stripes, so unrelated keys rarely contend.
+pub(super) struct KeyLocks {
+    stripes: Vec<tokio::sync::Mutex<()>>,
+}
+
+impl KeyLocks {
+    const STRIPES: usize = 256;
+
+    fn new() -> Self {
+        Self {
+            stripes: (0..Self::STRIPES)
+                .map(|_| tokio::sync::Mutex::new(()))
+                .collect(),
+        }
+    }
+
+    fn stripe(bucket: &str, key: &str) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bucket.hash(&mut hasher);
+        key.hash(&mut hasher);
+        hasher.finish() as usize % Self::STRIPES
+    }
+
+    pub(super) async fn lock(&self, bucket: &str, key: &str) -> tokio::sync::MutexGuard<'_, ()> {
+        self.stripes[Self::stripe(bucket, key)].lock().await
+    }
+
+    /// Locks every key's stripe in ascending order, so concurrent callers cannot deadlock.
+    async fn lock_many<'a>(
+        &self,
+        bucket: &str,
+        keys: impl Iterator<Item = &'a str>,
+    ) -> Vec<tokio::sync::MutexGuard<'_, ()>> {
+        let mut indexes: Vec<usize> = keys.map(|key| Self::stripe(bucket, key)).collect();
+        indexes.sort_unstable();
+        indexes.dedup();
+        let mut guards = Vec::with_capacity(indexes.len());
+        for index in indexes {
+            guards.push(self.stripes[index].lock().await);
+        }
+        guards
+    }
+}
+
 pub struct ObjectStorage {
-    blobs: BlobStorage,
-    meta: Arc<dyn MetadataStore>,
+    pub(super) blobs: BlobStorage,
+    pub(super) meta: Arc<dyn MetadataStore>,
+    pub(super) key_locks: KeyLocks,
     metrics: Option<Arc<MetricsRegistry>>,
 }
 
@@ -28,6 +76,7 @@ impl ObjectStorage {
         Self {
             blobs,
             meta,
+            key_locks: KeyLocks::new(),
             metrics: None,
         }
     }
@@ -83,6 +132,7 @@ impl ObjectStorage {
         versioned: bool,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
+        let _key_guard = self.key_locks.lock(bucket, key).await;
         self.publish_written_payload(
             bucket,
             key,
@@ -247,6 +297,7 @@ impl ObjectStorage {
     ) -> Result<DeleteResult, StorageError> {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
+        let _key_guard = self.key_locks.lock(bucket, key).await;
 
         let versioned = matches!(
             self.meta.get_versioning_state(bucket).await,
@@ -326,6 +377,10 @@ impl ObjectStorage {
             marker_keys.dedup();
 
             if !version_pairs.is_empty() {
+                let _key_guards = self
+                    .key_locks
+                    .lock_many(bucket, version_pairs.iter().map(|(key, _)| key.as_str()))
+                    .await;
                 let deleted = self
                     .meta
                     .delete_object_versions_batch(bucket, &version_pairs)
@@ -377,6 +432,10 @@ impl ObjectStorage {
             }
         } else {
             let keys: Vec<String> = objects.iter().map(|o| o.key.clone()).collect();
+            let _key_guards = self
+                .key_locks
+                .lock_many(bucket, keys.iter().map(String::as_str))
+                .await;
             let deleted = self.meta.delete_objects_by_keys(bucket, &keys).await?;
             let deleted_set: HashSet<String> = deleted.into_iter().collect();
             let to_unlink: Vec<String> = deleted_set.iter().cloned().collect();
@@ -693,6 +752,30 @@ impl Storage for ObjectStorage {
         compression: crate::storage::compression::Compression,
     ) -> Result<(), StorageError> {
         self.meta.set_compression(bucket, compression).await
+    }
+
+    async fn estimate_compression(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::compression_job::CompressionEstimate, StorageError> {
+        self.estimate_compression_impl(bucket).await
+    }
+
+    async fn compress_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<crate::storage::compression_job::CompressOutcome, StorageError> {
+        self.compress_object_inner(bucket, key).await
+    }
+
+    async fn compress_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<crate::storage::compression_job::CompressOutcome, StorageError> {
+        self.compress_version_inner(bucket, key, version_id).await
     }
 
     async fn get_bucket_auth_info(
@@ -1088,6 +1171,7 @@ impl Storage for ObjectStorage {
     ) -> Result<DeleteResult, StorageError> {
         validate_bucket_name(bucket)?;
         validate_key(key)?;
+        let _key_guard = self.key_locks.lock(bucket, key).await;
 
         if version_id == "null" {
             let meta = match self.meta.get_object_meta(bucket, key).await {

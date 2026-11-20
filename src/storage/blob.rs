@@ -24,6 +24,12 @@ pub struct BlobStorage {
     metrics: Option<Arc<MetricsRegistry>>,
 }
 
+/// A compressed copy of an existing payload, waiting to be swapped in.
+pub struct CompressedTemp {
+    pub tmp_path: PathBuf,
+    pub stored_size: u64,
+}
+
 pub struct WrittenPayload {
     pub size: u64,
     pub etag: String,
@@ -174,18 +180,19 @@ impl BlobStorage {
         Ok(())
     }
 
+    /// Locates the payload file and returns it with its length on disk.
     async fn resolve_read_path(
         &self,
         bucket: &str,
         key: &str,
-        expected_size: u64,
-    ) -> Result<PathBuf, StorageError> {
+        meta: &ObjectMeta,
+    ) -> Result<(PathBuf, u64), StorageError> {
         if let Some(cache) = &self.cache {
             let cache_path = cache.object_path(bucket, key);
             match fs::metadata(&cache_path).await {
-                Ok(m) if m.len() == expected_size => {
-                    cache.record_read_hit(bucket, key, expected_size).await;
-                    return Ok(cache_path);
+                Ok(m) if meta.accepts_stored_len(m.len()) => {
+                    cache.record_read_hit(bucket, key, m.len()).await;
+                    return Ok((cache_path, m.len()));
                 }
                 Ok(_) => {
                     // Partial/stale cache file from an interrupted write — drop and fall back.
@@ -200,20 +207,20 @@ impl BlobStorage {
         }
 
         let data_path = self.object_path(bucket, key);
-        match fs::metadata(&data_path).await {
-            Ok(m) if m.len() == expected_size => {}
+        let len = match fs::metadata(&data_path).await {
+            Ok(m) if meta.accepts_stored_len(m.len()) => m.len(),
             Ok(_) => return Err(StorageError::NotFound(key.to_string())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(StorageError::NotFound(key.to_string()));
             }
             Err(e) => return Err(StorageError::Io(e)),
-        }
+        };
 
         if let Some(cache) = &self.cache {
-            cache.fill_in_background(bucket, key, data_path.clone(), expected_size);
+            cache.fill_in_background(bucket, key, data_path.clone(), len);
         }
 
-        Ok(data_path)
+        Ok((data_path, len))
     }
 
     pub fn object_path(&self, bucket: &str, key: &str) -> PathBuf {
@@ -475,6 +482,55 @@ impl BlobStorage {
             .map_err(StorageError::Io)
     }
 
+    /// Where a current object's payload is written (the cache dir when write-back is on).
+    pub fn object_write_path(&self, bucket: &str, key: &str) -> Result<PathBuf, StorageError> {
+        Ok(object_path_in(self.write_buckets_dir()?, bucket, key))
+    }
+
+    /// Streams `source` (`plain_size` bytes) through the LZ4 encoder into a temp file next to
+    /// `final_path`. Returns `None` (and leaves nothing behind) when compression would not
+    /// make the file smaller.
+    pub async fn compress_to_temp(
+        &self,
+        final_path: &Path,
+        mut source: ByteStream,
+        plain_size: u64,
+    ) -> Result<Option<CompressedTemp>, StorageError> {
+        self.ensure_object_parent_dir(final_path).await?;
+        let tmp_path = temp_sibling_path(final_path);
+        let mut tmp_guard = TempPathGuard::new(tmp_path.clone());
+        let file = fs::File::create(&tmp_path).await?;
+        let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
+        let mut encoder = PayloadEncoder::new(Compression::Lz4);
+        let mut buf = vec![0u8; IO_BUFFER_SIZE];
+        let mut read_total = 0u64;
+        loop {
+            let n = source.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            read_total += n as u64;
+            encoder.write(&mut writer, &buf[..n]).await?;
+        }
+        if read_total != plain_size {
+            return Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("read {read_total} bytes, expected {plain_size}"),
+            )));
+        }
+        let stored_size = encoder.finish(&mut writer).await?.unwrap_or(plain_size);
+        writer.flush().await?;
+        self.record_drive_write();
+        if stored_size >= plain_size {
+            return Ok(None);
+        }
+        tmp_guard.disarm();
+        Ok(Some(CompressedTemp {
+            tmp_path,
+            stored_size,
+        }))
+    }
+
     pub async fn remove_published_payload(path: &Path) -> Result<(), StorageError> {
         remove_file_if_exists(path).await
     }
@@ -485,12 +541,10 @@ impl BlobStorage {
         key: &str,
         meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self
-            .resolve_read_path(bucket, key, meta.stored_size())
-            .await?;
+        let (obj_path, len) = self.resolve_read_path(bucket, key, meta).await?;
         self.record_drive_read();
-        if let Some(stored_size) = meta.compressed_size {
-            return compression::open_range(&obj_path, stored_size, meta.size, 0, meta.size).await;
+        if meta.is_compressed_len(len) {
+            return compression::open_range(&obj_path, len, meta.size, 0, meta.size).await;
         }
         if meta.size <= SMALL_OBJECT_THRESHOLD {
             let data = fs::read(&obj_path).await.map_err(StorageError::Io)?;
@@ -508,13 +562,10 @@ impl BlobStorage {
         offset: u64,
         length: u64,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self
-            .resolve_read_path(bucket, key, meta.stored_size())
-            .await?;
+        let (obj_path, len) = self.resolve_read_path(bucket, key, meta).await?;
         self.record_drive_read();
-        if let Some(stored_size) = meta.compressed_size {
-            return compression::open_range(&obj_path, stored_size, meta.size, offset, length)
-                .await;
+        if meta.is_compressed_len(len) {
+            return compression::open_range(&obj_path, len, meta.size, offset, length).await;
         }
         if length <= SMALL_OBJECT_THRESHOLD {
             let mut file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
@@ -907,17 +958,20 @@ impl BlobStorage {
         meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
         let ver_data_path = self.version_data_path(bucket, key, version_id);
-        if let Some(stored_size) = meta.compressed_size {
-            return compression::open_range(&ver_data_path, stored_size, meta.size, 0, meta.size)
-                .await;
+        let len = fs::metadata(&ver_data_path)
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    StorageError::VersionNotFound(version_id.to_string())
+                } else {
+                    StorageError::Io(e)
+                }
+            })?
+            .len();
+        if meta.is_compressed_len(len) {
+            return compression::open_range(&ver_data_path, len, meta.size, 0, meta.size).await;
         }
-        let file = fs::File::open(&ver_data_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::VersionNotFound(version_id.to_string())
-            } else {
-                StorageError::Io(e)
-            }
-        })?;
+        let file = fs::File::open(&ver_data_path).await?;
         Ok(Box::pin(BufReader::with_capacity(IO_BUFFER_SIZE, file)))
     }
 

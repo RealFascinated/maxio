@@ -154,9 +154,16 @@ pub async fn test_app_state(storage: Arc<dyn Storage>, config: Arc<Config>) -> A
     let user_store: Arc<dyn IamStore> = Arc::new(PgIamStore::new(pool.clone()));
     let metrics = Arc::new(maxio::metrics::MetricsRegistry::new().unwrap());
     let stats = maxio::stats::BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
+    let meta: Arc<dyn MetadataStore> = Arc::new(PgMetadataStore::new(
+        Arc::clone(&pool),
+        maxio::config::MemoryCacheLimits::default(),
+    ));
+    let jobs =
+        maxio::app::build_job_manager(Arc::clone(&storage), meta, Arc::clone(&pool), &config);
     AppState {
         storage,
         config,
+        jobs,
         login_rate_limiter: Arc::new(maxio::api::console::LoginRateLimiter::new()),
         revoked_sessions: Arc::new(maxio::api::console::RevokedSessions::new()),
         user_store,

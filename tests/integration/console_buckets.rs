@@ -338,15 +338,35 @@ async fn test_console_orphan_meta_repair_api() {
     assert_eq!(scan_body["count"], 1);
 
     let repair = client()
-        .post(format!("{}/api/maintenance/orphan-meta/repair", base_url))
+        .post(format!("{}/api/jobs", base_url))
         .header("cookie", format!("maxio_session={session}"))
         .header("origin", base_url)
+        .json(&serde_json::json!({"kind": "orphanMetaRepair"}))
         .send()
         .await
         .unwrap();
     assert_eq!(repair.status(), 200);
-    let repair_body: serde_json::Value = repair.json().await.unwrap();
-    assert_eq!(repair_body["removed"], 1);
+    let job_id = repair.json::<serde_json::Value>().await.unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for _ in 0..100 {
+        let job: serde_json::Value = client()
+            .get(format!("{}/api/jobs/{job_id}", base_url))
+            .header("cookie", format!("maxio_session={session}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if job["job"]["status"] != "running" {
+            assert_eq!(job["job"]["status"], "completed", "{job}");
+            assert_eq!(job["job"]["detail"]["removed"], 1, "{job}");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 
     let scan = client()
         .get(format!("{}/api/maintenance/orphan-meta", base_url))

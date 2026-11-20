@@ -1,6 +1,8 @@
 mod buckets;
+mod compression_jobs;
 mod console_list_sort;
 mod iam;
+mod jobs;
 mod lifecycle;
 mod listing;
 mod metrics;
@@ -11,7 +13,9 @@ mod upsert_batcher;
 mod versions;
 
 pub use buckets::*;
+pub use compression_jobs::*;
 pub use iam::*;
+pub use jobs::*;
 pub use lifecycle::*;
 pub use listing::*;
 pub use metrics::*;

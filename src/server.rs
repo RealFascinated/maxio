@@ -16,6 +16,7 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::embedded::ui_handler;
 use crate::iam::IamStore;
+use crate::jobs::JobManager;
 use crate::metrics::MetricsRegistry;
 use crate::stats::BucketStatsCache;
 use crate::storage::Storage;
@@ -31,6 +32,7 @@ pub struct AppState {
     pub db_pool: Arc<DbPool>,
     pub metrics: Arc<MetricsRegistry>,
     pub stats: Arc<BucketStatsCache>,
+    pub jobs: Arc<JobManager>,
     pub cache: Option<Arc<CacheLayer>>,
     pub signing_key_cache: Arc<SigningKeyCache>,
 }

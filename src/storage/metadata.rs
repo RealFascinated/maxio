@@ -4,10 +4,13 @@ use std::collections::HashMap;
 pub use crate::db::repos::PutBucketContext;
 
 use super::compression::Compression;
+use super::compression_job::{CompressionCandidate, CompressionState};
 use super::traits::{DelimitedListPage, ListPage};
 use super::{
     BucketMeta, CorsRule, LifecycleRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError,
 };
+use crate::jobs::{Job, JobKind, JobStatus};
+use uuid::Uuid;
 
 #[async_trait]
 pub trait MetadataStore: Send + Sync {
@@ -64,6 +67,53 @@ pub trait MetadataStore: Send + Sync {
         bucket: &str,
         compression: Compression,
     ) -> Result<(), StorageError>;
+
+    async fn save_job(&self, job: &Job) -> Result<(), StorageError>;
+    async fn get_job(&self, id: Uuid) -> Result<Option<Job>, StorageError>;
+    async fn list_jobs(
+        &self,
+        kind: Option<JobKind>,
+        scope: Option<&str>,
+        status: Option<JobStatus>,
+        limit: i64,
+    ) -> Result<Vec<Job>, StorageError>;
+    /// Drops all but the newest `keep` finished runs of one kind and scope.
+    async fn prune_jobs(
+        &self,
+        kind: JobKind,
+        scope: Option<&str>,
+        keep: i64,
+    ) -> Result<(), StorageError>;
+
+    /// `(count, total size)` of current objects and versions still stored uncompressed.
+    async fn count_compression_candidates(&self, bucket: &str) -> Result<(i64, i64), StorageError>;
+    async fn list_compression_candidates(
+        &self,
+        bucket: &str,
+        state: &CompressionState,
+        limit: i64,
+    ) -> Result<Vec<CompressionCandidate>, StorageError>;
+    /// Returns `false` when the object changed since `etag` was read.
+    async fn set_object_compressed_size(
+        &self,
+        bucket: &str,
+        key: &str,
+        etag: &str,
+        compressed_size: u64,
+    ) -> Result<bool, StorageError>;
+    async fn set_version_compressed_size(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        etag: &str,
+        compressed_size: u64,
+    ) -> Result<bool, StorageError>;
+    async fn sample_compression_candidates(
+        &self,
+        bucket: &str,
+        limit: i64,
+    ) -> Result<Vec<(String, u64)>, StorageError>;
 
     async fn fetch_put_bucket_context(
         &self,

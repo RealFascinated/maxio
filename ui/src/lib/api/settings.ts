@@ -25,6 +25,21 @@ export async function setCompression(bucket: string, enabled: boolean): Promise<
   })
 }
 
+export interface CompressionEstimate {
+  sampledObjects: number
+  sampledBytes: number
+  ratio: number
+  candidateObjects: number
+  candidateBytes: number
+  estimatedSavedBytes: number
+}
+
+const compressionPath = (bucket: string) => `/api/buckets/${encodeURIComponent(bucket)}/compression`
+
+export async function getCompressionEstimate(bucket: string): Promise<CompressionEstimate> {
+  return apiFetch<CompressionEstimate>(`${compressionPath(bucket)}/estimate`)
+}
+
 export async function getPublicAccess(bucket: string): Promise<PublicAccessResponse> {
   return apiFetch<PublicAccessResponse>(`/api/buckets/${encodeURIComponent(bucket)}/public`)
 }

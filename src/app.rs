@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,6 +7,10 @@ use crate::auth::signing_key_cache::SigningKeyCache;
 use crate::config::{Config, MemoryCacheLimits, PoolSettings};
 use crate::db;
 use crate::iam::{CachingIamStore, IamStore, PgIamStore};
+use crate::jobs::{
+    CompressBucketJob, HousekeepingJob, JobHandler, JobKind, JobManager, LifecycleJob,
+    OrphanMetaRepairJob,
+};
 use crate::metrics::MetricsRegistry;
 use crate::server::AppState;
 use crate::stats::BucketStatsCache;
@@ -53,8 +58,9 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     } else {
         blobs
     };
-    let storage: Arc<dyn Storage> =
-        Arc::new(ObjectStorage::new(blobs, meta).with_metrics(Arc::clone(&metrics)));
+    let object_storage =
+        Arc::new(ObjectStorage::new(blobs, Arc::clone(&meta)).with_metrics(Arc::clone(&metrics)));
+    let storage: Arc<dyn Storage> = object_storage.clone();
 
     crate::storage::provision_default_buckets(storage.as_ref(), &config.default_buckets).await;
 
@@ -78,6 +84,8 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         Arc::clone(&pool),
     );
 
+    let jobs = build_job_manager(Arc::clone(&storage), meta, pool.clone(), &config);
+
     Ok(AppState {
         storage,
         config: Arc::new(config),
@@ -87,7 +95,45 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         db_pool: pool,
         metrics,
         stats,
+        jobs,
         cache: cache_handle,
         signing_key_cache,
     })
+}
+
+/// Wires one handler per [`JobKind`] to the shared storage and metadata.
+pub fn build_job_manager(
+    storage: Arc<dyn Storage>,
+    meta: Arc<dyn MetadataStore>,
+    pool: Arc<db::DbPool>,
+    config: &Config,
+) -> Arc<JobManager> {
+    JobManager::new(
+        Arc::clone(&meta),
+        HashMap::from([
+            (
+                JobKind::CompressBucket,
+                Arc::new(CompressBucketJob {
+                    storage: Arc::clone(&storage),
+                    meta: Arc::clone(&meta),
+                }) as Arc<dyn JobHandler>,
+            ),
+            (
+                JobKind::Housekeeping,
+                Arc::new(HousekeepingJob {
+                    storage: Arc::clone(&storage),
+                }),
+            ),
+            (JobKind::Lifecycle, Arc::new(LifecycleJob { storage })),
+            (
+                JobKind::OrphanMetaRepair,
+                Arc::new(OrphanMetaRepairJob {
+                    pool,
+                    meta,
+                    data_dir: config.data_dir.clone(),
+                    cache_dir: config.cache_dir.clone(),
+                }),
+            ),
+        ]),
+    )
 }

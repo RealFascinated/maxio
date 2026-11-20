@@ -264,6 +264,111 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
+    async fn save_job(&self, job: &crate::jobs::Job) -> Result<(), StorageError> {
+        meta_op!(self, "save_job", repos::save_job(&self.ctx, job).await)
+    }
+
+    async fn get_job(&self, id: uuid::Uuid) -> Result<Option<crate::jobs::Job>, StorageError> {
+        meta_op!(self, "get_job", repos::get_job(&self.ctx, id).await)
+    }
+
+    async fn list_jobs(
+        &self,
+        kind: Option<crate::jobs::JobKind>,
+        scope: Option<&str>,
+        status: Option<crate::jobs::JobStatus>,
+        limit: i64,
+    ) -> Result<Vec<crate::jobs::Job>, StorageError> {
+        meta_op!(
+            self,
+            "list_jobs",
+            repos::list_jobs(&self.ctx, kind, scope, status, limit).await
+        )
+    }
+
+    async fn prune_jobs(
+        &self,
+        kind: crate::jobs::JobKind,
+        scope: Option<&str>,
+        keep: i64,
+    ) -> Result<(), StorageError> {
+        meta_op!(
+            self,
+            "prune_jobs",
+            repos::prune_jobs(&self.ctx, kind, scope, keep).await
+        )
+    }
+
+    async fn count_compression_candidates(&self, bucket: &str) -> Result<(i64, i64), StorageError> {
+        meta_op!(
+            self,
+            "count_compression_candidates",
+            repos::count_compression_candidates(&self.ctx, bucket).await
+        )
+    }
+
+    async fn list_compression_candidates(
+        &self,
+        bucket: &str,
+        state: &crate::storage::compression_job::CompressionState,
+        limit: i64,
+    ) -> Result<Vec<crate::storage::compression_job::CompressionCandidate>, StorageError> {
+        meta_op!(
+            self,
+            "list_compression_candidates",
+            repos::list_compression_candidates(&self.ctx, bucket, state, limit).await
+        )
+    }
+
+    async fn set_object_compressed_size(
+        &self,
+        bucket: &str,
+        key: &str,
+        etag: &str,
+        compressed_size: u64,
+    ) -> Result<bool, StorageError> {
+        meta_op!(
+            self,
+            "set_object_compressed_size",
+            repos::set_object_compressed_size(&self.ctx, bucket, key, etag, compressed_size).await
+        )
+    }
+
+    async fn set_version_compressed_size(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        etag: &str,
+        compressed_size: u64,
+    ) -> Result<bool, StorageError> {
+        meta_op!(
+            self,
+            "set_version_compressed_size",
+            repos::set_version_compressed_size(
+                &self.ctx,
+                bucket,
+                key,
+                version_id,
+                etag,
+                compressed_size
+            )
+            .await
+        )
+    }
+
+    async fn sample_compression_candidates(
+        &self,
+        bucket: &str,
+        limit: i64,
+    ) -> Result<Vec<(String, u64)>, StorageError> {
+        meta_op!(
+            self,
+            "sample_compression_candidates",
+            repos::sample_compression_candidates(&self.ctx, bucket, limit).await
+        )
+    }
+
     async fn fetch_put_bucket_context(
         &self,
         bucket: &str,

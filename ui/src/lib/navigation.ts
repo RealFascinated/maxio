@@ -5,6 +5,7 @@ export const routes = {
   users: () => `${base}/users`,
   policies: () => `${base}/policies`,
   metrics: () => `${base}/metrics`,
+  jobs: () => `${base}/jobs`,
   serverSettings: () => `${base}/settings`,
   bucket: (bucket: string, prefix = '') => bucketObjectsUrl(bucket, prefix),
   bucketSettings: (bucket: string) => `${base}/buckets/${encodeURIComponent(bucket)}/settings`,
@@ -33,6 +34,7 @@ export function isRootOnlyPath(pathname: string): boolean {
     pathname === routes.users() ||
     pathname === routes.policies() ||
     pathname === routes.metrics() ||
+    pathname === routes.jobs() ||
     pathname === routes.serverSettings()
   )
 }

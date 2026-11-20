@@ -6,6 +6,7 @@
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
+  import CompressionJobPanel from '$lib/components/CompressionJobPanel.svelte'
   import { Callout } from '$lib/components/ui/callout'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import { EmptyState } from '$lib/components/ui/empty-state'
@@ -446,6 +447,8 @@
       {@render toggleRow('Public listing', publicList, publicQuery.isPending, publicMutation.isPending, togglePublicList, publicList)}
       {@render toggleRow('Cross-origin read', corsEnabled, corsQuery.isPending, corsMutation.isPending, toggleCors)}
     </div>
+
+    <CompressionJobPanel {bucket} />
 
     <h2 class="mt-2">Danger zone</h2>
     <div class="flex h-10 items-center justify-between gap-4 rounded-surface border border-border bg-panel px-3">

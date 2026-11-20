@@ -61,6 +61,24 @@ pub trait Storage: Send + Sync {
         bucket: &str,
         compression: crate::storage::compression::Compression,
     ) -> Result<(), StorageError>;
+    /// Samples the bucket's uncompressed objects to project what compressing them would save.
+    async fn estimate_compression(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::compression_job::CompressionEstimate, StorageError>;
+    /// Rewrites one current object compressed in place; used by the compression job.
+    async fn compress_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<crate::storage::compression_job::CompressOutcome, StorageError>;
+    /// Version counterpart of [`Storage::compress_object`].
+    async fn compress_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<crate::storage::compression_job::CompressOutcome, StorageError>;
     async fn get_bucket_auth_info(
         &self,
         bucket: &str,

@@ -2,6 +2,7 @@ import Database from 'lucide-svelte/icons/database'
 import UsersIcon from 'lucide-svelte/icons/users'
 import Shield from 'lucide-svelte/icons/shield'
 import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
+import ClipboardList from 'lucide-svelte/icons/clipboard-list'
 import Settings from 'lucide-svelte/icons/settings'
 import type { LucideIcon } from '$lib/lucide'
 import { isBucketsNavActive, routes } from '$lib/navigation'
@@ -62,6 +63,14 @@ const mainNavItems: NavItemDef[] = [
     href: routes.metrics(),
     visible: (ctx) => ctx.isRootUser,
     isActive: (ctx) => ctx.pathname === routes.metrics(),
+  },
+  {
+    id: 'jobs',
+    label: 'Jobs',
+    icon: ClipboardList,
+    href: routes.jobs(),
+    visible: (ctx) => ctx.isRootUser,
+    isActive: (ctx) => ctx.pathname === routes.jobs(),
   },
   {
     id: 'settings',
