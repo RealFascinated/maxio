@@ -1,10 +1,23 @@
 <script lang="ts">
   import { createMutation, createQuery } from '@tanstack/svelte-query'
   import { toast, toastApiError } from '$lib/toast'
-  import { Callout } from '$lib/components/ui/callout'
-  import { Switch } from '$lib/components/ui/switch'
+  import MoreHorizontal from 'lucide-svelte/icons/ellipsis'
+  import Plus from 'lucide-svelte/icons/plus'
+  import Trash2 from 'lucide-svelte/icons/trash-2'
+  import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
+  import { Callout } from '$lib/components/ui/callout'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
+  import { EmptyState } from '$lib/components/ui/empty-state'
   import { Input } from '$lib/components/ui/input'
+  import { Label } from '$lib/components/ui/label'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { Switch } from '$lib/components/ui/switch'
+  import * as Table from '$lib/components/ui/table'
+  import { Tabs } from '$lib/components/ui/tabs'
+  import { goto } from '$app/navigation'
+  import { routes } from '$lib/navigation'
+  import { deleteBucket } from '$lib/api/buckets'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { bucketKeys, settingsKeys } from '$lib/api/keys'
   import { PolicyEditor } from '$lib/components/policy'
@@ -54,6 +67,8 @@
   const lifecycleQuery = createQuery(() => ({
     queryKey: settingsKeys.lifecycle(bucket),
     queryFn: () => getLifecycle(bucket),
+    // Only read on the Lifecycle tab; tracked props would miss the pending to success change.
+    notifyOnChangeProps: 'all' as const,
   }))
   const policyQuery = createQuery(() => ({
     queryKey: settingsKeys.policy(bucket),
@@ -62,6 +77,15 @@
 
   let policyDocument = $state('')
   let policyDirty = $state(false)
+  let addingStatement = $state(false)
+  let activeTab = $state('general')
+  let deleteBucketOpen = $state(false)
+  const tabs = [
+    { value: 'general', label: 'General' },
+    { value: 'policy', label: 'Policy' },
+    { value: 'lifecycle', label: 'Lifecycle' },
+  ]
+  const hasPolicy = $derived(!!policyQuery.data?.document)
 
   $effect(() => {
     if (policyDirty || policyQuery.isPending) return
@@ -108,6 +132,24 @@
     },
   }))
 
+  const deleteBucketMutation = createMutation(() => ({
+    mutationFn: () => deleteBucket(bucket),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
+      toast.success(`Bucket ${bucket} deleted`)
+      goto(routes.home())
+    },
+  }))
+
+  async function removeBucket() {
+    try {
+      await deleteBucketMutation.mutateAsync()
+    } catch (err) {
+      console.error('deleteBucket failed:', err)
+      toastApiError(err, 'Failed to delete bucket')
+    }
+  }
+
   const lifecycleMutation = createMutation(() => ({
     mutationFn: (rules: LifecycleRule[]) => setLifecycle(bucket, rules),
     onSuccess: () => {
@@ -130,6 +172,7 @@
     mutationFn: () => deleteBucketPolicy(bucket),
     onSuccess: () => {
       policyDirty = false
+      addingStatement = false
       policyDocument = defaultBucketPolicy(bucket)
       queryClient.invalidateQueries({ queryKey: settingsKeys.policy(bucket) })
       queryClient.invalidateQueries({ queryKey: settingsKeys.publicAccess(bucket) })
@@ -154,7 +197,7 @@
   function requestDeleteBucketPolicy() {
     pendingConfirmation = {
       title: 'Delete bucket policy?',
-      description: 'Remove the entire bucket policy document? Public access toggles will no longer apply until a new policy is saved.',
+      description: 'Public access settings stop applying until a new policy is saved.',
       confirmLabel: 'Delete policy',
       destructive: true,
       action: async () => {
@@ -206,7 +249,7 @@
   function requestDeleteLifecycleRule(rule: LifecycleRule) {
     pendingConfirmation = {
       title: 'Delete lifecycle rule?',
-      description: `Remove rule "${rule.id}"? Objects already stored are not affected until the next sweep.`,
+      description: `Rule ${rule.id} will be removed.`,
       confirmLabel: 'Delete rule',
       destructive: true,
       action: async () => {
@@ -260,7 +303,7 @@
     if (versioningEnabled && !newState) {
       pendingConfirmation = {
         title: 'Disable versioning?',
-        description: 'This will permanently delete all old versions. Only the latest version of each file will be kept. This cannot be undone.',
+        description: 'All non-current versions are deleted permanently. Only the latest version of each object is kept.',
         confirmLabel: 'Disable versioning',
         destructive: true,
         action: () => applyVersioning(newState),
@@ -285,7 +328,7 @@
     if (newState) {
       pendingConfirmation = {
         title: 'Enable public read?',
-        description: 'Anyone with a URL to an object in this bucket can download it without credentials. Only enable if every object in the bucket is safe to share publicly.',
+        description: 'Anyone with an object URL can download it without credentials.',
         confirmLabel: 'Enable public read',
         action: () => applyPublicAccess({ read: newState, list: publicList }),
       }
@@ -309,7 +352,7 @@
     if (newState) {
       pendingConfirmation = {
         title: 'Enable cross-origin read?',
-        description: 'Browsers on any website can fetch objects from this bucket via JavaScript. Use with public read if you want anonymous cross-site access.',
+        description: 'Browsers on any website can fetch objects from this bucket.',
         confirmLabel: 'Enable cross-origin read',
         action: () => applyCors(newState),
       }
@@ -333,7 +376,7 @@
     if (newState) {
       pendingConfirmation = {
         title: 'Enable public listing?',
-        description: 'Anyone can list every object key in this bucket without credentials. Keys may reveal sensitive structure.',
+        description: 'Anyone can list every object key in this bucket without credentials.',
         confirmLabel: 'Enable public listing',
         action: () => applyPublicAccess({ read: publicRead, list: newState }),
       }
@@ -343,121 +386,64 @@
   }
 </script>
 
-<div class="flex flex-col gap-6 max-w-2xl">
+{#snippet toggleRow(
+  label: string,
+  checked: boolean,
+  pending: boolean,
+  busy: boolean,
+  onclick: () => void,
+  flagged = false,
+)}
+  <div class="flex h-10 items-center justify-between gap-4 px-3">
+    <span class="flex items-center gap-2">
+      {label}
+      {#if flagged}<Badge variant="warning" label="Public" />{/if}
+    </span>
+    {#if pending}
+      <Skeleton class="h-4 w-7" />
+    {:else}
+      <Switch {checked} {onclick} disabled={busy} aria-label={label} />
+    {/if}
+  </div>
+{/snippet}
+
+<div class="flex max-w-2xl flex-col gap-4">
   {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError || lifecycleQuery.isError || policyQuery.isError}
     <Callout type="danger">Failed to load bucket settings</Callout>
   {/if}
 
-  {#if versioningEnabled && !versioningQuery.isPending}
-    <Callout type="warning" title="Disabling versioning is destructive">
-      Turning versioning off permanently deletes all non-current versions. Only the latest version of each object remains.
-    </Callout>
+  <Tabs bind:value={activeTab} items={tabs} aria-label="Settings section" />
+
+  {#if activeTab === 'general'}
+    <div class="divide-y divide-border rounded-surface border border-border bg-panel">
+      {@render toggleRow('Versioning', versioningEnabled, versioningQuery.isPending, versioningMutation.isPending, toggleVersioning)}
+      {@render toggleRow('Public read', publicRead, publicQuery.isPending, publicMutation.isPending, togglePublicRead, publicRead)}
+      {@render toggleRow('Public listing', publicList, publicQuery.isPending, publicMutation.isPending, togglePublicList, publicList)}
+      {@render toggleRow('Cross-origin read', corsEnabled, corsQuery.isPending, corsMutation.isPending, toggleCors)}
+    </div>
+
+    <h2 class="mt-2">Danger zone</h2>
+    <div class="flex h-10 items-center justify-between gap-4 rounded-surface border border-border bg-panel px-3">
+      <span>Delete bucket</span>
+      <Button variant="destructive" size="sm" onclick={() => (deleteBucketOpen = true)}>Delete bucket</Button>
+    </div>
   {/if}
 
-  <div class="flex flex-col gap-4">
-    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">General</h3>
-
-    <div class="flex items-center justify-between">
-      <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium">Versioning</span>
-        <span class="text-sm text-muted-foreground">
-          {#if versioningQuery.isPending}
-            Loading...
-          {:else if versioningEnabled}
-            Every upload creates a new version. Deleted files become delete markers.
-          {:else}
-            Uploading a file overwrites the previous version.
-          {/if}
-        </span>
-      </div>
-      {#if !versioningQuery.isPending}
-        <Switch
-          checked={versioningEnabled}
-          onclick={toggleVersioning}
-          disabled={versioningMutation.isPending}
-          aria-label="Toggle versioning"
-        />
-      {/if}
-    </div>
-
-    <div class="flex items-center justify-between">
-      <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium">Public read</span>
-        <span class="text-sm text-muted-foreground">
-          {#if publicQuery.isPending}
-            Loading...
-          {:else if publicRead}
-            Anyone with an object URL can download it without credentials.
-          {:else}
-            Object downloads require a signed request.
-          {/if}
-        </span>
-      </div>
-      {#if !publicQuery.isPending}
-        <Switch
-          checked={publicRead}
-          onclick={togglePublicRead}
-          disabled={publicMutation.isPending}
-          aria-label="Toggle public read"
-        />
-      {/if}
-    </div>
-
-    <div class="flex items-center justify-between">
-      <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium">Cross-origin read</span>
-        <span class="text-sm text-muted-foreground">
-          {#if corsQuery.isPending}
-            Loading...
-          {:else if corsEnabled}
-            Browsers on other sites can fetch objects from this bucket via JavaScript.
-          {:else}
-            Cross-origin browser requests are blocked without CORS headers.
-          {/if}
-        </span>
-      </div>
-      {#if !corsQuery.isPending}
-        <Switch
-          checked={corsEnabled}
-          onclick={toggleCors}
-          disabled={corsMutation.isPending}
-          aria-label="Toggle cross-origin read"
-        />
-      {/if}
-    </div>
-
-    <div class="flex items-center justify-between">
-      <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium">Public listing</span>
-        <span class="text-sm text-muted-foreground">
-          {#if publicQuery.isPending}
-            Loading...
-          {:else if publicList}
-            Anyone can list every object key in this bucket without credentials.
-          {:else}
-            Listing the bucket requires a signed request.
-          {/if}
-        </span>
-      </div>
-      {#if !publicQuery.isPending}
-        <Switch
-          checked={publicList}
-          onclick={togglePublicList}
-          disabled={publicMutation.isPending}
-          aria-label="Toggle public listing"
-        />
-      {/if}
-    </div>
-  </div>
-
-  <div class="flex flex-col gap-4">
-    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">Bucket policy</h3>
-    <p class="text-sm text-muted-foreground">
-      Resource-based policy for this bucket. Public read/list toggles above merge into this document.
-    </p>
-
+  {#if activeTab === 'policy'}
     {#if policyQuery.isPending}
-      <p class="text-sm text-muted-foreground">Loading bucket policy…</p>
+      <div class="flex flex-col gap-2 rounded-surface border border-border bg-panel p-3">
+        <Skeleton class="w-1/3" />
+        <Skeleton class="w-full" />
+        <Skeleton class="w-2/3" />
+      </div>
+    {:else if !hasPolicy && !policyDirty && !addingStatement}
+      <div class="rounded-surface border border-border bg-panel">
+        <EmptyState title="No policy">
+          {#snippet action()}
+            <Button size="sm" onclick={() => (addingStatement = true)}><Plus />Add statement</Button>
+          {/snippet}
+        </EmptyState>
+      </div>
     {:else}
       <PolicyEditor
         variant="bucket"
@@ -465,15 +451,7 @@
         value={policyDocument}
         onchange={onPolicyChange}
       />
-      <div class="flex flex-wrap gap-2">
-        <Button
-          variant="highlighted"
-          size="sm"
-          onclick={saveBucketPolicy}
-          disabled={policyMutation.isPending || !policyDirty}
-        >
-          {policyMutation.isPending ? 'Saving…' : 'Save policy'}
-        </Button>
+      <div class="flex items-center justify-between gap-2">
         {#if policyQuery.data?.document}
           <Button
             variant="destructive"
@@ -483,88 +461,124 @@
           >
             Delete policy
           </Button>
+        {:else}
+          <span></span>
         {/if}
-      </div>
-    {/if}
-  </div>
-
-  <div class="flex flex-col gap-4">
-    <h3 class="text-sm font-medium text-muted-foreground uppercase tracking-wide">Lifecycle</h3>
-    <p class="text-sm text-muted-foreground">
-      Automatically delete objects when they exceed an age threshold. Rules run on an hourly sweep.
-    </p>
-
-    {#if lifecycleQuery.isPending}
-      <p class="text-sm text-muted-foreground">Loading lifecycle rules...</p>
-    {:else if lifecycleRules.length === 0}
-      <p class="text-sm text-muted-foreground">No lifecycle rules configured.</p>
-    {:else}
-      <div class="flex flex-col gap-3">
-        {#each lifecycleRules as rule (rule.id)}
-          <div class="flex items-start justify-between gap-4 border-2 border-border rounded-sm p-3">
-            <div class="flex flex-col gap-1 min-w-0">
-              <span class="text-sm font-medium truncate">{rule.id}</span>
-              <span class="text-sm text-muted-foreground">
-                {#if rule.prefix}
-                  Prefix: <code class="text-xs">{rule.prefix}</code> ·
-                {/if}
-                {formatRuleActions(rule)}
-              </span>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <Switch
-                checked={rule.enabled}
-                onclick={() => toggleLifecycleRule(rule)}
-                disabled={lifecycleMutation.isPending}
-                aria-label={`Toggle rule ${rule.id}`}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onclick={() => requestDeleteLifecycleRule(rule)}
-                disabled={lifecycleMutation.isPending}
-              >
-                Delete
-              </Button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
-    <div class="flex flex-col gap-3 border-2 border-border rounded-sm p-3">
-      <span class="text-sm font-medium">Add rule</span>
-      <div class="grid gap-3 sm:grid-cols-2">
-        <Input placeholder="Rule ID" bind:value={newRuleId} aria-label="Rule ID" />
-        <Input placeholder="Prefix (optional)" bind:value={newRulePrefix} aria-label="Prefix" />
-        <Input
-          type="number"
-          min="1"
-          placeholder="Expire current after (days)"
-          bind:value={newExpireDays}
-          aria-label="Expire current after days"
-        />
-        <Input
-          type="number"
-          min="1"
-          placeholder="Expire old versions after (days)"
-          bind:value={newNoncurrentDays}
-          aria-label="Expire noncurrent after days"
-        />
-      </div>
-      <div>
         <Button
-          variant="highlighted"
           size="sm"
-          onclick={addLifecycleRule}
-          disabled={lifecycleMutation.isPending}
+          onclick={saveBucketPolicy}
+          loading={policyMutation.isPending}
+          disabled={!policyDirty}
         >
-          Add rule
+          Save policy
         </Button>
       </div>
-    </div>
-  </div>
+    {/if}
+  {/if}
+
+  {#if activeTab === 'lifecycle'}
+    {#if lifecycleQuery.isPending}
+      <div class="flex flex-col gap-2 rounded-surface border border-border bg-panel p-3">
+        <Skeleton class="w-1/3" />
+        <Skeleton class="w-full" />
+      </div>
+    {:else if lifecycleRules.length === 0}
+      <div class="rounded-surface border border-border bg-panel">
+        <EmptyState title="No lifecycle rules" />
+      </div>
+    {:else}
+      <Table.Root>
+        <Table.Header>
+          <Table.Row class="hover:bg-transparent">
+            <Table.Head>Rule</Table.Head>
+            <Table.Head>Prefix</Table.Head>
+            <Table.Head>Actions</Table.Head>
+            <Table.Head class="w-12">On</Table.Head>
+            <Table.Head class="w-8"></Table.Head>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {#each lifecycleRules as rule (rule.id)}
+            <Table.Row>
+              <Table.Cell class="font-medium">{rule.id}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground">{rule.prefix ?? ''}</Table.Cell>
+              <Table.Cell class="num text-muted-foreground">{formatRuleActions(rule)}</Table.Cell>
+              <Table.Cell>
+                <Switch
+                  checked={rule.enabled}
+                  onclick={() => toggleLifecycleRule(rule)}
+                  disabled={lifecycleMutation.isPending}
+                  aria-label={`Toggle rule ${rule.id}`}
+                />
+              </Table.Cell>
+              <Table.Cell>
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                      <Button {...props} variant="ghost" size="icon-xs" aria-label={`Actions for rule ${rule.id}`}>
+                        <MoreHorizontal />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end">
+                    <DropdownMenu.Item
+                      variant="destructive"
+                      disabled={lifecycleMutation.isPending}
+                      onSelect={() => requestDeleteLifecycleRule(rule)}
+                    >
+                      <Trash2 />Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              </Table.Cell>
+            </Table.Row>
+          {/each}
+        </Table.Body>
+      </Table.Root>
+    {/if}
+
+    <h2 class="mt-2">Add rule</h2>
+    <form
+      class="grid grid-cols-2 gap-3 rounded-surface border border-border bg-panel p-3 sm:grid-cols-4"
+      onsubmit={(e) => {
+        e.preventDefault()
+        addLifecycleRule()
+      }}
+    >
+      <div class="flex flex-col gap-1.5">
+        <Label for="lifecycle-rule-id">Rule ID</Label>
+        <Input id="lifecycle-rule-id" bind:value={newRuleId} />
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <Label for="lifecycle-prefix">Prefix</Label>
+        <Input id="lifecycle-prefix" class="font-mono text-xs" bind:value={newRulePrefix} />
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <Label for="lifecycle-expire">Expire current (days)</Label>
+        <Input id="lifecycle-expire" class="num" inputmode="numeric" bind:value={newExpireDays} />
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <Label for="lifecycle-noncurrent">Expire old versions (days)</Label>
+        <Input id="lifecycle-noncurrent" class="num" inputmode="numeric" bind:value={newNoncurrentDays} />
+      </div>
+      <div class="col-span-2 flex justify-end sm:col-span-4">
+        <Button type="submit" size="sm" disabled={lifecycleMutation.isPending}>Add rule</Button>
+      </div>
+    </form>
+  {/if}
 </div>
+
+<ConfirmDialog
+  bind:open={deleteBucketOpen}
+  title="Delete bucket?"
+  description={`${bucket} must be empty.`}
+  confirmLabel="Delete bucket"
+  confirmVariant="destructive"
+  confirmationText={bucket}
+  confirmationLabel="Bucket name"
+  loading={deleteBucketMutation.isPending}
+  onConfirm={removeBucket}
+/>
 
 {#if pendingConfirmation}
   <ConfirmDialog
@@ -572,7 +586,7 @@
     title={pendingConfirmation.title}
     description={pendingConfirmation.description}
     confirmLabel={pendingConfirmation.confirmLabel}
-    confirmVariant={pendingConfirmation.destructive ? 'destructive' : 'highlighted'}
+    confirmVariant={pendingConfirmation.destructive ? 'destructive' : 'default'}
     loading={versioningMutation.isPending || publicMutation.isPending || corsMutation.isPending || lifecycleMutation.isPending || policyMutation.isPending || deletePolicyMutation.isPending}
     onClose={() => (pendingConfirmation = null)}
     onConfirm={pendingConfirmation.action}

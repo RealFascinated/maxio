@@ -327,6 +327,13 @@ impl PrometheusMetrics {
             .observe(elapsed.as_secs_f64());
     }
 
+    pub fn cache_hits_misses(&self, id: &str) -> (u64, u64) {
+        (
+            self.cache_hits.with_label_values(&[id]).get() as u64,
+            self.cache_misses.with_label_values(&[id]).get() as u64,
+        )
+    }
+
     pub fn cache_snapshot(&self, id: &str) -> CacheSnapshot {
         let disk = id == cache_name::OBJECT_DISK;
         CacheSnapshot {

@@ -72,6 +72,12 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
     ));
     let stats = BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
 
+    crate::metrics::sampler::spawn_sampler(
+        Arc::clone(&metrics),
+        Arc::clone(&stats),
+        Arc::clone(&pool),
+    );
+
     Ok(AppState {
         storage,
         config: Arc::new(config),

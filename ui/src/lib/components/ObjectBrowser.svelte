@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
   import { createInfiniteQuery, createMutation, createQuery } from '@tanstack/svelte-query'
   import {
@@ -16,9 +15,26 @@
   import { Callout } from '$lib/components/ui/callout'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { Dialog } from '$lib/components/ui/dialog'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
+  import { EmptyState } from '$lib/components/ui/empty-state'
   import { Input } from '$lib/components/ui/input'
+  import { Label } from '$lib/components/ui/label'
+  import { ProgressBar } from '$lib/components/ui/progress-bar'
+  import { SegmentedControl } from '$lib/components/ui/segmented-control'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { Toolbar } from '$lib/components/ui/toolbar'
+  import * as Tooltip from '$lib/components/ui/tooltip'
   import Folder from 'lucide-svelte/icons/folder'
   import FileIcon from 'lucide-svelte/icons/file'
+  import ImageIcon from 'lucide-svelte/icons/image'
+  import FileText from 'lucide-svelte/icons/file-text'
+  import FileCode from 'lucide-svelte/icons/file-code'
+  import FileArchive from 'lucide-svelte/icons/file-archive'
+  import FileSpreadsheet from 'lucide-svelte/icons/file-spreadsheet'
+  import Music from 'lucide-svelte/icons/music'
+  import Video from 'lucide-svelte/icons/video'
+  import ArrowUp from 'lucide-svelte/icons/arrow-up'
+  import Copy from 'lucide-svelte/icons/copy'
   import Download from 'lucide-svelte/icons/download'
   import Upload from 'lucide-svelte/icons/upload'
   import Trash2 from 'lucide-svelte/icons/trash-2'
@@ -26,8 +42,9 @@
   import Check from 'lucide-svelte/icons/check'
   import Minus from 'lucide-svelte/icons/minus'
   import FolderPlus from 'lucide-svelte/icons/folder-plus'
-  import History from 'lucide-svelte/icons/history'
+  import Info from 'lucide-svelte/icons/info'
   import Eye from 'lucide-svelte/icons/eye'
+  import MoreHorizontal from 'lucide-svelte/icons/more-horizontal'
   import Search from 'lucide-svelte/icons/search'
   import X from 'lucide-svelte/icons/x'
   import ObjectDetailDrawer from './ObjectDetailDrawer.svelte'
@@ -36,13 +53,14 @@
   import { formatDate } from '$lib/format'
   import { isPreviewable } from '$lib/preview'
   import { toast, toastApiError } from '$lib/toast'
-  import { objectKeys, settingsKeys } from '$lib/api/keys'
+  import { bucketKeys, objectKeys, settingsKeys } from '$lib/api/keys'
   import { createFolder as createFolderApi, deleteFolder as deleteFolderApi, deleteFolders as deleteFoldersApi, deleteObject as deleteObjectApi, deleteObjects as deleteObjectsApi, downloadUrl, listObjects, previewFolderDelete, presignObject, uploadObject, type FolderDeletePreview, type S3File } from '$lib/api/objects'
   import { getVersioning } from '$lib/api/settings'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
-  import { displayName } from '$lib/utils'
+  import { cn, displayName } from '$lib/utils'
   import { bucketObjectsUrl } from '$lib/navigation'
+  import { register } from '$lib/shortcuts'
 
   interface Props {
     bucket: string
@@ -52,11 +70,15 @@
   let searchInput = $state('')
   let searchQuery = $state('')
   let fileInput: HTMLInputElement | undefined = $state()
-  let copiedKey = $state<string | null>(null)
-  let shareMenuKey = $state<string | null>(null)
+  let shareKey = $state<string | null>(null)
+  let shareExpires = $state(3600)
+  let shareUrl = $state('')
+  let shareLoading = $state(false)
+  type UploadItem = { id: number; name: string; abort?: AbortController; loaded: number; total: number; status: 'queued' | 'uploading' | 'done' | 'error' | 'cancelled' }
+  let uploads = $state<UploadItem[]>([])
+  let uploadSeq = 0
   let showCreateFolder = $state(false)
   let newFolderName = $state('')
-  let shareMenuPos = $state({ top: 0, left: 0 })
   let detailFile = $state<S3File | null>(null)
   let previewFile = $state<S3File | null>(null)
   let pendingDelete = $state<string | null>(null)
@@ -69,12 +91,36 @@
   let sentinelEl = $state<HTMLDivElement | undefined>()
   let dragDepth = $state(0)
   let sorting = $state<SortingState>([])
+  let wide = $state(false)
   const isDragging = $derived(dragDepth > 0)
 
   const listSort = $derived<ObjectListSort>(
     (sorting[0]?.id as ObjectListSort | undefined) ?? 'name',
   )
   const listOrder = $derived(sorting[0]?.desc ? 'desc' : 'asc')
+
+  $effect(() => {
+    const query = window.matchMedia('(min-width: 1024px)')
+    wide = query.matches
+    const update = (event: MediaQueryListEvent) => (wide = event.matches)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  })
+
+  $effect(() => {
+    const unregisterUpload = register('u', () => fileInput?.click(), {
+      description: 'Upload files',
+      group: 'Objects',
+    })
+    const unregisterFolder = register('n', () => (showCreateFolder = true), {
+      description: 'New folder',
+      group: 'Objects',
+    })
+    return () => {
+      unregisterUpload()
+      unregisterFolder()
+    }
+  })
 
   $effect(() => {
     if (showCreateFolder && createFolderInput) {
@@ -89,7 +135,7 @@
     selectedKeys = new Set()
     detailFile = null
     previewFile = null
-    shareMenuKey = null
+    shareKey = null
   })
 
   $effect(() => {
@@ -145,30 +191,36 @@
   }))
 
   const uploadMutation = createMutation(() => ({
-    mutationFn: async ({
-      files,
-      toastId,
-      totalBytes,
-    }: {
-      files: File[]
-      toastId: string | number
-      totalBytes: number
-    }) => {
-      let completedBytes = 0
-      for (const file of files) {
-        await uploadObject(bucket, `${prefix}${file.name}`, file, (loaded) => {
-          const overall = completedBytes + loaded
-          const pct = totalBytes > 0 ? Math.round((overall / totalBytes) * 100) : 100
-          toast.loading(uploadProgressMessage(files, file, pct), { id: toastId })
-        })
-        completedBytes += file.size
+    mutationFn: async (items: { item: UploadItem; file: File }[]) => {
+      let uploaded = 0
+      for (const { item, file } of items) {
+        if (item.status === 'cancelled') continue
+        item.status = 'uploading'
+        item.abort = new AbortController()
+        try {
+          await uploadObject(bucket, `${prefix}${file.name}`, file, (loaded, total) => {
+            item.loaded = loaded
+            item.total = total
+          }, item.abort.signal)
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            item.status = 'cancelled'
+            continue
+          }
+          item.status = 'error'
+          throw err
+        }
+        item.loaded = item.total
+        item.status = 'done'
+        uploaded++
       }
-      return files.length
+      return uploaded
     },
     onSuccess: (count) => {
-      toast.success(count === 1 ? 'File uploaded' : `${count} files uploaded`)
+      if (count > 0) toast.success(count === 1 ? 'File uploaded' : `${count} files uploaded`)
       if (fileInput) fileInput.value = ''
       queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
     },
   }))
 
@@ -177,7 +229,9 @@
     onSuccess: (_data, key) => {
       toast.success(`"${displayName(key)}" deleted`)
       selectedKeys = new Set([...selectedKeys].filter((k) => k !== key))
+      if (detailFile?.key === key) detailFile = null
       queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })
+      queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
     },
   }))
 
@@ -249,9 +303,11 @@
     const result: string[] = []
     for (const page of objectsQuery.data?.pages ?? []) {
       for (const p of page.prefixes) {
-        if (p !== prefix && !seen.has(p)) {
-          seen.add(p)
-          result.push(p)
+        if (p === prefix) continue
+        const folder = `${prefix}${p.slice(prefix.length).split('/')[0]}/`
+        if (!seen.has(folder)) {
+          seen.add(folder)
+          result.push(folder)
         }
       }
     }
@@ -278,9 +334,9 @@
   const objectColumns = [
     objectColumnHelper.display({ id: 'select', enableSorting: false, header: '' }),
     objectColumnHelper.accessor('id', { id: 'name', header: sortableHeader('Name') }),
-    objectColumnHelper.accessor('id', { id: 'type', header: sortableHeader('Type') }),
-    objectColumnHelper.accessor('id', { id: 'size', header: sortableHeader('Size', 'ml-auto') }),
+    objectColumnHelper.accessor('id', { id: 'size', header: sortableHeader('Size') }),
     objectColumnHelper.accessor('id', { id: 'modified', header: sortableHeader('Modified') }),
+    objectColumnHelper.accessor('id', { id: 'type', header: sortableHeader('Type') }),
     objectColumnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
   ]
 
@@ -343,21 +399,33 @@
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
 
   const expiryOptions = [
-    { label: '1 hour', seconds: 3600 },
-    { label: '6 hours', seconds: 21600 },
-    { label: '24 hours', seconds: 86400 },
-    { label: '7 days', seconds: 604800 },
+    { value: '3600', label: '1 hour' },
+    { value: '21600', label: '6 hours' },
+    { value: '86400', label: '24 hours' },
+    { value: '604800', label: '7 days' },
   ]
 
-  const objectCheckboxLabelClass =
-    'flex h-full w-full cursor-pointer items-center justify-center'
-  const objectCheckboxBoxClass =
-    'flex size-4 shrink-0 items-center justify-center rounded-sm border peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-coollabs peer-focus-visible:ring-offset-2 dark:peer-focus-visible:ring-warning dark:peer-focus-visible:ring-offset-base'
-  const objectCheckboxUncheckedClass =
-    'border-neutral-400 bg-white dark:border-neutral-700 dark:bg-coolgray-100'
-  const objectCheckboxCheckedClass =
-    'border-coollabs bg-coollabs dark:border-warning dark:bg-warning'
-  const objectCheckboxIconClass = 'pointer-events-none shrink-0 text-white dark:text-base'
+  const skeletonRows = [0, 1, 2, 3, 4, 5, 6, 7]
+
+  const upPrefix = $derived(prefix.replace(/[^/]+\/$/, ''))
+  const showType = $derived(!(detailFile && wide))
+
+  function columnClass(id: string): string | undefined {
+    switch (id) {
+      case 'select':
+        return 'w-9 p-0'
+      case 'name':
+        return 'w-full'
+      case 'size':
+        return 'w-24 text-right'
+      case 'modified':
+        return 'hidden w-44 sm:table-cell'
+      case 'type':
+        return 'hidden w-40 md:table-cell'
+      case 'actions':
+        return 'w-9 p-0 pr-1'
+    }
+  }
 
   function clearSearch() {
     searchInput = ''
@@ -376,15 +444,30 @@
   }
 
   function prefixLabel(folderPrefix: string): string {
-    if (searchQuery && prefix && folderPrefix.startsWith(prefix)) {
-      return folderPrefix.slice(prefix.length)
-    }
-    return displayName(folderPrefix)
+    return folderPrefix.slice(prefix.length).replace(/\/$/, '')
   }
 
-  function uploadProgressMessage(files: File[], currentFile: File, pct: number): string {
-    if (files.length === 1) return `Uploading ${currentFile.name} · ${pct}%`
-    return `Uploading ${files.length} files · ${pct}%`
+  function fileIconFor(contentType: string, key: string) {
+    const type = contentType.split(';')[0].trim().toLowerCase()
+    const ext = key.slice(key.lastIndexOf('.') + 1).toLowerCase()
+    if (type.startsWith('image/')) return ImageIcon
+    if (type.startsWith('audio/')) return Music
+    if (type.startsWith('video/')) return Video
+    if (['zip', 'tar', 'gz', 'tgz', '7z', 'rar', 'bz2', 'xz'].includes(ext) || /zip|tar|compressed/.test(type)) return FileArchive
+    if (['csv', 'xls', 'xlsx', 'tsv'].includes(ext) || /spreadsheet|excel|csv/.test(type)) return FileSpreadsheet
+    if (type.includes('json') || type.includes('xml') || type.includes('javascript') || ['js', 'ts', 'json', 'xml', 'yaml', 'yml', 'toml', 'html', 'css', 'rs', 'py', 'sh', 'svelte'].includes(ext)) return FileCode
+    if (type.startsWith('text/') || type === 'application/pdf' || ['txt', 'md', 'pdf', 'doc', 'docx', 'log'].includes(ext)) return FileText
+    return FileIcon
+  }
+
+  function cancelUpload(item: UploadItem) {
+    if (item.status === 'queued') item.status = 'cancelled'
+    else if (item.status === 'uploading') item.abort?.abort()
+  }
+
+  function uploadPercent(item: UploadItem): number {
+    if (item.total > 0) return Math.round((item.loaded / item.total) * 100)
+    return item.status === 'done' ? 100 : 0
   }
 
   function dragHasFiles(event: DragEvent): boolean {
@@ -421,14 +504,12 @@
     const fileArray = Array.from(files)
     if (fileArray.length === 0) return
 
-    const totalBytes = fileArray.reduce((sum, file) => sum + file.size, 0)
-    const toastId = toast.loading(uploadProgressMessage(fileArray, fileArray[0], 0))
+    uploads = fileArray.map((file) => ({ id: uploadSeq++, name: file.name, loaded: 0, total: file.size, status: 'queued' }))
     try {
-      await uploadMutation.mutateAsync({ files: fileArray, toastId, totalBytes })
-      toast.dismiss(toastId)
+      await uploadMutation.mutateAsync(fileArray.map((file, index) => ({ item: uploads[index], file })))
     } catch (err) {
       console.error('Upload failed:', err)
-      toastApiError(err, 'Upload failed', { id: toastId })
+      toastApiError(err, 'Upload failed')
       if (fileInput) fileInput.value = ''
     }
   }
@@ -437,11 +518,6 @@
     const inputFiles = fileInput?.files
     if (!inputFiles || inputFiles.length === 0) return
     await uploadFiles(inputFiles)
-  }
-
-  async function deleteObject(key: string, e: Event) {
-    e.stopPropagation()
-    pendingDelete = key
   }
 
   async function confirmPendingDelete() {
@@ -454,11 +530,6 @@
       console.error('deleteObject failed:', err)
       toastApiError(err, 'Failed to connect to server')
     }
-  }
-
-  function deleteFolder(folderPrefix: string, e: Event) {
-    e.stopPropagation()
-    pendingDeletePrefix = folderPrefix
   }
 
   async function confirmPendingFolderDelete() {
@@ -559,18 +630,6 @@
     return objects === 1 ? 'Delete object' : `Delete ${objects} objects`
   }
 
-  function bulkDeleteButtonLabel(): string {
-    const folders = selectedFolderCount
-    const objects = selectedObjectCount
-    if (folders > 0 && objects > 0) {
-      return `Delete ${selectedCount} items`
-    }
-    if (folders > 0) {
-      return folders === 1 ? '1 folder' : `${folders} folders`
-    }
-    return objects === 1 ? '1 object' : `${objects} objects`
-  }
-
   async function confirmBulkDelete() {
     if (selectedCount === 0) return
     const selection = [...selectedKeys]
@@ -584,29 +643,42 @@
     }
   }
 
-  function toggleShareMenu(key: string, e: MouseEvent) {
-    e.stopPropagation()
-    if (shareMenuKey === key) {
-      shareMenuKey = null
-      return
-    }
-    const btn = e.currentTarget as HTMLElement
-    const rect = btn.getBoundingClientRect()
-    shareMenuPos = { top: rect.top, left: rect.right }
-    shareMenuKey = key
-  }
-
-  async function shareObject(key: string, expires: number) {
-    shareMenuKey = null
+  async function generateShareUrl() {
+    if (!shareKey) return
+    const key = shareKey
+    const expires = shareExpires
+    shareLoading = true
     try {
       const data = await presignObject(bucket, key, expires)
-      await navigator.clipboard.writeText(data.url)
-      copiedKey = key
-      setTimeout(() => { copiedKey = null }, 2000)
-      toast.success('Presigned URL copied to clipboard')
+      if (shareKey === key && shareExpires === expires) shareUrl = data.url
     } catch (err) {
       console.error('shareObject failed:', err)
       toastApiError(err, 'Failed to generate share link')
+    } finally {
+      shareLoading = false
+    }
+  }
+
+  function openShare(key: string) {
+    shareUrl = ''
+    shareExpires = 3600
+    shareKey = key
+    void generateShareUrl()
+  }
+
+  function selectShareExpiry(value: string) {
+    shareExpires = Number(value)
+    shareUrl = ''
+    void generateShareUrl()
+  }
+
+  async function copyShareUrl() {
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      toast.success('Presigned URL copied')
+    } catch (err) {
+      console.error('copyShareUrl failed:', err)
+      toast.error('Failed to copy')
     }
   }
 
@@ -621,18 +693,41 @@
     }
   }
 
-  function handleClickOutside() {
-    if (shareMenuKey) shareMenuKey = null
+  function closeCreateFolder() {
+    showCreateFolder = false
+    newFolderName = ''
   }
 
-  onMount(() => {
-    document.addEventListener('click', handleClickOutside)
-    return () => document.removeEventListener('click', handleClickOutside)
-  })
+  /** Row clicks open the row unless the click landed on an interactive child. */
+  function isRowClick(event: MouseEvent): boolean {
+    return !(event.target as HTMLElement).closest('a, button, label, input')
+  }
 </script>
 
+{#snippet checkbox(checked: boolean, indeterminate: boolean, label: string, onchange: () => void)}
+  <label class="flex h-8 w-9 cursor-pointer items-center justify-center">
+    <input
+      type="checkbox"
+      class="peer sr-only"
+      {checked}
+      {indeterminate}
+      aria-label={label}
+      {onchange}
+    />
+    <span
+      class="flex size-4 items-center justify-center rounded-control border border-border-strong bg-inset text-accent-foreground transition-colors peer-checked:border-accent peer-checked:bg-accent peer-indeterminate:border-accent peer-indeterminate:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent"
+    >
+      {#if checked}
+        <Check class="size-3" strokeWidth={3} />
+      {:else if indeterminate}
+        <Minus class="size-3" strokeWidth={3} />
+      {/if}
+    </span>
+  </label>
+{/snippet}
+
 <div
-  class="relative flex flex-col gap-4"
+  class="flex items-start gap-3"
   role="region"
   aria-label="Object browser drop zone"
   ondragenter={onDragEnter}
@@ -640,23 +735,16 @@
   ondragover={onDragOver}
   ondrop={onDrop}
 >
-  {#if isDragging}
-    <div
-      class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-sm border-2 border-dashed border-coollabs bg-coollabs/5 dark:border-warning dark:bg-warning/5"
-      aria-hidden="true"
-    >
-      <div class="flex flex-col items-center gap-2 text-coollabs dark:text-warning">
-        <Upload class="size-8" />
-        <p class="text-sm font-medium">Drop files to upload</p>
+  <div class="relative flex min-h-[calc(100dvh-11rem)] min-w-0 flex-1 flex-col gap-3">
+    {#if isDragging}
+      <div
+        class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-surface border border-dashed border-accent bg-background/80 text-sm font-medium"
+        aria-hidden="true"
+      >
+        Drop files to upload
       </div>
-    </div>
-  {/if}
+    {/if}
 
-  {#if objectsQuery.isError}
-    <Callout type="danger">{objectsQuery.error instanceof ApiError ? objectsQuery.error.message : 'Failed to load objects'}</Callout>
-  {/if}
-
-  <div class="flex flex-wrap items-center gap-2">
     <input
       bind:this={fileInput}
       type="file"
@@ -664,300 +752,358 @@
       class="hidden"
       onchange={handleUpload}
     />
-    <Button variant="highlighted" class="h-8" onclick={() => fileInput?.click()} disabled={uploadMutation.isPending}>
-      <Upload class="size-4 mr-1" /> {uploadMutation.isPending ? 'Uploading...' : 'Upload'}
-    </Button>
-    <Button variant="outline" class="h-8" onclick={() => (showCreateFolder = true)}>
-      <FolderPlus class="size-4 mr-1" /> New Folder
-    </Button>
-    {#if selectedCount > 0}
-      <Button
-        variant="destructive"
-        class="h-8"
-        onclick={requestBulkDelete}
-        disabled={deleteSelectionMutation.isPending}
-      >
-        <Trash2 class="size-4 mr-1" />
-        Delete {bulkDeleteButtonLabel()}
-      </Button>
-    {/if}
-    <div class="relative min-w-[12rem] flex-1 max-w-sm">
-      <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        type="search"
-        placeholder="Search in this folder…"
-        class="h-8 pl-8 pr-8"
-        bind:value={searchInput}
-        aria-label="Search objects"
-      />
-      {#if searchInput}
-        <button
-          type="button"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-          onclick={clearSearch}
-          aria-label="Clear search"
+
+    <Toolbar>
+      {#if selectedCount > 0}
+        <span class="num text-sm font-medium">{selectedCount} selected</span>
+        <Button
+          variant="destructive"
+          onclick={requestBulkDelete}
+          disabled={deleteSelectionMutation.isPending}
         >
-          <X class="size-4" />
-        </button>
+          <Trash2 /> Delete
+        </Button>
+        <Button variant="ghost" onclick={() => (selectedKeys = new Set())}>Clear</Button>
+      {:else}
+        {#if prefix}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  variant="outline"
+                  size="icon"
+                  href={bucketObjectsUrl(bucket, upPrefix)}
+                  aria-label="Parent folder"
+                >
+                  <ArrowUp />
+                </Button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content>Parent folder</Tooltip.Content>
+          </Tooltip.Root>
+        {/if}
+        <div class="relative min-w-32 max-w-xs flex-1">
+          <Search class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-subtle" />
+          <Input
+            type="text"
+            placeholder="Search in folder"
+            class="pl-7 pr-7"
+            bind:value={searchInput}
+            aria-label="Search objects"
+          />
+          {#if searchInput}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              class="absolute right-0.5 top-1/2 -translate-y-1/2"
+              onclick={clearSearch}
+              aria-label="Clear search"
+            >
+              <X />
+            </Button>
+          {/if}
+        </div>
       {/if}
-    </div>
+      {#snippet end()}
+        {#if selectedCount === 0 && !objectsQuery.isPending}
+          <span class="num hidden text-sm text-muted-foreground sm:inline">
+            {(files.length + prefixes.length).toLocaleString()}{objectsQuery.hasNextPage ? '+' : ''} items
+          </span>
+        {/if}
+        <Button variant="secondary" aria-label="New folder" onclick={() => (showCreateFolder = true)}>
+          <FolderPlus /> <span class="hidden sm:inline">New folder</span>
+        </Button>
+        <Button
+          aria-label="Upload"
+          loading={uploadMutation.isPending}
+          onclick={() => fileInput?.click()}
+        >
+          {#if !uploadMutation.isPending}<Upload />{/if} <span class="hidden sm:inline">Upload</span>
+        </Button>
+      {/snippet}
+    </Toolbar>
+
+    {#if objectsQuery.isError}
+      <Callout type="danger">{objectsQuery.error instanceof ApiError ? objectsQuery.error.message : 'Failed to load objects'}</Callout>
+    {/if}
+
+    {#if !objectsQuery.isPending && files.length === 0 && prefixes.length === 0 && !objectsQuery.isError}
+      <div class="rounded-surface border border-border bg-panel">
+        <EmptyState title={searchQuery ? `No objects matching "${searchQuery}"` : 'No objects'}>
+          {#snippet action()}
+            {#if !searchQuery}
+              <Button onclick={() => fileInput?.click()}><Upload /> Upload</Button>
+            {/if}
+          {/snippet}
+        </EmptyState>
+      </div>
+    {:else}
+      <Table.Root>
+        <Table.Header>
+          {#each objectTable.getHeaderGroups() as headerGroup (headerGroup.id)}
+            <Table.Row>
+              {#each headerGroup.headers as header (header.id)}
+                {#if header.column.id !== 'type' || showType}
+                  <Table.Head class={columnClass(header.column.id)}>
+                    {#if header.column.id === 'select'}
+                      {#if selectableKeys.length > 0}
+                        {@render checkbox(allSelected, !allSelected && someSelected, allSelected ? 'Deselect all' : 'Select all', toggleSelectAll)}
+                      {/if}
+                    {:else if !header.isPlaceholder}
+                      <FlexRender header={header} />
+                    {/if}
+                  </Table.Head>
+                {/if}
+              {/each}
+            </Table.Row>
+          {/each}
+        </Table.Header>
+        <Table.Body>
+          {#if objectsQuery.isPending}
+            {#each skeletonRows as index (index)}
+              <Table.Row>
+                <Table.Cell class="w-9 p-0"></Table.Cell>
+                <Table.Cell><Skeleton class="w-48 max-w-full" /></Table.Cell>
+                <Table.Cell><Skeleton class="ml-auto w-12" /></Table.Cell>
+                <Table.Cell class="hidden sm:table-cell"><Skeleton class="w-32" /></Table.Cell>
+                {#if showType}<Table.Cell class="hidden md:table-cell"><Skeleton class="w-24" /></Table.Cell>{/if}
+                <Table.Cell class="w-9 p-0"></Table.Cell>
+              </Table.Row>
+            {/each}
+          {/if}
+          {#each prefixes as p (p)}
+            <Table.Row
+              class="cursor-pointer"
+              data-state={selectedKeys.has(p) ? 'selected' : undefined}
+              onclick={(e) => {
+                if (isRowClick(e)) navigateTo(p)
+              }}
+            >
+              <Table.Cell class="w-9 p-0">
+                {@render checkbox(selectedKeys.has(p), false, `Select ${prefixLabel(p)}`, () => toggleSelect(p))}
+              </Table.Cell>
+              <Table.Cell class="w-full max-w-0">
+                <a href={bucketObjectsUrl(bucket, p)} class="flex min-w-0 items-center gap-2 rounded-control font-medium hover:underline">
+                  <Folder class="size-4 shrink-0 text-muted-foreground" />
+                  <span class="truncate">{prefixLabel(p)}/</span>
+                </a>
+              </Table.Cell>
+              <Table.Cell></Table.Cell>
+              <Table.Cell class="hidden sm:table-cell"></Table.Cell>
+              {#if showType}<Table.Cell class="hidden text-muted-foreground md:table-cell">Folder</Table.Cell>{/if}
+              <Table.Cell class="w-9 p-0 pr-1">
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                      <Button {...props} variant="ghost" size="icon-xs" aria-label={`Actions for ${prefixLabel(p)}`}>
+                        <MoreHorizontal />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content>
+                    <DropdownMenu.Item variant="destructive" onSelect={() => (pendingDeletePrefix = p)}>
+                      <Trash2 /> Delete folder
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              </Table.Cell>
+            </Table.Row>
+          {/each}
+          {#each files as file (file.key)}
+            {@const RowIcon = fileIconFor(file.contentType, file.key)}
+            <Table.Row
+              class="cursor-pointer"
+              data-state={selectedKeys.has(file.key) || detailFile?.key === file.key ? 'selected' : undefined}
+              onclick={(e) => {
+                if (isRowClick(e)) detailFile = file
+              }}
+            >
+              <Table.Cell class="w-9 p-0">
+                {@render checkbox(selectedKeys.has(file.key), false, `Select ${objectLabel(file.key)}`, () => toggleSelect(file.key))}
+              </Table.Cell>
+              <Table.Cell class="w-full max-w-0">
+                <button
+                  type="button"
+                  class="flex w-full min-w-0 items-center gap-2 rounded-control text-left font-medium hover:underline"
+                  onclick={() => (detailFile = file)}
+                >
+                  <RowIcon class="size-4 shrink-0 text-muted-foreground" />
+                  <span class="truncate">{objectLabel(file.key)}</span>
+                </button>
+              </Table.Cell>
+              <Table.Cell class="num text-right text-muted-foreground">{formatBytes(file.size)}</Table.Cell>
+              <Table.Cell class="num hidden text-muted-foreground sm:table-cell">{formatDate(file.lastModified)}</Table.Cell>
+              {#if showType}
+                <Table.Cell class="hidden max-w-40 truncate text-muted-foreground md:table-cell">{file.contentType || '—'}</Table.Cell>
+              {/if}
+              <Table.Cell class="w-9 p-0 pr-1">
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                      <Button {...props} variant="ghost" size="icon-xs" aria-label={`Actions for ${objectLabel(file.key)}`}>
+                        <MoreHorizontal />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content>
+                    <DropdownMenu.Item onSelect={() => (detailFile = file)}>
+                      <Info /> Details
+                    </DropdownMenu.Item>
+                    {#if isPreviewable(file.contentType, file.key)}
+                      <DropdownMenu.Item onSelect={() => (previewFile = file)}>
+                        <Eye /> Preview
+                      </DropdownMenu.Item>
+                    {/if}
+                    <DropdownMenu.Item onSelect={() => openShare(file.key)}>
+                      <Share2 /> Copy presigned URL
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item>
+                      {#snippet child({ props })}
+                        <a {...props} href={downloadUrl(bucket, file.key)}><Download /> Download</a>
+                      {/snippet}
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item variant="destructive" onSelect={() => (pendingDelete = file.key)}>
+                      <Trash2 /> Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              </Table.Cell>
+            </Table.Row>
+          {/each}
+        </Table.Body>
+      </Table.Root>
+      <div bind:this={sentinelEl} class="h-px" aria-hidden="true"></div>
+      {#if objectsQuery.isFetchingNextPage}
+        <div class="flex justify-center py-1"><Skeleton class="w-24" /></div>
+      {/if}
+    {/if}
   </div>
 
-  {#if objectsQuery.isPending}
-    <p class="text-sm text-muted-foreground">Loading...</p>
-  {:else if files.length === 0 && prefixes.length === 0 && !objectsQuery.isError}
-    <Callout type="info">
-      <span class="inline-flex items-center gap-2">
-        {#if searchQuery}
-          <Search class="size-4 opacity-70" />
-          No objects matching &ldquo;{searchQuery}&rdquo; in this location.
-        {:else}
-          <Folder class="size-4 opacity-70" />
-          This location is empty — upload a file or create a folder to get started.
-        {/if}
-      </span>
-    </Callout>
-  {:else}
-    <Table.Root>
-      <Table.Header>
-        {#each objectTable.getHeaderGroups() as headerGroup (headerGroup.id)}
-          <Table.Row>
-            {#each headerGroup.headers as header (header.id)}
-              <Table.Head
-                class={header.column.id === 'select'
-                  ? 'w-10 p-0'
-                  : header.column.id === 'type'
-                    ? 'w-48'
-                    : header.column.id === 'size'
-                      ? 'w-28 text-right'
-                      : header.column.id === 'modified'
-                        ? 'w-48'
-                        : header.column.id === 'actions'
-                          ? 'w-24'
-                          : undefined}
-              >
-                {#if header.column.id === 'select'}
-                  {#if selectableKeys.length > 0}
-                    <label class={objectCheckboxLabelClass}>
-                      <input
-                        type="checkbox"
-                        class="peer sr-only"
-                        checked={allSelected}
-                        aria-label={allSelected ? 'Deselect all' : 'Select all'}
-                        onchange={toggleSelectAll}
-                      />
-                      <span
-                        class="{objectCheckboxBoxClass} {allSelected || someSelected ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
-                      >
-                        {#if allSelected}
-                          <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
-                        {:else if someSelected}
-                          <Minus class={objectCheckboxIconClass} size={12} strokeWidth={3} />
-                        {/if}
-                      </span>
-                    </label>
-                  {/if}
-                {:else if !header.isPlaceholder}
-                  <FlexRender header={header} />
-                {/if}
-              </Table.Head>
-            {/each}
-          </Table.Row>
-        {/each}
-      </Table.Header>
-      <Table.Body>
-        {#each prefixes as p}
-          <Table.Row
-            class="cursor-pointer"
-            data-state={selectedKeys.has(p) ? 'selected' : undefined}
-            onclick={(e) => {
-              if ((e.target as HTMLElement).closest('[data-object-select]')) return
-              navigateTo(p)
-            }}
-          >
-            <Table.Cell class="w-10 p-0" data-object-select>
-              <label class={objectCheckboxLabelClass}>
-                <input
-                  type="checkbox"
-                  class="peer sr-only"
-                  checked={selectedKeys.has(p)}
-                  aria-label={`Select ${prefixLabel(p).replace(/\/$/, '')}`}
-                  onchange={() => toggleSelect(p)}
-                />
-                <span
-                  class="{objectCheckboxBoxClass} {selectedKeys.has(p) ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
-                >
-                  {#if selectedKeys.has(p)}
-                    <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
-                  {/if}
-                </span>
-              </label>
-            </Table.Cell>
-            <Table.Cell>
-              <span class="flex items-center gap-2">
-                <Folder class="size-4 shrink-0 text-muted-foreground" />
-                <span class="font-medium">{prefixLabel(p).replace(/\/$/, '')}/</span>
-              </span>
-            </Table.Cell>
-            <Table.Cell class="text-muted-foreground">&mdash;</Table.Cell>
-            <Table.Cell class="text-right text-muted-foreground">&mdash;</Table.Cell>
-            <Table.Cell class="text-muted-foreground">&mdash;</Table.Cell>
-            <Table.Cell class="w-24 text-right">
-              <button
-                class="text-muted-foreground hover:text-destructive transition-colors"
-                onclick={(e) => deleteFolder(p, e)}
-                title="Delete folder"
-              >
-                <Trash2 class="size-4" />
-              </button>
-            </Table.Cell>
-          </Table.Row>
-        {/each}
-        {#each files as file}
-          <Table.Row
-            class="cursor-pointer"
-            data-state={selectedKeys.has(file.key) ? 'selected' : undefined}
-            onclick={(e) => {
-              if ((e.target as HTMLElement).closest('[data-object-select]')) return
-              detailFile = file
-            }}
-          >
-            <Table.Cell class="w-10 p-0" data-object-select>
-              <label class={objectCheckboxLabelClass}>
-                <input
-                  type="checkbox"
-                  class="peer sr-only"
-                  checked={selectedKeys.has(file.key)}
-                  aria-label={`Select ${objectLabel(file.key)}`}
-                  onchange={() => toggleSelect(file.key)}
-                />
-                <span
-                  class="{objectCheckboxBoxClass} {selectedKeys.has(file.key) ? objectCheckboxCheckedClass : objectCheckboxUncheckedClass}"
-                >
-                  {#if selectedKeys.has(file.key)}
-                    <Check class={objectCheckboxIconClass} size={12} strokeWidth={3} />
-                  {/if}
-                </span>
-              </label>
-            </Table.Cell>
-            <Table.Cell>
-              <span class="flex items-center gap-2">
-                <FileIcon class="size-4 shrink-0 text-muted-foreground" />
-                <span class="font-medium">{objectLabel(file.key)}</span>
-              </span>
-            </Table.Cell>
-            <Table.Cell class="truncate text-muted-foreground">{file.contentType || '—'}</Table.Cell>
-            <Table.Cell class="text-right text-muted-foreground">{formatBytes(file.size)}</Table.Cell>
-            <Table.Cell class="text-muted-foreground">{formatDate(file.lastModified)}</Table.Cell>
-            <Table.Cell class="w-24 text-right">
-              <span class="flex items-center justify-end gap-4">
-                {#if isPreviewable(file.contentType, file.key)}
-                  <button
-                    class="text-muted-foreground hover:text-foreground transition-colors"
-                    onclick={(e) => { e.stopPropagation(); previewFile = file }}
-                    title="Preview"
-                  >
-                    <Eye class="size-4" />
-                  </button>
-                {/if}
-                {#if versioningEnabled}
-                  <button
-                    class="text-muted-foreground hover:text-foreground transition-colors"
-                    onclick={(e) => { e.stopPropagation(); detailFile = file }}
-                    title="Object details"
-                  >
-                    <History class="size-4" />
-                  </button>
-                {/if}
-                <button
-                  class="text-muted-foreground hover:text-foreground transition-colors"
-                  onclick={(e) => toggleShareMenu(file.key, e)}
-                  title="Copy presigned URL"
-                >
-                  {#if copiedKey === file.key}
-                    <Check class="size-4 text-green-500" />
-                  {:else}
-                    <Share2 class="size-4" />
-                  {/if}
-                </button>
-                <a href={downloadUrl(bucket, file.key)} class="text-muted-foreground hover:text-foreground" onclick={(e) => e.stopPropagation()} title="Download">
-                  <Download class="size-4" />
-                </a>
-                <button
-                  class="text-muted-foreground hover:text-destructive transition-colors"
-                  onclick={(e) => deleteObject(file.key, e)}
-                  title="Delete"
-                >
-                  <Trash2 class="size-4" />
-                </button>
-              </span>
-            </Table.Cell>
-          </Table.Row>
-        {/each}
-      </Table.Body>
-    </Table.Root>
-    <div bind:this={sentinelEl} class="h-1" aria-hidden="true"></div>
-    {#if objectsQuery.isFetchingNextPage}
-      <p class="text-sm text-muted-foreground text-center py-2">Loading more...</p>
-    {/if}
+  {#if detailFile && wide}
+    <ObjectDetailDrawer
+      panel
+      {bucket}
+      file={detailFile}
+      {versioningEnabled}
+      onClose={() => (detailFile = null)}
+      onPreview={(file) => (previewFile = file)}
+      onShare={openShare}
+      onDelete={(key) => (pendingDelete = key)}
+      onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })}
+    />
   {/if}
 </div>
 
+{#if detailFile && !wide}
+  <ObjectDetailDrawer
+    {bucket}
+    file={detailFile}
+    {versioningEnabled}
+    onClose={() => (detailFile = null)}
+    onPreview={(file) => (previewFile = file)}
+    onShare={openShare}
+    onDelete={(key) => (pendingDelete = key)}
+    onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })}
+  />
+{/if}
 
 <Dialog
   open={showCreateFolder}
-  title="Create folder"
-  description="Create an empty folder marker in the current location."
+  title="New folder"
   loading={createFolderMutation.isPending}
-  onClose={() => { showCreateFolder = false; newFolderName = '' }}
+  onClose={closeCreateFolder}
 >
   <form id="create-folder-form" onsubmit={(e) => { e.preventDefault(); createFolder() }} class="flex flex-col gap-1.5">
-    <label for="folder-name" class="text-sm font-medium text-black dark:text-white">Folder name</label>
+    <Label for="folder-name">Name</Label>
     <Input
       bind:ref={createFolderInput}
       id="folder-name"
       type="text"
       bind:value={newFolderName}
       placeholder="folder-name"
-      class="bg-white dark:bg-base"
       disabled={createFolderMutation.isPending}
     />
   </form>
   {#snippet footer()}
-    <Button type="button" variant="default" disabled={createFolderMutation.isPending} onclick={() => { showCreateFolder = false; newFolderName = '' }}>
+    <Button type="button" variant="secondary" disabled={createFolderMutation.isPending} onclick={closeCreateFolder}>
       Cancel
     </Button>
-    <Button type="submit" form="create-folder-form" variant="highlighted" disabled={createFolderMutation.isPending || !newFolderName.trim()}>
-      {createFolderMutation.isPending ? 'Creating…' : 'Create folder'}
+    <Button type="submit" form="create-folder-form" loading={createFolderMutation.isPending} disabled={!newFolderName.trim()}>
+      Create
     </Button>
   {/snippet}
 </Dialog>
 
-{#if shareMenuKey}
-  <div
-    class="fixed z-50 min-w-[8rem] rounded-sm border bg-popover p-1 shadow-md"
-    style="top: {shareMenuPos.top}px; left: {shareMenuPos.left}px; transform: translate(-100%, -100%);"
-    role="menu"
-  >
-    {#each expiryOptions as opt}
-      <button
-        class="w-full rounded-sm px-2 py-1.5 text-left text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
-        onclick={() => shareObject(shareMenuKey!, opt.seconds)}
-      >
-        {opt.label}
-      </button>
-    {/each}
-  </div>
+{#if shareKey}
+  <Dialog open title={`Presigned URL: ${displayName(shareKey)}`} onClose={() => (shareKey = null)}>
+    <div class="flex flex-col gap-3">
+      <div class="flex items-center gap-2">
+        <Label>Expires</Label>
+        <SegmentedControl
+          aria-label="Link expiry"
+          options={expiryOptions}
+          value={String(shareExpires)}
+          onValueChange={selectShareExpiry}
+        />
+      </div>
+      <Input
+        readonly
+        value={shareLoading ? 'Generating…' : shareUrl}
+        class="font-mono text-xs"
+        aria-label="Presigned URL"
+        onfocus={(e) => (e.currentTarget as HTMLInputElement).select()}
+      />
+    </div>
+    {#snippet footer()}
+      <Button type="button" variant="secondary" onclick={() => (shareKey = null)}>Close</Button>
+      <Button type="button" disabled={shareLoading || !shareUrl} onclick={copyShareUrl}>
+        <Copy /> Copy
+      </Button>
+    {/snippet}
+  </Dialog>
 {/if}
 
-{#if detailFile}
-  <ObjectDetailDrawer
-    {bucket}
-    file={detailFile}
-    {versioningEnabled}
-    onClose={() => (detailFile = null)}
-    onVersionDeleted={() => queryClient.invalidateQueries({ queryKey: objectKeys.listScope(bucket, prefix) })}
-  />
+{#if uploads.length > 0}
+  <div class="fixed bottom-4 right-4 z-40 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-surface border border-border-strong bg-raised p-3 shadow-pop" role="region" aria-label="Uploads">
+    <div class="flex items-center justify-between">
+      <span class="text-sm font-medium">Uploads</span>
+      {#if !uploadMutation.isPending}
+        <Button variant="ghost" size="icon-xs" onclick={() => (uploads = [])} aria-label="Dismiss uploads">
+          <X />
+        </Button>
+      {/if}
+    </div>
+    <ul class="flex max-h-64 flex-col gap-2 overflow-y-auto">
+      {#each uploads as item (item.id)}
+        <li class="flex flex-col gap-1">
+          <div class="flex items-center justify-between gap-2 text-xs">
+            <span class="min-w-0 flex-1 truncate">{item.name}</span>
+            <span class={cn('num shrink-0', item.status === 'error' ? 'text-danger' : 'text-muted-foreground')}>
+              {#if item.status === 'uploading'}
+                {uploadPercent(item)}%
+              {:else if item.status === 'queued'}
+                Queued
+              {:else if item.status === 'done'}
+                Done
+              {:else if item.status === 'error'}
+                Failed
+              {:else}
+                Cancelled
+              {/if}
+            </span>
+            {#if item.status === 'queued' || item.status === 'uploading'}
+              <Button variant="ghost" size="icon-xs" onclick={() => cancelUpload(item)} aria-label={`Cancel upload of ${item.name}`}>
+                <X />
+              </Button>
+            {/if}
+          </div>
+          <ProgressBar value={uploadPercent(item)} dangerAt={item.status === 'error' ? 0 : undefined} />
+        </li>
+      {/each}
+    </ul>
+  </div>
 {/if}
 
 {#if previewFile}

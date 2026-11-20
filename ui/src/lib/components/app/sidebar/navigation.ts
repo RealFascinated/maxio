@@ -1,4 +1,4 @@
-import Home from 'lucide-svelte/icons/home'
+import Database from 'lucide-svelte/icons/database'
 import UsersIcon from 'lucide-svelte/icons/users'
 import Shield from 'lucide-svelte/icons/shield'
 import BarChart2 from 'lucide-svelte/icons/bar-chart-2'
@@ -12,6 +12,8 @@ export interface SidebarNavEntry {
   icon: LucideIcon
   href: string
   active: boolean
+  /** `footer` items sit at the bottom of the rail. */
+  placement: 'main' | 'footer'
 }
 
 export interface NavContext {
@@ -24,6 +26,7 @@ interface NavItemDef {
   label: string
   icon: LucideIcon
   href: string
+  placement?: 'main' | 'footer'
   visible?: (ctx: NavContext) => boolean
   isActive: (ctx: NavContext) => boolean
 }
@@ -32,7 +35,7 @@ const mainNavItems: NavItemDef[] = [
   {
     id: 'buckets',
     label: 'Buckets',
-    icon: Home,
+    icon: Database,
     href: routes.home(),
     isActive: (ctx) => isBucketsNavActive(ctx.pathname),
   },
@@ -65,6 +68,7 @@ const mainNavItems: NavItemDef[] = [
     label: 'Settings',
     icon: Settings,
     href: routes.serverSettings(),
+    placement: 'footer',
     visible: (ctx) => ctx.isRootUser,
     isActive: (ctx) => ctx.pathname === routes.serverSettings(),
   },
@@ -79,5 +83,6 @@ export function buildSidebarNavItems(ctx: NavContext): SidebarNavEntry[] {
       icon: item.icon,
       href: item.href,
       active: item.isActive(ctx),
+      placement: item.placement ?? 'main',
     }))
 }

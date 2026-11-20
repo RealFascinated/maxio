@@ -9,19 +9,24 @@
   import { Badge } from '$lib/components/ui/badge'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { Dialog } from '$lib/components/ui/dialog'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
+  import { EmptyState } from '$lib/components/ui/empty-state'
   import { Input } from '$lib/components/ui/input'
-  import Database from 'lucide-svelte/icons/database'
+  import { Label } from '$lib/components/ui/label'
+  import { PageHeader } from '$lib/components/ui/page-header'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { Toolbar } from '$lib/components/ui/toolbar'
+  import MoreHorizontal from 'lucide-svelte/icons/ellipsis'
   import Plus from 'lucide-svelte/icons/plus'
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import Settings from 'lucide-svelte/icons/settings'
-  import Search from 'lucide-svelte/icons/search'
-  import X from 'lucide-svelte/icons/x'
   import { toast, toastApiError } from '$lib/toast'
   import { bucketKeys } from '$lib/api/keys'
   import { createBucket as createBucketApi, deleteBucket as deleteBucketApi, listBuckets } from '$lib/api/buckets'
   import { ApiError } from '$lib/api/http'
   import { queryClient } from '$lib/query/client'
   import { goto } from '$app/navigation'
+  import { page } from '$app/state'
   import { formatBytes } from '$lib/format-bytes'
   import { formatDate } from '$lib/format'
   import { routes } from '$lib/navigation'
@@ -39,8 +44,28 @@
 
   $effect(() => {
     if (showCreate && createBucketInput) {
-      queueMicrotask(() => createBucketInput?.focus())
+      setTimeout(() => createBucketInput?.focus(), 0)
     }
+  })
+
+  $effect(() => {
+    if (!page.url.searchParams.has('new')) return
+    if (canCreateBucket) showCreate = true
+    goto(routes.home(), { replaceState: true, noScroll: true, keepFocus: true })
+  })
+
+  const bucketNameRules = [
+    { valid: (name: string) => name.length >= 3 && name.length <= 63, message: 'Must be 3–63 characters' },
+    { valid: (name: string) => /^[a-z0-9.-]+$/.test(name), message: 'Lowercase letters, digits, hyphens and dots only' },
+    { valid: (name: string) => /^[a-z0-9]/.test(name) && /[a-z0-9]$/.test(name), message: 'Must start and end with a letter or digit' },
+    { valid: (name: string) => !name.includes('..'), message: 'Must not contain consecutive dots' },
+    { valid: (name: string) => !/^\d{1,3}(\.\d{1,3}){3}$/.test(name), message: 'Must not be formatted as an IP address' },
+  ]
+
+  const createNameError = $derived.by(() => {
+    const name = newBucketName.trim()
+    if (!name) return null
+    return bucketNameRules.find((rule) => !rule.valid(name))?.message ?? null
   })
 
   const bucketsQuery = createQuery(() => ({
@@ -66,8 +91,8 @@
       header: sortableHeader('Size'),
       sortUndefined: 'last',
     }),
-    columnHelper.accessor('versioning', { header: sortableHeader('Versioning') }),
     columnHelper.accessor('createdAt', { header: sortableHeader('Created') }),
+    columnHelper.accessor('publicRead', { header: sortableHeader('Access') }),
     columnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
   ]
 
@@ -79,11 +104,12 @@
     },
   })
 
+  const rightAligned = new Set(['objectCount', 'sizeBytes'])
 
   const createBucketMutation = createMutation(() => ({
     mutationFn: createBucketApi,
     onSuccess: (_data, name) => {
-      toast.success(`Bucket "${name}" created`)
+      toast.success(`Bucket ${name} created`)
       newBucketName = ''
       showCreate = false
       queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
@@ -93,26 +119,25 @@
   const deleteBucketMutation = createMutation(() => ({
     mutationFn: deleteBucketApi,
     onSuccess: (_data, name) => {
-      toast.success(`Bucket "${name}" deleted`)
+      toast.success(`Bucket ${name} deleted`)
       queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
     },
   }))
 
+  function closeCreate() {
+    showCreate = false
+    newBucketName = ''
+  }
 
   async function createBucket() {
     const name = newBucketName.trim()
-    if (!name) return
+    if (!name || createNameError) return
     try {
       await createBucketMutation.mutateAsync(name)
     } catch (err) {
       console.error('createBucket failed:', err)
-      toastApiError(err, 'Failed to connect to server')
+      toastApiError(err, 'Connection failed')
     }
-  }
-
-  async function deleteBucket(name: string, e: Event) {
-    e.stopPropagation()
-    bucketToDelete = name
   }
 
   async function confirmDeleteBucket() {
@@ -123,190 +148,200 @@
       bucketToDelete = null
     } catch (err) {
       console.error('deleteBucket failed:', err)
-      toastApiError(err, 'Failed to connect to server')
+      toastApiError(err, 'Connection failed')
     }
   }
-
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between gap-4">
-    <div class="flex items-center gap-2">
-      <Database class="size-5 text-coollabs dark:text-warning" />
-      <h1>Buckets</h1>
-    </div>
-    {#if canCreateBucket}
-      <Button variant="brand" onclick={() => (showCreate = true)}>
-        <Plus class="size-4" />
-        Create bucket
-      </Button>
-    {/if}
-  </div>
+<div class="flex flex-col gap-3">
+  <PageHeader title="Buckets" />
 
   {#if bucketsQuery.isError}
-    <Callout type="danger">{bucketsQuery.error instanceof ApiError ? bucketsQuery.error.message : 'Failed to load buckets'}</Callout>
-  {:else if bucketsQuery.isPending}
-    <p class="text-sm text-muted-foreground">Loading...</p>
-  {:else if allBuckets.length === 0}
-    <Callout type="info">
-      <div class="flex flex-col gap-3">
-        <span class="inline-flex items-center gap-2">
-          <Database class="size-4 opacity-70" />
-          No buckets yet — create your first bucket to get started.
-        </span>
-        {#if canCreateBucket}
-          <Button variant="brand" class="w-fit" onclick={() => (showCreate = true)}>
-            <Plus class="size-4" />
-            Create bucket
-          </Button>
-        {/if}
-      </div>
+    <Callout type="danger">
+      {bucketsQuery.error instanceof ApiError ? bucketsQuery.error.message : 'Failed to load buckets'}
     </Callout>
-  {:else}
-    <div class="relative max-w-sm">
-      <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        type="search"
-        placeholder="Filter buckets…"
-        class="h-8 pl-8 pr-8"
-        bind:value={searchInput}
-        aria-label="Filter buckets by name"
-      />
-      {#if searchInput}
-        <button
-          type="button"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-          onclick={() => (searchInput = '')}
-          aria-label="Clear filter"
-        >
-          <X class="size-4" />
-        </button>
-      {/if}
+  {:else if !bucketsQuery.isPending && allBuckets.length === 0}
+    <div class="rounded-surface border border-border bg-panel">
+      <EmptyState title="No buckets">
+        {#snippet action()}
+          {#if canCreateBucket}
+            <Button size="sm" onclick={() => (showCreate = true)}><Plus />Create bucket</Button>
+          {/if}
+        {/snippet}
+      </EmptyState>
     </div>
+  {:else}
+    <Toolbar>
+      <Input
+        placeholder="Filter"
+        class="w-56 max-w-full"
+        bind:value={searchInput}
+        aria-label="Filter buckets"
+      />
+      {#snippet end()}
+        {#if !bucketsQuery.isPending}
+          <span class="num text-xs text-muted-foreground">
+            {filteredBuckets.length === allBuckets.length
+              ? allBuckets.length
+              : `${filteredBuckets.length} of ${allBuckets.length}`}
+            {allBuckets.length === 1 ? 'bucket' : 'buckets'}
+          </span>
+        {/if}
+        {#if canCreateBucket}
+          <Button size="md" onclick={() => (showCreate = true)}><Plus />Create bucket</Button>
+        {/if}
+      {/snippet}
+    </Toolbar>
 
-    {#if filteredBuckets.length === 0}
-      <Callout type="info">
-        <span class="inline-flex items-center gap-2">
-          <Search class="size-4 opacity-70" />
-          No buckets matching &ldquo;{searchInput.trim()}&rdquo;.
-        </span>
-      </Callout>
+    {#if !bucketsQuery.isPending && filteredBuckets.length === 0}
+      <div class="rounded-surface border border-border bg-panel">
+        <EmptyState title="No matching buckets" />
+      </div>
     {:else}
-    <Table.Root>
-      <Table.Header>
-        {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
-          <Table.Row>
-            {#each headerGroup.headers as header (header.id)}
-              <Table.Head class={header.column.id === 'actions' ? 'w-20' : undefined}>
-                {#if !header.isPlaceholder}
-                  <FlexRender header={header} />
-                {/if}
-              </Table.Head>
+      <Table.Root>
+        <Table.Header>
+          {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
+            <Table.Row class="hover:bg-transparent">
+              {#each headerGroup.headers as header (header.id)}
+                <Table.Head
+                  class={header.column.id === 'actions'
+                    ? 'w-10'
+                    : rightAligned.has(header.column.id)
+                      ? 'text-right'
+                      : undefined}
+                >
+                  {#if !header.isPlaceholder}
+                    <FlexRender header={header} />
+                  {/if}
+                </Table.Head>
+              {/each}
+            </Table.Row>
+          {/each}
+        </Table.Header>
+        <Table.Body>
+          {#if bucketsQuery.isPending}
+            {#each Array(5) as _, index (index)}
+              <Table.Row class="hover:bg-transparent">
+                <Table.Cell><Skeleton class="w-40" /></Table.Cell>
+                <Table.Cell><Skeleton class="ml-auto w-12" /></Table.Cell>
+                <Table.Cell><Skeleton class="ml-auto w-16" /></Table.Cell>
+                <Table.Cell><Skeleton class="w-32" /></Table.Cell>
+                <Table.Cell></Table.Cell>
+                <Table.Cell></Table.Cell>
+              </Table.Row>
             {/each}
-          </Table.Row>
-        {/each}
-      </Table.Header>
-      <Table.Body>
-        {#each table.getRowModel().rows as row (row.id)}
-          {@const bucket = row.original}
-          <Table.Row
-            class="cursor-pointer"
-            onclick={() => goto(routes.bucket(bucket.name))}
-          >
-            <Table.Cell class="font-medium">{bucket.name}</Table.Cell>
-            <Table.Cell class="text-muted-foreground tabular-nums">
-              {#if bucket.objectCount !== null}
-                {bucket.objectCount.toLocaleString()}
-              {:else}
-                <span class="opacity-40">—</span>
-              {/if}
-            </Table.Cell>
-            <Table.Cell class="text-muted-foreground tabular-nums">
-              {#if bucket.sizeBytes !== null}
-                {formatBytes(bucket.sizeBytes)}
-              {:else}
-                <span class="opacity-40">—</span>
-              {/if}
-            </Table.Cell>
-            <Table.Cell>
-              {#if bucket.versioning}
-                <Badge variant="success" label="Enabled" />
-              {:else}
-                <span class="text-xs text-muted-foreground">Disabled</span>
-              {/if}
-            </Table.Cell>
-            <Table.Cell class="text-muted-foreground">{formatDate(bucket.createdAt)}</Table.Cell>
-            <Table.Cell class="w-20">
-              {#if bucket.canManageSettings || bucket.canDelete}
-                <div class="flex items-center gap-4">
-                  {#if bucket.canManageSettings}
-                    <a
-                      href={routes.bucketSettings(bucket.name)}
-                      class="text-muted-foreground hover:text-foreground transition-colors"
-                      onclick={(e: Event) => e.stopPropagation()}
-                      title="Bucket settings"
-                    >
-                      <Settings class="size-4" />
-                    </a>
+          {:else}
+            {#each table.getRowModel().rows as row (row.id)}
+              {@const bucket = row.original}
+              <Table.Row class="cursor-pointer" onclick={() => goto(routes.bucket(bucket.name))}>
+                <Table.Cell class="font-medium">
+                  <a
+                    href={routes.bucket(bucket.name)}
+                    class="rounded-control hover:underline"
+                    onclick={(e: Event) => e.stopPropagation()}
+                  >{bucket.name}</a>
+                </Table.Cell>
+                <Table.Cell class="num text-right text-muted-foreground">
+                  {bucket.objectCount !== null ? bucket.objectCount.toLocaleString() : '—'}
+                </Table.Cell>
+                <Table.Cell class="num text-right text-muted-foreground">
+                  {bucket.sizeBytes !== null ? formatBytes(bucket.sizeBytes) : '—'}
+                </Table.Cell>
+                <Table.Cell class="num text-muted-foreground">{formatDate(bucket.createdAt)}</Table.Cell>
+                <Table.Cell>
+                  {#if bucket.publicRead}
+                    <Badge variant="warning" label="Public" />
                   {/if}
-                  {#if bucket.canDelete}
-                    <button
-                      class="text-muted-foreground hover:text-destructive transition-colors"
-                      onclick={(e: Event) => deleteBucket(bucket.name, e)}
-                      title="Delete bucket"
-                    >
-                      <Trash2 class="size-4" />
-                    </button>
+                </Table.Cell>
+                <Table.Cell class="w-10 pr-2 pl-0 text-right">
+                  {#if bucket.canManageSettings || bucket.canDelete}
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                          <Button
+                            {...props}
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label="Actions for {bucket.name}"
+                            onclick={(e: Event) => e.stopPropagation()}
+                          ><MoreHorizontal /></Button>
+                        {/snippet}
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Content align="end">
+                        {#if bucket.canManageSettings}
+                          <DropdownMenu.Item onSelect={() => goto(routes.bucketSettings(bucket.name))}>
+                            <Settings />Settings
+                          </DropdownMenu.Item>
+                        {/if}
+                        {#if bucket.canManageSettings && bucket.canDelete}
+                          <DropdownMenu.Separator />
+                        {/if}
+                        {#if bucket.canDelete}
+                          <DropdownMenu.Item variant="destructive" onSelect={() => (bucketToDelete = bucket.name)}>
+                            <Trash2 />Delete
+                          </DropdownMenu.Item>
+                        {/if}
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Root>
                   {/if}
-                </div>
-              {/if}
-            </Table.Cell>
-          </Table.Row>
-        {/each}
-      </Table.Body>
-    </Table.Root>
+                </Table.Cell>
+              </Table.Row>
+            {/each}
+          {/if}
+        </Table.Body>
+      </Table.Root>
     {/if}
   {/if}
 </div>
 
-
 <Dialog
   open={showCreate}
   title="Create bucket"
-  description="Choose a unique bucket name for your objects."
   loading={createBucketMutation.isPending}
-  onClose={() => { showCreate = false; newBucketName = '' }}
+  onClose={closeCreate}
 >
-  <form id="create-bucket-form" onsubmit={(e) => { e.preventDefault(); createBucket() }} class="flex flex-col gap-1.5">
-    <label for="bucket-name" class="text-sm font-medium text-black dark:text-white">Bucket name</label>
+  <form
+    id="create-bucket-form"
+    onsubmit={(e) => { e.preventDefault(); createBucket() }}
+    class="flex flex-col gap-1.5"
+  >
+    <Label for="bucket-name">Name</Label>
     <Input
       bind:ref={createBucketInput}
       id="bucket-name"
       type="text"
       bind:value={newBucketName}
       placeholder="bucket-name"
-      class="bg-white dark:bg-base"
+      autocomplete="off"
       disabled={createBucketMutation.isPending}
+      aria-invalid={createNameError ? true : undefined}
+      aria-describedby={createNameError ? 'bucket-name-error' : undefined}
     />
+    {#if createNameError}
+      <p id="bucket-name-error" class="text-xs text-danger">{createNameError}</p>
+    {/if}
   </form>
   {#snippet footer()}
-    <Button type="button" variant="default" disabled={createBucketMutation.isPending} onclick={() => { showCreate = false; newBucketName = '' }}>
+    <Button type="button" variant="secondary" disabled={createBucketMutation.isPending} onclick={closeCreate}>
       Cancel
     </Button>
-    <Button type="submit" form="create-bucket-form" variant="highlighted" disabled={createBucketMutation.isPending || !newBucketName.trim()}>
-      {createBucketMutation.isPending ? 'Creating…' : 'Create bucket'}
+    <Button
+      type="submit"
+      form="create-bucket-form"
+      loading={createBucketMutation.isPending}
+      disabled={!newBucketName.trim() || createNameError !== null}
+    >
+      Create
     </Button>
   {/snippet}
 </Dialog>
 
 <ConfirmDialog
   open={bucketToDelete !== null}
-  title="Delete bucket?"
-  description={`This will delete bucket \"${bucketToDelete ?? ''}\". The bucket must be empty before it can be removed.`}
-  confirmLabel="Delete bucket"
+  title="Delete bucket"
+  confirmLabel="Delete"
   confirmVariant="destructive"
   confirmationText={bucketToDelete ?? undefined}
-  confirmationLabel="Bucket name"
   loading={deleteBucketMutation.isPending}
   onClose={() => (bucketToDelete = null)}
   onConfirm={confirmDeleteBucket}

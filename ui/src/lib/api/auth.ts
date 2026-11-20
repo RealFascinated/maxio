@@ -1,4 +1,4 @@
-import { apiFetch } from './http'
+import { ApiError, apiFetch } from './http'
 
 export interface AuthCapabilities {
   canCreateBucket: boolean
@@ -24,6 +24,11 @@ export function browserCanStoreSecureCookies(): boolean {
   if (window.location.protocol === 'https:') return true
   const host = window.location.hostname
   return host === 'localhost' || host === '127.0.0.1' || host === '[::1]'
+}
+
+/** True only when the server answered 401; 5xx and network failures are not a logged-out state. */
+export function isNotAuthenticatedError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401
 }
 
 export async function fetchAuthConfig(): Promise<AuthConfigResponse> {

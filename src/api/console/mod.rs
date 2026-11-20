@@ -41,7 +41,7 @@ use bucket_settings::{
 };
 use buckets::{create_bucket, delete_bucket_api, list_buckets};
 use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
-use metrics::get_metrics_api;
+use metrics::{get_metrics_api, get_metrics_history_api};
 use objects::{
     create_folder, delete_folder, delete_object_handler, delete_objects_api, get_object_handler,
     list_objects, preview_folder_delete, upload_object,
@@ -66,6 +66,7 @@ pub fn console_router(state: AppState) -> Router<AppState> {
             post(repair_orphan_meta_api),
         )
         .route("/metrics", get(get_metrics_api))
+        .route("/metrics/history", get(get_metrics_history_api))
         .route("/users", get(admin::list_users_api))
         .route("/users", post(admin::create_user_api))
         .route("/users/{username}", delete(admin::delete_user_api))

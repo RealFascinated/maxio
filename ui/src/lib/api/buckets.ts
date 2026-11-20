@@ -4,6 +4,7 @@ export interface Bucket {
   name: string
   createdAt: string
   versioning: boolean
+  publicRead: boolean
   objectCount: number | null
   sizeBytes: number | null
   canDelete?: boolean

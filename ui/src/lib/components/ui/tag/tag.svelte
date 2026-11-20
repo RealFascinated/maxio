@@ -14,7 +14,7 @@
 	bind:this={ref}
 	data-slot="tag"
 	class={cn(
-		"inline-flex items-center px-2 py-1 text-xs font-bold rounded-sm text-neutral-500 bg-neutral-100 hover:bg-neutral-200 dark:bg-coolgray-100 dark:hover:bg-coolgray-300 cursor-pointer",
+		"inline-flex h-5 items-center rounded-control border border-border bg-inset px-1.5 text-xs text-muted-foreground",
 		className
 	)}
 	{...restProps}

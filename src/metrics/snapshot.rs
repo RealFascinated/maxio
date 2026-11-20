@@ -1,6 +1,9 @@
 use serde::Serialize;
 
+use super::histogram::Percentiles;
+
 pub const LATENCY_WINDOW_SECS: u64 = 15;
+pub const PERCENTILE_WINDOW_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +26,12 @@ impl StorageTotalsSnapshot {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricsSnapshot {
+    pub started_at: i64,
+    pub version: &'static str,
     pub uptime_seconds: f64,
+    pub http: HttpSnapshot,
+    pub latency_percentiles: LatencyPercentilesSnapshot,
+    pub buckets: Vec<BucketUsageSnapshot>,
     pub storage_totals: StorageTotalsSnapshot,
     pub throughput: ThroughputSnapshot,
     pub latency: LatencySnapshot,
@@ -33,6 +41,47 @@ pub struct MetricsSnapshot {
     pub storage_ops: Vec<StorageOpSnapshot>,
     pub metadata_ops: Vec<MetadataOpSnapshot>,
     pub process: Option<ProcessSnapshot>,
+}
+
+/// Cumulative since process start.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpSnapshot {
+    pub total_requests: u64,
+    pub status_2xx: u64,
+    pub status_3xx: u64,
+    pub status_4xx: u64,
+    pub status_5xx: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatencyPercentilesSnapshot {
+    pub window_seconds: u64,
+    pub read: Option<Percentiles>,
+    pub write: Option<Percentiles>,
+    pub http: Option<Percentiles>,
+}
+
+impl Default for LatencyPercentilesSnapshot {
+    fn default() -> Self {
+        Self {
+            window_seconds: PERCENTILE_WINDOW_SECS,
+            read: None,
+            write: None,
+            http: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BucketUsageSnapshot {
+    pub name: String,
+    pub object_count: i64,
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,6 +132,10 @@ pub struct StorageOpSnapshot {
     pub operation: String,
     pub count: u64,
     pub sum_seconds: f64,
+    /// Percentiles since process start.
+    pub p50_seconds: Option<f64>,
+    pub p95_seconds: Option<f64>,
+    pub p99_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +144,10 @@ pub struct MetadataOpSnapshot {
     pub operation: String,
     pub count: u64,
     pub sum_seconds: f64,
+    /// Percentiles since process start.
+    pub p50_seconds: Option<f64>,
+    pub p95_seconds: Option<f64>,
+    pub p99_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

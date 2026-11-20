@@ -25,18 +25,18 @@
   <button
     type="button"
     class={cn(
-      'inline-flex items-center gap-1 transition-colors hover:text-foreground',
+      '-mx-1 inline-flex h-6 items-center gap-1 rounded-control px-1 transition-colors hover:bg-hover hover:text-foreground',
       className,
     )}
     onclick={header.column.getToggleSortingHandler()}
   >
     <span>{title}</span>
     {#if sorted === 'desc'}
-      <ArrowDown class="size-3.5" />
+      <ArrowDown class="size-3 text-foreground" />
     {:else if sorted === 'asc'}
-      <ArrowUp class="size-3.5" />
+      <ArrowUp class="size-3 text-foreground" />
     {:else}
-      <ChevronsUpDown class="size-3.5 opacity-50" />
+      <ChevronsUpDown class="size-3 opacity-40" />
     {/if}
   </button>
 {:else}

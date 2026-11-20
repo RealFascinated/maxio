@@ -8,17 +8,28 @@
   import { Callout } from '$lib/components/ui/callout'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { Dialog } from '$lib/components/ui/dialog'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
+  import { EmptyState } from '$lib/components/ui/empty-state'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import Users from 'lucide-svelte/icons/users'
+  import { PageHeader } from '$lib/components/ui/page-header'
+  import { Select } from '$lib/components/ui/select'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { SlideOver } from '$lib/components/ui/slide-over'
+  import { Tag } from '$lib/components/ui/tag'
+  import { Toolbar } from '$lib/components/ui/toolbar'
+  import * as Tooltip from '$lib/components/ui/tooltip'
   import Plus from 'lucide-svelte/icons/plus'
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import KeyRound from 'lucide-svelte/icons/key-round'
-  import FileJson from 'lucide-svelte/icons/file-json'
   import Shield from 'lucide-svelte/icons/shield'
-  import Search from 'lucide-svelte/icons/search'
-  import X from 'lucide-svelte/icons/x'
+  import FileJson from 'lucide-svelte/icons/file-json'
+  import Pencil from 'lucide-svelte/icons/pencil'
+  import Unlink from 'lucide-svelte/icons/unlink'
+  import Download from 'lucide-svelte/icons/download'
+  import MoreHorizontal from 'lucide-svelte/icons/ellipsis'
   import Copy from 'lucide-svelte/icons/copy'
+  import type { LucideIcon } from '$lib/lucide'
   import { toast, toastApiError } from '$lib/toast'
   import { userKeys, policyKeys } from '$lib/api/keys'
   import {
@@ -47,6 +58,7 @@
   let newUsername = $state('')
   let createUserInput = $state<HTMLInputElement | null>(null)
   let searchInput = $state('')
+  let selectedUsername = $state<string | null>(null)
   let userToDelete = $state<string | null>(null)
   let keyToDelete = $state<{ username: string; accessKeyId: string } | null>(null)
   let keyToCreate = $state<string | null>(null)
@@ -57,6 +69,7 @@
   let selectedPolicyArn = $state('')
   let detachPolicyTarget = $state<{ username: string; policyArn: string; policyName: string } | null>(null)
   let showKeySecretDialog = $state(false)
+  let keySecretAcknowledged = $state(false)
   let showPolicyDialog = $state(false)
   let showAttachDialog = $state(false)
 
@@ -84,6 +97,7 @@
   })
 
   const allUsers = $derived(usersQuery.data?.users ?? [])
+  const selectedUser = $derived(allUsers.find((user) => user.username === selectedUsername) ?? null)
   const filteredUsers = $derived.by(() => {
     const q = searchInput.trim().toLowerCase()
     if (!q) return allUsers
@@ -98,18 +112,24 @@
   const columnHelper = createColumnHelper<typeof sortableTableFeatures, IamUserSummary>()
   const columns = [
     columnHelper.accessor('username', { header: sortableHeader('Username') }),
-    columnHelper.accessor('userId', { header: sortableHeader('User ID') }),
+    columnHelper.accessor((user) => user.inlinePolicies.length + user.attachedPolicies.length, {
+      id: 'policies',
+      header: sortableHeader('Policies'),
+    }),
     columnHelper.accessor((user) => user.accessKeys.length, {
       id: 'accessKeys',
-      header: sortableHeader('Access keys'),
+      header: sortableHeader('Keys'),
     }),
-    columnHelper.accessor(
-      (user) => user.inlinePolicies.length + user.attachedPolicies.length,
-      { id: 'policies', header: sortableHeader('Policies') },
-    ),
     columnHelper.accessor('createdAt', { header: sortableHeader('Created') }),
     columnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
   ]
+
+  const columnClass: Record<string, string> = {
+    policies: 'hidden md:table-cell',
+    accessKeys: 'text-right',
+    createdAt: 'hidden sm:table-cell',
+    actions: 'w-10',
+  }
 
   const table = createTable({
     features: sortableTableFeatures,
@@ -129,6 +149,7 @@
           accessKeyId: data.accessKey.accessKeyId,
           secretAccessKey: data.accessKey.secretAccessKey,
         }
+        keySecretAcknowledged = false
         showKeySecretDialog = true
       }
       newUsername = ''
@@ -145,6 +166,7 @@
         accessKeyId: data.accessKeyId,
         secretAccessKey: data.secretAccessKey,
       }
+      keySecretAcknowledged = false
       showKeySecretDialog = true
       queryClient.invalidateQueries({ queryKey: userKeys.list() })
     },
@@ -222,6 +244,19 @@
     }
   }
 
+  function downloadKeyCsv(key: { username: string; accessKeyId: string; secretAccessKey: string }) {
+    const blob = new Blob([`accessKey,secretKey\n${key.accessKeyId},${key.secretAccessKey}\n`], {
+      type: 'text/csv',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${key.username}-${key.accessKeyId}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+    keySecretAcknowledged = true
+  }
+
   async function handleCreateUser() {
     const username = newUsername.trim()
     if (!username) return
@@ -287,6 +322,12 @@
     return arn.split('/').pop() ?? arn
   }
 
+  const POLICY_TAGS_SHOWN = 2
+
+  function policyNames(user: IamUserSummary): string[] {
+    return [...user.inlinePolicies, ...user.attachedPolicies.map(managedPolicyName)]
+  }
+
   async function handleAttachPolicy() {
     if (!attachPolicyUser || !selectedPolicyArn) return
     try {
@@ -316,73 +357,76 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between gap-4">
-    <div class="flex items-center gap-2">
-      <Users class="size-5 text-coollabs dark:text-warning" />
-      <h1>IAM Users</h1>
-    </div>
-    <Button variant="brand" onclick={() => (showCreate = true)}>
-      <Plus class="size-4" />
-      Add user
-    </Button>
-  </div>
+{#snippet iconAction(label: string, Icon: LucideIcon, onclick: () => void, danger = false)}
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <Button
+          {...props}
+          variant="ghost"
+          size="icon-xs"
+          class={danger ? 'hover:text-danger' : undefined}
+          aria-label={label}
+          {onclick}
+        >
+          <Icon />
+        </Button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content>{label}</Tooltip.Content>
+  </Tooltip.Root>
+{/snippet}
+
+<div class="flex flex-col gap-3">
+  <PageHeader title="Users">
+    {#snippet actions()}
+      <Button onclick={() => (showCreate = true)}><Plus />Create user</Button>
+    {/snippet}
+  </PageHeader>
 
   {#if usersQuery.isError}
     <Callout type="danger">
       {usersQuery.error instanceof ApiError ? usersQuery.error.message : 'Failed to load users'}
     </Callout>
-  {:else if usersQuery.isPending}
-    <p class="text-sm text-muted-foreground">Loading users…</p>
-  {:else if allUsers.length === 0}
-    <Callout type="info">
-      <div class="flex flex-col gap-3">
-        <span class="inline-flex items-center gap-2">
-          <Users class="size-4 opacity-70" />
-          No IAM users yet — create one to grant scoped console and S3 access.
-        </span>
-        <Button variant="brand" class="w-fit" onclick={() => (showCreate = true)}>
-          <Plus class="size-4" />
-          Add user
-        </Button>
-      </div>
-    </Callout>
-  {:else}
-    <div class="relative max-w-sm">
-      <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        type="search"
-        placeholder="Filter users…"
-        class="h-8 pl-8 pr-8"
-        bind:value={searchInput}
-        aria-label="Filter users by username, ID, or access key"
-      />
-      {#if searchInput}
-        <button
-          type="button"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-          onclick={() => (searchInput = '')}
-          aria-label="Clear filter"
-        >
-          <X class="size-4" />
-        </button>
-      {/if}
+  {:else if !usersQuery.isPending && allUsers.length === 0}
+    <div class="rounded-surface border border-border bg-panel">
+      <EmptyState title="No users">
+        {#snippet action()}
+          <Button size="sm" onclick={() => (showCreate = true)}><Plus />Create user</Button>
+        {/snippet}
+      </EmptyState>
     </div>
+  {:else}
+    <Toolbar>
+      <Input
+        placeholder="Filter"
+        class="w-56 max-w-full"
+        bind:value={searchInput}
+        aria-label="Filter users by name, ID or access key"
+      />
+      {#snippet end()}
+        {#if !usersQuery.isPending}
+          <span class="num text-xs text-muted-foreground">
+            {filteredUsers.length === allUsers.length
+              ? allUsers.length
+              : `${filteredUsers.length} of ${allUsers.length}`}
+            {allUsers.length === 1 ? 'user' : 'users'}
+          </span>
+        {/if}
+      {/snippet}
+    </Toolbar>
 
-    {#if filteredUsers.length === 0}
-      <Callout type="info">
-        <span class="inline-flex items-center gap-2">
-          <Search class="size-4 opacity-70" />
-          No users matching &ldquo;{searchInput.trim()}&rdquo;.
-        </span>
-      </Callout>
+    {#if !usersQuery.isPending && filteredUsers.length === 0}
+      <div class="rounded-surface border border-border bg-panel">
+        <EmptyState title="No matching users" />
+      </div>
     {:else}
       <Table.Root>
         <Table.Header>
           {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
-            <Table.Row>
+            <Table.Row class="hover:bg-transparent">
               {#each headerGroup.headers as header (header.id)}
-                <Table.Head class={header.column.id === 'actions' ? 'w-36' : undefined}>
+                <Table.Head class={columnClass[header.column.id]}>
                   {#if !header.isPlaceholder}
                     <FlexRender header={header} />
                   {/if}
@@ -392,172 +436,230 @@
           {/each}
         </Table.Header>
         <Table.Body>
-          {#each table.getRowModel().rows as row (row.id)}
-            {@const user = row.original}
-            <Table.Row>
-              <Table.Cell class="font-medium">{user.username}</Table.Cell>
-              <Table.Cell>
-                <div class="flex items-center gap-1">
-                  <span
-                    class="max-w-36 truncate font-mono text-xs text-muted-foreground"
-                    title={user.userId}
-                  >{user.userId}</span>
+          {#if usersQuery.isPending}
+            {#each Array(4) as _, index (index)}
+              <Table.Row class="hover:bg-transparent">
+                <Table.Cell><Skeleton class="w-32" /></Table.Cell>
+                <Table.Cell class={columnClass.policies}><Skeleton class="w-40" /></Table.Cell>
+                <Table.Cell><Skeleton class="ml-auto w-6" /></Table.Cell>
+                <Table.Cell class={columnClass.createdAt}><Skeleton class="w-28" /></Table.Cell>
+                <Table.Cell></Table.Cell>
+              </Table.Row>
+            {/each}
+          {:else}
+            {#each table.getRowModel().rows as row (row.id)}
+              {@const user = row.original}
+              {@const names = policyNames(user)}
+              <Table.Row
+                class="cursor-pointer"
+                data-state={selectedUsername === user.username ? 'selected' : undefined}
+                onclick={() => (selectedUsername = user.username)}
+              >
+                <Table.Cell class="font-medium">
                   <button
                     type="button"
-                    class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                    title="Copy user ID"
-                    aria-label="Copy user ID"
-                    onclick={() => copyText(user.userId, 'User ID')}
-                  >
-                    <Copy class="size-3.5" />
-                  </button>
-                </div>
-              </Table.Cell>
-              <Table.Cell>
-                {#if user.accessKeys.length === 0}
-                  <span class="text-xs text-muted-foreground">None</span>
-                {:else}
-                  <div class="flex flex-col gap-1.5">
-                    {#each user.accessKeys as key (key.accessKeyId)}
-                      <div class="flex flex-wrap items-center gap-1.5">
-                        <span class="font-mono text-xs">{key.accessKeyId}</span>
-                        {#if key.status === 'Active'}
-                          <Badge variant="success" label="Active" />
-                        {:else}
-                          <span class="text-xs text-muted-foreground">{key.status}</span>
-                        {/if}
-                        <button
-                          type="button"
-                          class="text-muted-foreground transition-colors hover:text-foreground"
-                          title="Copy access key ID"
-                          aria-label="Copy access key ID"
-                          onclick={() => copyText(key.accessKeyId, 'Access key ID')}
-                        >
-                          <Copy class="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          class="text-muted-foreground transition-colors hover:text-destructive"
-                          title="Delete access key"
-                          aria-label="Delete access key"
-                          onclick={() =>
-                            (keyToDelete = { username: user.username, accessKeyId: key.accessKeyId })}
-                        >
-                          <Trash2 class="size-3.5" />
-                        </button>
-                      </div>
+                    class="rounded-control hover:underline"
+                    onclick={() => (selectedUsername = user.username)}
+                  >{user.username}</button>
+                </Table.Cell>
+                <Table.Cell class={columnClass.policies}>
+                  <div class="flex items-center gap-1">
+                    {#each names.slice(0, POLICY_TAGS_SHOWN) as name (name)}
+                      <Tag class="max-w-40 font-mono"><span class="truncate">{name}</span></Tag>
                     {/each}
+                    {#if names.length > POLICY_TAGS_SHOWN}
+                      <span class="num text-xs text-muted-foreground">+{names.length - POLICY_TAGS_SHOWN}</span>
+                    {/if}
                   </div>
-                {/if}
-              </Table.Cell>
-              <Table.Cell>
-                {#if user.inlinePolicies.length === 0 && user.attachedPolicies.length === 0}
-                  <span class="text-xs text-muted-foreground">None</span>
-                {:else}
-                  <div class="flex flex-wrap gap-1">
-                    {#each user.inlinePolicies as policyName}
-                      <button
-                        type="button"
-                        class="inline-flex items-center gap-1 rounded-sm bg-neutral-100 px-2 py-0.5 font-mono text-xs transition-colors hover:bg-neutral-200 dark:bg-coolgray-200 dark:hover:bg-coolgray-300"
-                        onclick={() => openPolicyEditor(user, policyName)}
-                      >
-                        <FileJson class="size-3 opacity-70" />
-                        {policyName}
-                      </button>
-                    {/each}
-                    {#each user.attachedPolicies as arn}
-                      <button
-                        type="button"
-                        class="inline-flex items-center gap-1 rounded-sm border border-neutral-200 px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-destructive hover:text-destructive dark:border-coolgray-300"
-                        title={`Detach ${arn}`}
-                        onclick={() =>
-                          (detachPolicyTarget = {
-                            username: user.username,
-                            policyArn: arn,
-                            policyName: managedPolicyName(arn),
-                          })}
-                      >
-                        <Shield class="size-3 opacity-70" />
-                        {managedPolicyName(arn)}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </Table.Cell>
-              <Table.Cell class="text-muted-foreground">{formatDate(user.createdAt)}</Table.Cell>
-              <Table.Cell>
-                <div class="flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    class="text-muted-foreground transition-colors hover:text-foreground"
-                    title="Create access key"
-                    aria-label="Create access key"
-                    onclick={() => (keyToCreate = user.username)}
-                  >
-                    <KeyRound class="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    class="text-muted-foreground transition-colors hover:text-foreground"
-                    title="Attach managed policy"
-                    aria-label="Attach managed policy"
-                    onclick={() => openAttachDialog(user)}
-                  >
-                    <Shield class="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    class="text-muted-foreground transition-colors hover:text-foreground"
-                    title={user.inlinePolicies.length > 0 ? 'Edit inline policy' : 'Add inline policy'}
-                    aria-label={user.inlinePolicies.length > 0 ? 'Edit inline policy' : 'Add inline policy'}
-                    onclick={() => openPolicyEditorForUser(user)}
-                  >
-                    <FileJson class="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    class="text-muted-foreground transition-colors hover:text-destructive"
-                    title="Delete user"
-                    aria-label="Delete user"
-                    onclick={() => (userToDelete = user.username)}
-                  >
-                    <Trash2 class="size-4" />
-                  </button>
-                </div>
-              </Table.Cell>
-            </Table.Row>
-          {/each}
+                </Table.Cell>
+                <Table.Cell class="num text-right text-muted-foreground">{user.accessKeys.length}</Table.Cell>
+                <Table.Cell class="num text-muted-foreground {columnClass.createdAt}">
+                  {formatDate(user.createdAt)}
+                </Table.Cell>
+                <Table.Cell class="w-10 pr-2 pl-0 text-right">
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                      {#snippet child({ props })}
+                        <Button
+                          {...props}
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Actions for {user.username}"
+                          onclick={(e: Event) => e.stopPropagation()}
+                        ><MoreHorizontal /></Button>
+                      {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content align="end">
+                      <DropdownMenu.Item onSelect={() => (keyToCreate = user.username)}>
+                        <KeyRound />Create access key
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item onSelect={() => openAttachDialog(user)}>
+                        <Shield />Attach policy
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item onSelect={() => openPolicyEditorForUser(user)}>
+                        <FileJson />{user.inlinePolicies.length > 0 ? 'Edit inline policy' : 'Add inline policy'}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item onSelect={() => copyText(user.userId, 'User ID')}>
+                        <Copy />Copy user ID
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Separator />
+                      <DropdownMenu.Item variant="destructive" onSelect={() => (userToDelete = user.username)}>
+                        <Trash2 />Delete user
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Root>
+                </Table.Cell>
+              </Table.Row>
+            {/each}
+          {/if}
         </Table.Body>
       </Table.Root>
     {/if}
   {/if}
 </div>
 
+<SlideOver
+  open={selectedUser !== null}
+  title={selectedUser?.username ?? ''}
+  onClose={() => (selectedUsername = null)}
+>
+  {#if selectedUser}
+    {@const user = selectedUser}
+    <div class="flex flex-col gap-6">
+      <dl class="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1">
+        <dt class="text-muted-foreground">User ID</dt>
+        <dd class="flex min-w-0 items-center gap-1">
+          <span class="truncate font-mono text-xs">{user.userId}</span>
+          {@render iconAction('Copy user ID', Copy, () => copyText(user.userId, 'User ID'))}
+        </dd>
+        <dt class="text-muted-foreground">Created</dt>
+        <dd class="num">{formatDate(user.createdAt)}</dd>
+      </dl>
+
+      <section class="flex flex-col gap-2">
+        <div class="flex min-h-6 items-center justify-between gap-2">
+          <h2 class="text-sm">Access keys</h2>
+          <Button variant="secondary" size="xs" onclick={() => (keyToCreate = user.username)}>
+            <Plus />Create key
+          </Button>
+        </div>
+        {#if user.accessKeys.length === 0}
+          <div class="rounded-surface border border-border"><EmptyState title="No access keys" class="py-6" /></div>
+        {:else}
+          <ul class="rounded-surface border border-border">
+            {#each user.accessKeys as key (key.accessKeyId)}
+              <li class="flex h-8 items-center gap-2 border-b border-border pr-1 pl-3 last:border-b-0">
+                <span class="min-w-0 flex-1 truncate font-mono text-xs">{key.accessKeyId}</span>
+                <Badge
+                  variant={key.status === 'Active' ? 'success' : 'neutral'}
+                  label={key.status}
+                />
+                {@render iconAction('Copy access key ID', Copy, () => copyText(key.accessKeyId, 'Access key ID'))}
+                {@render iconAction(
+                  'Delete access key',
+                  Trash2,
+                  () => (keyToDelete = { username: user.username, accessKeyId: key.accessKeyId }),
+                  true,
+                )}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
+      <section class="flex flex-col gap-2">
+        <div class="flex min-h-6 items-center justify-between gap-2">
+          <h2 class="text-sm">Policies</h2>
+          <div class="flex items-center gap-2">
+            <Button variant="secondary" size="xs" onclick={() => openAttachDialog(user)}>
+              <Shield />Attach
+            </Button>
+            <Button variant="secondary" size="xs" onclick={() => openNewPolicyEditor(user)}>
+              <Plus />Inline policy
+            </Button>
+          </div>
+        </div>
+        {#if user.inlinePolicies.length === 0 && user.attachedPolicies.length === 0}
+          <div class="rounded-surface border border-border"><EmptyState title="No policies" class="py-6" /></div>
+        {:else}
+          <ul class="rounded-surface border border-border">
+            {#each user.inlinePolicies as policyName (policyName)}
+              <li class="flex h-8 items-center gap-2 border-b border-border pr-1 pl-3 last:border-b-0">
+                <span class="min-w-0 flex-1 truncate font-mono text-xs">{policyName}</span>
+                <span class="text-xs text-muted-foreground">Inline</span>
+                {@render iconAction('Edit inline policy', Pencil, () => openPolicyEditor(user, policyName))}
+              </li>
+            {/each}
+            {#each user.attachedPolicies as arn (arn)}
+              <li class="flex h-8 items-center gap-2 border-b border-border pr-1 pl-3 last:border-b-0">
+                <span class="min-w-0 flex-1 truncate font-mono text-xs">{managedPolicyName(arn)}</span>
+                <span class="text-xs text-muted-foreground">Managed</span>
+                {@render iconAction(
+                  'Detach policy',
+                  Unlink,
+                  () =>
+                    (detachPolicyTarget = {
+                      username: user.username,
+                      policyArn: arn,
+                      policyName: managedPolicyName(arn),
+                    }),
+                  true,
+                )}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    </div>
+  {/if}
+  {#snippet footer()}
+    {#if selectedUser}
+      {@const user = selectedUser}
+      <Button variant="destructive" class="mr-auto" onclick={() => (userToDelete = user.username)}>
+        <Trash2 />Delete user
+      </Button>
+    {/if}
+    <Button variant="secondary" onclick={() => (selectedUsername = null)}>Close</Button>
+  {/snippet}
+</SlideOver>
+
 <Dialog
   open={showCreate}
-  title="Create IAM user"
-  description="A new access key is created automatically."
+  title="Create user"
   loading={createUserMutation.isPending}
   onClose={() => { showCreate = false; newUsername = '' }}
 >
-  <form id="create-user-form" onsubmit={(e) => { e.preventDefault(); handleCreateUser() }} class="flex flex-col gap-1.5">
-    <label for="newUsername" class="text-sm font-medium text-black dark:text-white">Username</label>
+  <form
+    id="create-user-form"
+    onsubmit={(e) => { e.preventDefault(); handleCreateUser() }}
+    class="flex flex-col gap-1.5"
+  >
+    <Label for="newUsername">Username</Label>
     <Input
       bind:ref={createUserInput}
       id="newUsername"
       type="text"
       bind:value={newUsername}
       placeholder="alice"
-      class="bg-white dark:bg-base"
+      autocomplete="off"
       disabled={createUserMutation.isPending}
     />
   </form>
   {#snippet footer()}
-    <Button type="button" variant="default" disabled={createUserMutation.isPending} onclick={() => { showCreate = false; newUsername = '' }}>
+    <Button
+      variant="secondary"
+      disabled={createUserMutation.isPending}
+      onclick={() => { showCreate = false; newUsername = '' }}
+    >
       Cancel
     </Button>
-    <Button type="submit" form="create-user-form" variant="highlighted" disabled={createUserMutation.isPending || !newUsername.trim()}>
-      {createUserMutation.isPending ? 'Creating…' : 'Create user'}
+    <Button
+      type="submit"
+      form="create-user-form"
+      loading={createUserMutation.isPending}
+      disabled={!newUsername.trim()}
+    >
+      Create
     </Button>
   {/snippet}
 </Dialog>
@@ -568,36 +670,39 @@
   onClose={() => { newKeySecret = null; showKeySecretDialog = false }}
 >
   {#if newKeySecret}
-    <Callout type="warning" class="mb-4">
-      Copy the secret now — it will not be shown again.
-    </Callout>
-    <div class="space-y-3">
-      <div class="flex items-center justify-between gap-2 rounded-sm bg-neutral-50 p-2 font-mono text-sm dark:bg-coolgray-200">
-        <div class="min-w-0 truncate">
-          <span class="text-muted-foreground">Access key</span>
-          <div>{newKeySecret.accessKeyId}</div>
-        </div>
-        <Button variant="outline" size="sm" onclick={() => copyText(newKeySecret!.accessKeyId, 'Access key')}>
-          <Copy class="size-3.5" />
-          Copy
-        </Button>
-      </div>
-      <div class="flex items-center justify-between gap-2 rounded-sm bg-neutral-50 p-2 font-mono text-sm dark:bg-coolgray-200">
-        <div class="min-w-0 truncate">
-          <span class="text-muted-foreground">Secret key</span>
-          <div class="break-all">{newKeySecret.secretAccessKey}</div>
-        </div>
-        <Button variant="outline" size="sm" onclick={() => copyText(newKeySecret!.secretAccessKey, 'Secret key')}>
-          <Copy class="size-3.5" />
-          Copy
-        </Button>
-      </div>
+    <div class="flex flex-col gap-3">
+      <Callout type="warning">Secret is shown once</Callout>
+      {@render secretRow('Access key', newKeySecret.accessKeyId, () =>
+        copyText(newKeySecret!.accessKeyId, 'Access key'),
+      )}
+      {@render secretRow('Secret key', newKeySecret.secretAccessKey, async () => {
+        await copyText(newKeySecret!.secretAccessKey, 'Secret key')
+        keySecretAcknowledged = true
+      })}
     </div>
   {/if}
   {#snippet footer()}
-    <Button variant="brand" onclick={() => { newKeySecret = null; showKeySecretDialog = false }}>Done</Button>
+    {#if newKeySecret}
+      <Button variant="secondary" onclick={() => downloadKeyCsv(newKeySecret!)}><Download />Download .csv</Button>
+    {/if}
+    <Button
+      disabled={!keySecretAcknowledged}
+      onclick={() => { newKeySecret = null; showKeySecretDialog = false }}
+    >
+      Done
+    </Button>
   {/snippet}
 </Dialog>
+
+{#snippet secretRow(label: string, value: string, oncopy: () => void)}
+  <div class="flex flex-col gap-1.5">
+    <Label>{label}</Label>
+    <div class="flex items-center gap-2">
+      <code class="min-w-0 flex-1 rounded-control border border-border-strong bg-inset px-2 py-1 font-mono text-xs break-all">{value}</code>
+      <Button variant="secondary" size="xs" onclick={oncopy}><Copy />Copy</Button>
+    </div>
+  </div>
+{/snippet}
 
 <Dialog
   bind:open={showPolicyDialog}
@@ -607,8 +712,8 @@
   onClose={closePolicyDialog}
 >
   {#if policyEditor}
-    <div class="space-y-4">
-      <div class="space-y-1.5">
+    <div class="flex flex-col gap-4">
+      <div class="flex flex-col gap-1.5">
         <Label for="policyName">Policy name</Label>
         <Input id="policyName" bind:value={policyEditor.policyName} />
       </div>
@@ -634,12 +739,10 @@
           <span></span>
         {/if}
         <div class="flex gap-2">
-          <Button variant="outline" disabled={savePolicyMutation.isPending} onclick={closePolicyDialog}>
+          <Button variant="secondary" disabled={savePolicyMutation.isPending} onclick={closePolicyDialog}>
             Cancel
           </Button>
-          <Button variant="brand" onclick={savePolicy} disabled={savePolicyMutation.isPending}>
-            {savePolicyMutation.isPending ? 'Saving…' : 'Save'}
-          </Button>
+          <Button loading={savePolicyMutation.isPending} onclick={savePolicy}>Save</Button>
         </div>
       </div>
     {/if}
@@ -648,8 +751,7 @@
 
 <ConfirmDialog
   open={userToDelete !== null}
-  title="Delete user?"
-  description={userToDelete ? `Remove IAM user "${userToDelete}" and all access keys.` : ''}
+  title="Delete user {userToDelete ?? ''}"
   confirmLabel="Delete"
   confirmVariant="destructive"
   loading={deleteUserMutation.isPending}
@@ -657,6 +759,7 @@
     if (!userToDelete) return
     try {
       await deleteUserMutation.mutateAsync(userToDelete)
+      if (selectedUsername === userToDelete) selectedUsername = null
     } catch (err) {
       console.error('deleteUser failed:', err)
       toastApiError(err, 'Failed to delete user')
@@ -669,9 +772,8 @@
 
 <ConfirmDialog
   open={keyToCreate !== null}
-  title="Create access key?"
-  description={keyToCreate ? `Create a new access key for user "${keyToCreate}". The secret will only be shown once.` : ''}
-  confirmLabel="Create key"
+  title="Create access key for {keyToCreate ?? ''}"
+  confirmLabel="Create"
   loading={createKeyMutation.isPending}
   onConfirm={async () => {
     if (!keyToCreate) return
@@ -690,8 +792,8 @@
 
 <ConfirmDialog
   open={keyToDelete !== null}
-  title="Delete access key?"
-  description={keyToDelete ? `Revoke key ${keyToDelete.accessKeyId}?` : ''}
+  title="Delete access key"
+  description={keyToDelete?.accessKeyId ?? ''}
   confirmLabel="Delete"
   confirmVariant="destructive"
   loading={deleteKeyMutation.isPending}
@@ -711,8 +813,8 @@
 
 <ConfirmDialog
   open={policyToDelete !== null}
-  title="Delete inline policy?"
-  description={policyToDelete ? `Remove policy "${policyToDelete.policyName}"?` : ''}
+  title="Delete inline policy"
+  description={policyToDelete?.policyName ?? ''}
   confirmLabel="Delete"
   confirmVariant="destructive"
   loading={deletePolicyMutation.isPending}
@@ -733,59 +835,49 @@
 
 <Dialog
   bind:open={showAttachDialog}
-  title="Attach managed policy"
-  description={attachPolicyUser ? `Attach a managed policy to user "${attachPolicyUser.username}".` : ''}
+  title={attachPolicyUser ? `Attach policy to ${attachPolicyUser.username}` : 'Attach policy'}
   loading={attachPolicyMutation.isPending}
   onClose={closeAttachDialog}
 >
   {#if attachPolicyUser}
     {#if policiesQuery.isPending}
-      <p class="text-sm text-muted-foreground">Loading policies…</p>
+      <Skeleton class="h-7 w-full" />
     {:else if policiesQuery.isError}
       <Callout type="danger">
         {policiesQuery.error instanceof ApiError ? policiesQuery.error.message : 'Failed to load policies'}
       </Callout>
     {:else if attachablePolicies.length === 0}
-      <Callout type="info">
-        No managed policies available to attach. Create one on the Policies page first.
-      </Callout>
+      <p class="text-muted-foreground">No managed policies to attach</p>
     {:else}
-      <div class="space-y-1.5">
-        <Label for="attachPolicySelect">Policy</Label>
-        <select
-          id="attachPolicySelect"
+      <div class="flex flex-col gap-1.5">
+        <Label>Policy</Label>
+        <Select
           bind:value={selectedPolicyArn}
-          class="input-cool h-8 w-full rounded-sm bg-background px-3 text-sm"
+          aria-label="Policy"
+          placeholder="Select a policy"
           disabled={attachPolicyMutation.isPending}
-        >
-          <option value="">Select a policy…</option>
-          {#each attachablePolicies as policy (policy.arn)}
-            <option value={policy.arn}>{policy.name}</option>
-          {/each}
-        </select>
+          options={attachablePolicies.map((policy) => ({ value: policy.arn, label: policy.name }))}
+        />
       </div>
     {/if}
   {/if}
   {#snippet footer()}
-    <Button variant="outline" disabled={attachPolicyMutation.isPending} onclick={closeAttachDialog}>
+    <Button variant="secondary" disabled={attachPolicyMutation.isPending} onclick={closeAttachDialog}>
       Cancel
     </Button>
     <Button
-      variant="brand"
-      disabled={attachPolicyMutation.isPending || !selectedPolicyArn}
+      loading={attachPolicyMutation.isPending}
+      disabled={!selectedPolicyArn}
       onclick={handleAttachPolicy}
     >
-      {attachPolicyMutation.isPending ? 'Attaching…' : 'Attach policy'}
+      Attach
     </Button>
   {/snippet}
 </Dialog>
 
 <ConfirmDialog
   open={detachPolicyTarget !== null}
-  title="Detach managed policy?"
-  description={detachPolicyTarget
-    ? `Remove policy "${detachPolicyTarget.policyName}" from user "${detachPolicyTarget.username}"?`
-    : ''}
+  title="Detach {detachPolicyTarget?.policyName ?? ''} from {detachPolicyTarget?.username ?? ''}"
   confirmLabel="Detach"
   confirmVariant="destructive"
   loading={detachPolicyMutation.isPending}

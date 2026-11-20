@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { LucideIcon } from '$lib/lucide'
+  import * as Tooltip from '$lib/components/ui/tooltip'
+  import { cn } from '$lib/utils'
 
   interface Props {
     label: string
@@ -10,37 +12,31 @@
     onNavigate?: () => void
   }
 
-  let {
-    label,
-    icon: Icon,
-    href,
-    active = false,
-    collapsed = false,
-    onNavigate,
-  }: Props = $props()
+  let { label, icon: Icon, href, active = false, collapsed = false, onNavigate }: Props = $props()
+
+  const linkClass = $derived(
+    cn(
+      'flex h-8 w-full items-center gap-2.5 rounded-control text-sm transition-colors',
+      collapsed ? 'justify-center' : 'px-2',
+      active ? 'bg-selected text-foreground' : 'text-muted-foreground hover:bg-hover hover:text-foreground',
+    ),
+  )
 </script>
 
-<a
-  {href}
-  onclick={onNavigate}
-  class="flex min-h-7 w-full items-center rounded-sm py-1 text-left text-sm font-medium transition-colors overflow-hidden"
-  class:gap-3={!collapsed}
-  class:px-2={!collapsed}
-  class:justify-center={collapsed}
-  class:size-8={collapsed}
-  class:bg-neutral-200={active}
-  class:text-black={active}
-  class:dark:bg-coolgray-200={active}
-  class:dark:text-warning={active}
-  class:hover:bg-neutral-300={active}
-  class:dark:hover:bg-coolgray-100={active}
-  class:text-muted-foreground={!active}
-  class:hover:bg-muted={!active}
-  aria-current={active ? 'page' : undefined}
-  title={label}
->
-  <Icon class="size-4 shrink-0" aria-hidden="true" />
-  {#if !collapsed}
-    <span class="whitespace-nowrap">{label}</span>
-  {/if}
-</a>
+{#if collapsed}
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <a {...props} {href} onclick={onNavigate} class={linkClass} aria-label={label} aria-current={active ? 'page' : undefined}>
+          <Icon class="size-4 shrink-0" aria-hidden="true" />
+        </a>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content side="right">{label}</Tooltip.Content>
+  </Tooltip.Root>
+{:else}
+  <a {href} onclick={onNavigate} class={linkClass} aria-current={active ? 'page' : undefined}>
+    <Icon class="size-4 shrink-0" aria-hidden="true" />
+    <span class="truncate">{label}</span>
+  </a>
+{/if}

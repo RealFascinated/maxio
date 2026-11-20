@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
   import { Dialog } from '$lib/components/ui/dialog'
+  import { SegmentedControl } from '$lib/components/ui/segmented-control'
+  import { Skeleton } from '$lib/components/ui/skeleton'
   import Download from 'lucide-svelte/icons/download'
   import { downloadUrl as objectDownloadUrl } from '$lib/api/objects'
   import { notifyUnauthorized, isSessionExpiredError } from '$lib/api/session'
@@ -13,9 +15,10 @@
     objectKey: string
     contentType: string
     size: number
-    onClose: () => void
+    inline?: boolean
+    onClose?: () => void
   }
-  let { bucket, objectKey, contentType, size, onClose }: Props = $props()
+  let { bucket, objectKey, contentType, size, inline = false, onClose }: Props = $props()
 
   const kind: PreviewKind = $derived(previewKind(contentType, objectKey))
   const name = $derived(displayName(objectKey))
@@ -41,7 +44,7 @@
       const res = await fetch(downloadUrl, { credentials: 'same-origin' })
       if (!res.ok) {
         if (res.status === 401 && notifyUnauthorized(downloadUrl)) return
-        throw new Error(`Request failed (${res.status})`)
+        throw new Error(`Request failed: ${res.status}`)
       }
       if (kind === 'text') {
         let text = await res.text()
@@ -64,43 +67,60 @@
 
   onMount(() => {
     load()
-    document.body.classList.add('preview-open')
+    if (!inline) document.body.classList.add('preview-open')
     return () => {
-      document.body.classList.remove('preview-open')
+      if (!inline) document.body.classList.remove('preview-open')
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
   })
 </script>
 
-<Dialog open size="lg" title={name} description={contentType || 'unknown type'} {onClose}>
+{#snippet body()}
   {#if loading}
-    <p class="text-sm text-neutral-600 dark:text-neutral-400">Loading preview…</p>
+    <Skeleton class="h-48 w-full" />
   {:else if error}
-    <p class="text-sm text-red-600 dark:text-red-400">{error}</p>
+    <p class="text-sm text-danger">{error}</p>
   {:else if kind === 'unsupported'}
-    <p class="text-sm text-neutral-600 dark:text-neutral-400">No preview available for this file type.</p>
+    <p class="text-sm text-muted-foreground">No preview for this file type</p>
   {:else if tooLarge}
-    <p class="text-sm text-neutral-600 dark:text-neutral-400">File is too large to preview. Download it to view.</p>
+    <p class="text-sm text-muted-foreground">Too large to preview</p>
   {:else if kind === 'image' && blobUrl}
-    <img src={blobUrl} alt={name} class="mx-auto max-h-[70vh] max-w-full object-contain" />
+    <img src={blobUrl} alt={name} class="mx-auto {inline ? 'max-h-64' : 'max-h-[70vh]'} max-w-full object-contain" />
   {:else if kind === 'pdf' && blobUrl}
-    <iframe src={blobUrl} title={name} class="h-[70vh] w-full border-0"></iframe>
+    <iframe src={blobUrl} title={name} class="h-[70vh] w-full rounded-control border border-border"></iframe>
   {:else if kind === 'text'}
-    {#if truncated}
-      <p class="mb-2 text-xs text-amber-600 dark:text-amber-400">Preview truncated to the first {Math.round(TEXT_PREVIEW_CAP / 1024)} KB.</p>
-    {/if}
-    {#if prettyJson}
-      <div class="mb-2 flex justify-end">
-        <Button variant="outline" size="sm" onclick={() => (showOriginal = !showOriginal)}>
-          {showOriginal ? 'View formatted' : 'View original'}
-        </Button>
+    {#if truncated || prettyJson}
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <span class="num text-xs text-warning">
+          {#if truncated}Truncated to first {Math.round(TEXT_PREVIEW_CAP / 1024)} KB{/if}
+        </span>
+        {#if prettyJson}
+          <SegmentedControl
+            size="xs"
+            aria-label="JSON view"
+            options={[
+              { value: 'formatted', label: 'Formatted' },
+              { value: 'original', label: 'Original' },
+            ]}
+            value={showOriginal ? 'original' : 'formatted'}
+            onValueChange={(next) => (showOriginal = next === 'original')}
+          />
+        {/if}
       </div>
     {/if}
-    <pre class="select-text max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-sm bg-neutral-50 p-3 font-mono text-xs text-neutral-800 dark:bg-coolgray-200 dark:text-neutral-200">{displayText}</pre>
+    <pre class="select-text max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-inset p-3 font-mono text-xs">{displayText}</pre>
   {/if}
-  {#snippet footer()}
-    <Button href={downloadUrl} variant="default">
-      <Download class="size-4 mr-1" /> Download
-    </Button>
-  {/snippet}
-</Dialog>
+{/snippet}
+
+{#if inline}
+  {@render body()}
+{:else}
+  <Dialog open size="lg" title={name} {onClose}>
+    {@render body()}
+    {#snippet footer()}
+      <Button href={downloadUrl} variant="secondary">
+        <Download /> Download
+      </Button>
+    {/snippet}
+  </Dialog>
+{/if}

@@ -3,17 +3,15 @@
 	import type { HTMLAttributes } from "svelte/elements";
 	import { type VariantProps, tv } from "tailwind-variants";
 
+	/** Flat neutral surface; status shows only as the dot/icon colour. */
 	export const calloutVariants = tv({
-		base: "relative flex gap-3 rounded-sm border border-neutral-200 bg-white p-3 text-sm text-black dark:border-coolgray-300 dark:bg-coolgray-100 dark:text-white",
+		base: "flex items-start gap-2 rounded-surface border border-border bg-panel px-3 py-2 text-sm text-foreground",
 		variants: {
 			type: {
-				warning:
-					"bg-warning-50 border-warning-300 dark:bg-warning-900/30 dark:border-warning-800 [&_.callout-title]:text-warning-800 [&_.callout-body]:text-warning-700 dark:[&_.callout-title]:text-warning-300 dark:[&_.callout-body]:text-warning-200 [&_.callout-icon]:text-warning-700 dark:[&_.callout-icon]:text-warning-300",
-				danger:
-					"bg-red-50 border-red-300 dark:bg-red-900/30 dark:border-red-800 [&_.callout-title]:text-red-800 [&_.callout-body]:text-red-700 dark:[&_.callout-title]:text-red-300 dark:[&_.callout-body]:text-red-200 [&_.callout-icon]:text-red-700 dark:[&_.callout-icon]:text-red-300",
-				info: "bg-blue-50 border-blue-300 dark:bg-blue-900/30 dark:border-blue-800 [&_.callout-title]:text-blue-800 [&_.callout-body]:text-blue-700 dark:[&_.callout-title]:text-blue-300 dark:[&_.callout-body]:text-blue-200 [&_.callout-icon]:text-blue-700 dark:[&_.callout-icon]:text-blue-300",
-				success:
-					"bg-green-50 border-green-300 dark:bg-green-900/30 dark:border-green-800 [&_.callout-title]:text-green-800 [&_.callout-body]:text-green-700 dark:[&_.callout-title]:text-green-300 dark:[&_.callout-body]:text-green-200 [&_.callout-icon]:text-green-700 dark:[&_.callout-icon]:text-green-300",
+				warning: "[&_.callout-icon]:text-warning",
+				danger: "[&_.callout-icon]:text-danger",
+				info: "[&_.callout-icon]:text-info",
+				success: "[&_.callout-icon]:text-success",
 			},
 		},
 		defaultVariants: {
@@ -27,6 +25,13 @@
 		type?: CalloutType;
 		title?: string;
 		icon?: import("svelte").Snippet;
+	};
+
+	const dotColor = {
+		warning: "bg-warning",
+		danger: "bg-danger",
+		info: "bg-info",
+		success: "bg-success",
 	};
 </script>
 
@@ -45,16 +50,19 @@
 <div
 	bind:this={ref}
 	data-slot="callout"
+	role={type === "danger" || type === "warning" ? "alert" : "status"}
 	class={cn(calloutVariants({ type }), className)}
 	{...restProps}
 >
 	{#if icon}
-		<div class="callout-icon shrink-0">{@render icon()}</div>
+		<div class="callout-icon mt-px shrink-0 [&_svg]:size-4">{@render icon()}</div>
+	{:else}
+		<span class="mt-[7px] size-2 shrink-0 rounded-full {dotColor[type ?? 'info']}" aria-hidden="true"></span>
 	{/if}
-	<div class="flex-1 text-sm">
+	<div class="min-w-0 flex-1">
 		{#if title}
-			<div class="callout-title font-bold mb-1">{title}</div>
+			<div class="callout-title font-medium">{title}</div>
 		{/if}
-		<div class="callout-body">{@render children?.()}</div>
+		<div class="callout-body text-muted-foreground">{@render children?.()}</div>
 	</div>
 </div>

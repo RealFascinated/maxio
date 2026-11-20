@@ -150,7 +150,7 @@ async fn http_metrics_middleware(
     let elapsed = start.elapsed();
     state
         .metrics
-        .record_http(&method, &route, response.status().as_str(), elapsed);
+        .record_http(&method, &route, response.status(), elapsed);
     crate::perf::log(
         "http_request",
         elapsed,

@@ -263,3 +263,35 @@ diesel::allow_tables_to_appear_in_same_query!(
     iam_user_inline_policies,
     iam_user_policy_attachments,
 );
+
+diesel::table! {
+    metrics_samples (bucket_start) {
+        bucket_start -> Timestamptz,
+        read_bps -> Float8,
+        write_bps -> Float8,
+        read_iops -> Float8,
+        write_iops -> Float8,
+        meta_iops -> Float8,
+        req_per_sec -> Float8,
+        req_2xx -> Float8,
+        req_3xx -> Float8,
+        req_4xx -> Float8,
+        req_5xx -> Float8,
+        active_clients -> Float8,
+        read_lat_p50 -> Nullable<Float8>,
+        read_lat_p95 -> Nullable<Float8>,
+        read_lat_p99 -> Nullable<Float8>,
+        write_lat_p50 -> Nullable<Float8>,
+        write_lat_p95 -> Nullable<Float8>,
+        write_lat_p99 -> Nullable<Float8>,
+        http_lat_p50 -> Nullable<Float8>,
+        http_lat_p95 -> Nullable<Float8>,
+        http_lat_p99 -> Nullable<Float8>,
+        cpu_percent -> Nullable<Float8>,
+        rss_bytes -> Nullable<Float8>,
+        open_fds -> Nullable<Float8>,
+        storage_bytes -> Nullable<Float8>,
+        object_count -> Nullable<Float8>,
+        cache_hit_rates -> Jsonb,
+    }
+}

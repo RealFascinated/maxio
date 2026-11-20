@@ -55,6 +55,7 @@ export const policyKeys = {
 export const metricsKeys = {
   all: ['metrics'] as const,
   snapshot: () => [...metricsKeys.all, 'snapshot'] as const,
+  history: (range: string) => [...metricsKeys.all, 'history', range] as const,
 }
 
 export const maintenanceKeys = {

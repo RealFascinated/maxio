@@ -21,6 +21,8 @@ mod iam;
 mod listing;
 #[path = "unit/metrics.rs"]
 mod metrics;
+#[path = "unit/metrics_history.rs"]
+mod metrics_history;
 #[path = "unit/object.rs"]
 mod object;
 #[path = "unit/signature_v4.rs"]

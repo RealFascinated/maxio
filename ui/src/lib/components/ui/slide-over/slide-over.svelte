@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Dialog as DialogPrimitive } from 'bits-ui'
   import { Button } from '$lib/components/ui/button'
   import X from 'lucide-svelte/icons/x'
 
@@ -11,80 +12,48 @@
     footer?: import('svelte').Snippet
   }
 
-  let {
-    open = $bindable(false),
-    title,
-    description,
-    onClose,
-    children,
-    footer,
-  }: Props = $props()
+  let { open = $bindable(false), title, description, onClose, children, footer }: Props = $props()
 
-  function close() {
+  function handleOpenChange(next: boolean) {
+    if (next) return
     if (onClose) onClose()
     else open = false
   }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (!open) return
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      close()
-    }
-  }
-
-  $effect(() => {
-    if (!open) return
-    document.body.classList.add('overflow-hidden')
-    return () => document.body.classList.remove('overflow-hidden')
-  })
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
-
-{#if open}
-  <button
-    type="button"
-    class="fixed inset-0 z-40 cursor-default bg-black/60"
-    aria-label="Close panel"
-    onclick={close}
-  ></button>
-  <div class="fixed inset-y-0 right-0 z-50 flex max-w-full pl-10">
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="slide-over-title"
-      tabindex="-1"
-      class="flex h-full w-screen max-w-xl flex-col border-l border-neutral-200 bg-neutral-50 shadow-lg dark:border-coolgray-200 dark:bg-base"
+<DialogPrimitive.Root {open} onOpenChange={handleOpenChange}>
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Overlay
+      class="fixed inset-0 z-50 bg-black/40 data-[state=open]:animate-[ui-fade-in_120ms_ease-out]"
+    />
+    <DialogPrimitive.Content
+      class="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-border-strong bg-panel shadow-pop outline-none data-[state=open]:animate-[ui-slide-in-right_160ms_ease-out]"
     >
-      <div class="flex shrink-0 items-start justify-between gap-4 border-b border-neutral-200 p-6 dark:border-coolgray-200">
-        <div class="min-w-0 flex-1">
-          <h2 id="slide-over-title" class="truncate text-base font-bold text-black dark:text-white">{title}</h2>
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+        <div class="flex min-w-0 items-baseline gap-2">
+          <DialogPrimitive.Title class="truncate text-sm font-semibold">{title}</DialogPrimitive.Title>
           {#if description}
-            <p class="mt-1 truncate text-sm text-neutral-600 dark:text-neutral-400">{description}</p>
+            <DialogPrimitive.Description class="truncate text-xs text-muted-foreground">
+              {description}
+            </DialogPrimitive.Description>
           {/if}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          class="shrink-0"
-          aria-label="Close panel"
-          onclick={close}
-        >
-          <X class="size-5" />
-        </Button>
+        <DialogPrimitive.Close>
+          {#snippet child({ props })}
+            <Button {...props} variant="ghost" size="icon-xs" aria-label="Close panel"><X /></Button>
+          {/snippet}
+        </DialogPrimitive.Close>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-y-auto p-6 text-sm text-neutral-700 dark:text-neutral-300">
+      <div class="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
         {@render children?.()}
       </div>
 
       {#if footer}
-        <div class="flex shrink-0 flex-wrap justify-end gap-2 border-t border-neutral-200 p-6 dark:border-coolgray-200">
+        <div class="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border bg-inset px-4 py-2.5">
           {@render footer()}
         </div>
       {/if}
-    </div>
-  </div>
-{/if}
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+</DialogPrimitive.Root>

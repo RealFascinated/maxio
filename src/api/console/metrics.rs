@@ -1,11 +1,15 @@
 use axum::{
     Json,
-    extract::{Extension, State},
+    extract::{Extension, Query, State},
     response::IntoResponse,
 };
+use serde::Deserialize;
 
+use crate::metrics::BucketUsageSnapshot;
+use crate::metrics::history::HistoryRange;
 use crate::server::AppState;
 
+use super::error::ConsoleError;
 use super::session::ConsoleSession;
 
 async fn visible_bucket_stats(
@@ -34,8 +38,40 @@ pub async fn get_metrics_api(
     Extension(session): Extension<ConsoleSession>,
 ) -> impl IntoResponse {
     let mut snapshot = state.metrics.snapshot();
-    snapshot.storage_totals = crate::metrics::StorageTotalsSnapshot::from_bucket_stats(
-        &visible_bucket_stats(&state, &session).await,
-    );
+    let mut stats = visible_bucket_stats(&state, &session).await;
+    snapshot.storage_totals = crate::metrics::StorageTotalsSnapshot::from_bucket_stats(&stats);
+    stats.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    snapshot.buckets = stats
+        .into_iter()
+        .map(|s| BucketUsageSnapshot {
+            name: s.name,
+            object_count: s.object_count,
+            size_bytes: s.size_bytes,
+        })
+        .collect();
     Json(snapshot)
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    range: Option<String>,
+}
+
+/// Root-only (registered under the admin routes): history is server-wide.
+pub async fn get_metrics_history_api(
+    State(state): State<AppState>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<impl IntoResponse, ConsoleError> {
+    let range = query.range.as_deref().unwrap_or("1h");
+    let range = HistoryRange::parse(range).ok_or_else(|| {
+        ConsoleError::BadRequest("range must be one of 15m, 1h, 6h, 24h, 7d, 30d".to_string())
+    })?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    Ok(Json(
+        state
+            .metrics
+            .history()
+            .query(&state.db_pool, range, now_ms)
+            .await,
+    ))
 }

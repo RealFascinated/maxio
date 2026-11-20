@@ -4,37 +4,37 @@
 	import { type VariantProps, tv } from "tailwind-variants";
 
 	export const buttonVariants = tv({
-		base: "inline-flex min-w-fit shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-sm border-2 border-transparent bg-clip-padding px-2 text-sm font-medium normal-case outline-none transition-colors select-none disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-100 disabled:border-neutral-300 disabled:bg-neutral-100 disabled:text-neutral-600 dark:disabled:border-coolgray-300 dark:disabled:bg-coolgray-100/60 dark:disabled:text-neutral-400 aria-disabled:pointer-events-none aria-disabled:opacity-100 aria-disabled:border-neutral-300 aria-disabled:bg-neutral-100 aria-disabled:text-neutral-600 dark:aria-disabled:border-coolgray-300 dark:aria-disabled:bg-coolgray-100/60 dark:aria-disabled:text-neutral-400 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:focus-visible:ring-warning focus-visible:ring-offset-2 focus-visible:ring-offset-background dark:focus-visible:ring-offset-base",
+		base: "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-control border border-transparent text-sm font-medium outline-none transition-colors select-none disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
 		variants: {
 			variant: {
-				default:
-					"bg-white text-black border-neutral-200 hover:bg-neutral-100 dark:bg-coolgray-100 dark:text-white dark:border-coolgray-300 dark:hover:bg-coolgray-200",
-				highlighted:
-					"text-coollabs-200 bg-coollabs-50 border-coollabs hover:bg-coollabs hover:text-white dark:text-white dark:bg-coollabs/20 dark:border-coollabs-100 dark:hover:bg-coollabs-100 dark:hover:text-white",
-				destructive:
-					"text-red-800 bg-red-50 border-red-300 hover:bg-error hover:text-white dark:text-red-300 dark:bg-red-900/30 dark:border-red-800 dark:hover:bg-red-800 dark:hover:text-white",
+				default: "bg-accent text-accent-foreground hover:bg-accent-hover",
+				secondary: "bg-raised text-foreground border-border hover:bg-hover",
 				outline:
-					"bg-transparent text-black border-neutral-200 hover:bg-neutral-100 dark:text-white dark:border-coolgray-300 dark:hover:bg-coolgray-200",
-				secondary:
-					"bg-neutral-100 text-black border-neutral-200 hover:bg-neutral-200 dark:bg-coolgray-200 dark:text-white dark:border-coolgray-300 dark:hover:bg-coolgray-300",
-				ghost:
-					"border-transparent text-black hover:bg-neutral-100 dark:text-white dark:hover:bg-coolgray-200",
-				link: "border-transparent text-coollabs dark:text-warning underline-offset-4 hover:underline",
-				brand:
-					"bg-coollabs text-white border-coollabs hover:bg-coollabs-100 dark:bg-coollabs/90 dark:border-coollabs-100 dark:hover:bg-coollabs-100",
+					"border-border-strong bg-transparent text-foreground hover:bg-hover",
+				ghost: "text-muted-foreground hover:bg-hover hover:text-foreground",
+				destructive:
+					"bg-danger text-white hover:bg-danger/85",
+				link: "h-auto px-0 text-accent underline-offset-4 hover:underline",
+				/** @deprecated alias of default, kept until pages are migrated */
+				highlighted: "bg-accent text-accent-foreground hover:bg-accent-hover",
+				/** @deprecated alias of default, kept until pages are migrated */
+				brand: "bg-accent text-accent-foreground hover:bg-accent-hover",
 			},
 			size: {
-				default: "h-8 has-[>svg]:px-2",
-				sm: "h-8 px-2 text-sm has-[>svg]:px-2",
-				lg: "h-10 px-3 has-[>svg]:px-3",
-				icon: "size-8",
-				"icon-sm": "size-8",
-				"icon-lg": "size-10",
+				xs: "h-6 px-2 text-xs",
+				sm: "h-6 px-2 text-xs",
+				md: "h-7 px-2.5",
+				default: "h-7 px-2.5",
+				lg: "h-8 px-3",
+				icon: "size-7",
+				"icon-xs": "size-6",
+				"icon-sm": "size-6",
+				"icon-lg": "size-8",
 			},
 		},
 		defaultVariants: {
 			variant: "default",
-			size: "default",
+			size: "md",
 		},
 	});
 
@@ -45,21 +45,28 @@
 		WithElementRef<HTMLAnchorAttributes> & {
 			variant?: ButtonVariant;
 			size?: ButtonSize;
+			/** Shows a spinner and disables the button. */
+			loading?: boolean;
 		};
 </script>
 
 <script lang="ts">
+	import Loader from "lucide-svelte/icons/loader-circle";
+
 	let {
 		class: className,
 		variant = "default",
-		size = "default",
+		size = "md",
 		ref = $bindable(null),
 		href = undefined,
 		type = "button",
 		disabled,
+		loading = false,
 		children,
 		...restProps
 	}: ButtonProps = $props();
+
+	const isDisabled = $derived(disabled || loading);
 </script>
 
 {#if href}
@@ -67,12 +74,13 @@
 		bind:this={ref}
 		data-slot="button"
 		class={cn(buttonVariants({ variant, size }), className)}
-		href={disabled ? undefined : href}
-		aria-disabled={disabled}
-		role={disabled ? "link" : undefined}
-		tabindex={disabled ? -1 : undefined}
+		href={isDisabled ? undefined : href}
+		aria-disabled={isDisabled}
+		role={isDisabled ? "link" : undefined}
+		tabindex={isDisabled ? -1 : undefined}
 		{...restProps}
 	>
+		{#if loading}<Loader class="animate-spin" />{/if}
 		{@render children?.()}
 	</a>
 {:else}
@@ -81,9 +89,11 @@
 		data-slot="button"
 		class={cn(buttonVariants({ variant, size }), className)}
 		{type}
-		{disabled}
+		disabled={isDisabled}
+		aria-busy={loading || undefined}
 		{...restProps}
 	>
+		{#if loading}<Loader class="animate-spin" />{/if}
 		{@render children?.()}
 	</button>
 {/if}

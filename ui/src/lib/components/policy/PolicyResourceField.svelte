@@ -1,7 +1,9 @@
 <script lang="ts">
+  import X from 'lucide-svelte/icons/x'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
-  import { Label } from '$lib/components/ui/label'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { Tag } from '$lib/components/ui/tag'
   import { ALL_BUCKETS_ARN, bucketArn, objectArn } from '$lib/policy/resources'
 
   interface Props {
@@ -75,37 +77,35 @@
   }
 </script>
 
-<div class="space-y-3">
+<div class="flex min-w-0 flex-col gap-2">
   {#if resources.length}
     <div class="flex flex-wrap gap-1.5">
       {#each resources as resource (resource)}
-        <span
-          class="inline-flex max-w-full items-center gap-1 rounded-sm border-2 border-border bg-muted/40 px-2 py-0.5 font-mono text-xs"
-        >
-          <span class="truncate" title={resource}>{resource}</span>
+        <Tag class="h-auto min-h-5 max-w-full gap-1 py-0.5 font-mono break-all">
+          {resource}
           {#if !readonly}
             <button
               type="button"
-              class="shrink-0 text-muted-foreground hover:text-foreground"
-              aria-label={`Remove ${resource}`}
+              class="inline-flex size-4 shrink-0 items-center justify-center rounded-control hover:text-foreground"
+              aria-label={`Remove resource ${resource}`}
               onclick={() => removeResource(resource)}
             >
-              ×
+              <X class="size-3" />
             </button>
           {/if}
-        </span>
+        </Tag>
       {/each}
     </div>
   {/if}
 
   {#if !readonly}
-    <div class="space-y-2">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <Label class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your buckets</Label>
+    <div class="flex flex-col">
+      <div class="flex h-8 items-center justify-between gap-2 border-b border-border">
+        <span class="text-xs font-medium text-muted-foreground">Buckets</span>
         <Button
           type="button"
-          variant={resources.includes(ALL_BUCKETS_ARN) ? 'highlighted' : 'outline'}
-          size="sm"
+          variant={resources.includes(ALL_BUCKETS_ARN) ? 'default' : 'outline'}
+          size="xs"
           onclick={() => toggleResource(ALL_BUCKETS_ARN)}
         >
           All buckets
@@ -113,37 +113,38 @@
       </div>
 
       {#if bucketsLoading}
-        <p class="text-sm text-muted-foreground">Loading buckets…</p>
+        <div class="flex flex-col gap-2 py-2">
+          <Skeleton class="w-1/3" />
+          <Skeleton class="w-1/2" />
+        </div>
       {:else if accessibleBuckets.length === 0}
-        <p class="text-sm text-muted-foreground">No buckets available.</p>
+        <p class="py-2 text-sm text-muted-foreground">No buckets</p>
       {:else}
-        <div class="max-h-48 overflow-y-auto rounded-sm border-2 border-border">
+        <div class="max-h-48 divide-y divide-border overflow-y-auto">
           {#each accessibleBuckets as name (name)}
-            <div
-              class="flex items-center justify-between gap-2 border-b border-border px-3 py-2 last:border-b-0"
-            >
-              <span class="min-w-0 truncate text-sm font-medium" title={name}>{name}</span>
-              <div class="flex shrink-0 flex-wrap justify-end gap-1">
+            <div class="flex h-8 items-center justify-between gap-2">
+              <span class="min-w-0 truncate text-sm">{name}</span>
+              <div class="flex shrink-0 gap-1">
                 <Button
                   type="button"
-                  variant={hasBucketArn(name) ? 'highlighted' : 'outline'}
-                  size="sm"
+                  variant={hasBucketArn(name) ? 'default' : 'outline'}
+                  size="xs"
                   onclick={() => toggleResource(bucketArn(name))}
                 >
                   Bucket
                 </Button>
                 <Button
                   type="button"
-                  variant={hasObjectArn(name) ? 'highlighted' : 'outline'}
-                  size="sm"
+                  variant={hasObjectArn(name) ? 'default' : 'outline'}
+                  size="xs"
                   onclick={() => toggleResource(objectArn(name))}
                 >
                   Objects
                 </Button>
                 <Button
                   type="button"
-                  variant={hasBucketArn(name) && hasObjectArn(name) ? 'highlighted' : 'ghost'}
-                  size="sm"
+                  variant={hasBucketArn(name) && hasObjectArn(name) ? 'default' : 'outline'}
+                  size="xs"
                   onclick={() => toggleBucketPair(name)}
                 >
                   Both
@@ -160,10 +161,11 @@
         type="text"
         placeholder="arn:aws:s3:::bucket/*"
         class="font-mono text-xs"
+        aria-label="Custom resource"
         bind:value={customResource}
         onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), addCustom())}
       />
-      <Button type="button" variant="outline" size="sm" onclick={addCustom}>Add</Button>
+      <Button type="button" variant="secondary" onclick={addCustom}>Add</Button>
     </div>
   {/if}
 </div>

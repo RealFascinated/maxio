@@ -1,133 +1,75 @@
 <script lang="ts">
   import { base } from '$app/paths'
-  import ChevronLeft from 'lucide-svelte/icons/chevron-left'
-  import LogOut from 'lucide-svelte/icons/log-out'
+  import PanelLeft from 'lucide-svelte/icons/panel-left'
   import SidebarNavItem from '$lib/components/app/sidebar/SidebarNavItem.svelte'
-  import SidebarThemeControl from '$lib/components/app/sidebar/SidebarThemeControl.svelte'
-  import SidebarUserInfo from '$lib/components/app/sidebar/SidebarUserInfo.svelte'
   import type { SidebarNavEntry } from '$lib/components/app/sidebar/navigation'
-  import type { ThemeMode } from '$lib/components/app/sidebar/theme'
+  import * as Tooltip from '$lib/components/ui/tooltip'
+  import { cn } from '$lib/utils'
 
   interface Props {
     collapsed: boolean
     navItems: SidebarNavEntry[]
-    themeMode: ThemeMode
-    username?: string
-    isRoot?: boolean
-    variant?: 'inline' | 'drawer'
     class?: string
     onToggleCollapsed: () => void
-    onThemeChange: (mode: ThemeMode) => void
-    onCycleTheme: () => void
     onGoHome: () => void
-    onLogout: () => void
   }
 
-  let {
-    collapsed,
-    navItems,
-    themeMode,
-    username,
-    isRoot = false,
-    variant = 'inline',
-    class: className = '',
-    onToggleCollapsed,
-    onThemeChange,
-    onCycleTheme,
-    onGoHome,
-    onLogout,
-  }: Props = $props()
+  let { collapsed, navItems, class: className = '', onToggleCollapsed, onGoHome }: Props = $props()
 
-  const isDrawer = $derived(variant === 'drawer')
-  const isCollapsed = $derived(isDrawer ? false : collapsed)
+  const mainItems = $derived(navItems.filter((item) => item.placement === 'main'))
+  const footerItems = $derived(navItems.filter((item) => item.placement === 'footer'))
 </script>
 
 <nav
-  class="relative flex flex-col border-r bg-sidebar-background transition-[width] duration-200 {className}"
-  class:w-56={isDrawer}
-  class:w-64={!isDrawer && !isCollapsed}
-  class:w-16={!isDrawer && isCollapsed}
-  class:h-full={isDrawer}
-  style="border-color: var(--cool-sidebar-border);"
+  class={cn(
+    'flex shrink-0 flex-col border-r border-border bg-panel',
+    collapsed ? 'w-12' : 'w-52',
+    className,
+  )}
   aria-label="Main navigation"
 >
-  {#if !isDrawer}
-    <button
-      type="button"
-      onclick={onToggleCollapsed}
-      class="absolute top-8 -right-3 z-10 hidden size-6 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:focus-visible:ring-warning focus-visible:ring-offset-2 dark:focus-visible:ring-offset-base lg:flex"
-      style="border-color: var(--cool-sidebar-border);"
-      title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      aria-expanded={!isCollapsed}
-    >
-      <ChevronLeft
-        class="size-3.5 transition-transform {isCollapsed ? 'rotate-180' : ''}"
-        aria-hidden="true"
-      />
-    </button>
-  {/if}
-
-  <header
-    class="flex h-14 shrink-0 items-center overflow-hidden"
-    class:px-4={!isCollapsed}
-    class:justify-center={isCollapsed}
-  >
+  <div class={cn('flex h-10 shrink-0 items-center border-b border-border', collapsed ? 'justify-center' : 'px-3')}>
     <button
       type="button"
       onclick={onGoHome}
-      class="flex min-w-0 items-center rounded-sm text-left transition-colors hover:text-coollabs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:hover:text-warning dark:focus-visible:ring-warning"
-      class:justify-center={isCollapsed}
-      aria-label="Go to buckets"
-      title="Buckets"
+      class="flex min-w-0 items-center gap-2 rounded-control"
+      aria-label="MaxIO, go to buckets"
     >
-      <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
-      {#if !isCollapsed}
-        <span class="ml-2 text-2xl font-bold tracking-tight text-foreground whitespace-nowrap">
-          MaxIO
-        </span>
-      {/if}
+      <img src={`${base}/maxio.png`} alt="" class="size-5 shrink-0" aria-hidden="true" />
+      {#if !collapsed}<span class="text-sm font-semibold tracking-tight">MaxIO</span>{/if}
     </button>
-  </header>
+  </div>
 
-  <div class="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2" role="list">
-    {#each navItems as item (item.id)}
-      <SidebarNavItem
-        label={item.label}
-        icon={item.icon}
-        href={item.href}
-        active={item.active}
-        collapsed={isCollapsed}
-      />
+  <div class="flex flex-1 flex-col gap-1 overflow-y-auto p-2" role="list">
+    {#each mainItems as item (item.id)}
+      <SidebarNavItem label={item.label} icon={item.icon} href={item.href} active={item.active} {collapsed} />
     {/each}
   </div>
 
-  <div class="flex shrink-0 flex-col gap-0.5 p-2">
-    <SidebarThemeControl
-      collapsed={isCollapsed}
-      {themeMode}
-      onThemeChange={onThemeChange}
-      onCycleTheme={onCycleTheme}
-    />
+  <div class="flex shrink-0 flex-col gap-1 border-t border-border p-2">
+    {#each footerItems as item (item.id)}
+      <SidebarNavItem label={item.label} icon={item.icon} href={item.href} active={item.active} {collapsed} />
+    {/each}
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          <button
+            {...props}
+            type="button"
+            onclick={onToggleCollapsed}
+            class={cn(
+              'flex h-8 w-full items-center gap-2.5 rounded-control text-sm text-muted-foreground transition-colors hover:bg-hover hover:text-foreground',
+              collapsed ? 'justify-center' : 'px-2',
+            )}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+          >
+            <PanelLeft class="size-4 shrink-0" aria-hidden="true" />
+            {#if !collapsed}<span class="truncate text-left">Collapse</span>{/if}
+          </button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right">{collapsed ? 'Expand' : 'Collapse'} sidebar [</Tooltip.Content>
+    </Tooltip.Root>
   </div>
-
-  <footer class="flex shrink-0 flex-col gap-0.5 border-t p-2" style="border-color: var(--cool-sidebar-border);">
-    <SidebarUserInfo collapsed={isCollapsed} {username} {isRoot} />
-    <button
-      type="button"
-      onclick={onLogout}
-      class="flex min-h-7 w-full items-center rounded-sm py-1 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted overflow-hidden"
-      class:gap-3={!isCollapsed}
-      class:px-2={!isCollapsed}
-      class:justify-center={isCollapsed}
-      class:size-8={isCollapsed}
-      aria-label="Sign out"
-      title="Sign out"
-    >
-      <LogOut class="size-4 shrink-0" aria-hidden="true" />
-      {#if !isCollapsed}
-        <span class="whitespace-nowrap">Sign out</span>
-      {/if}
-    </button>
-  </footer>
 </nav>

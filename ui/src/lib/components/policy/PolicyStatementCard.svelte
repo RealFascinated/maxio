@@ -1,6 +1,11 @@
 <script lang="ts">
+  import ChevronDown from 'lucide-svelte/icons/chevron-down'
+  import ChevronUp from 'lucide-svelte/icons/chevron-up'
+  import Trash2 from 'lucide-svelte/icons/trash-2'
   import { Button } from '$lib/components/ui/button'
   import { Label } from '$lib/components/ui/label'
+  import { SegmentedControl } from '$lib/components/ui/segmented-control'
+  import * as Tooltip from '$lib/components/ui/tooltip'
   import PolicyActionField from './PolicyActionField.svelte'
   import PolicyPrincipalField from './PolicyPrincipalField.svelte'
   import PolicyResourceField from './PolicyResourceField.svelte'
@@ -20,7 +25,7 @@
   }
 
   let {
-    statement,
+    statement = $bindable(),
     index,
     total,
     variant,
@@ -42,80 +47,66 @@
   }
 </script>
 
-<div class="space-y-4 rounded-sm border-2 border-border p-3">
-  {#if !readonly && total > 1}
-    <div class="flex items-center justify-end gap-1">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        disabled={index === 0}
-        aria-label="Move statement up"
-        onclick={() => onmove?.(-1)}
-      >
-        ↑
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        disabled={index >= total - 1}
-        aria-label="Move statement down"
-        onclick={() => onmove?.(1)}
-      >
-        ↓
-      </Button>
-      <Button type="button" variant="ghost" size="icon-sm" aria-label="Delete statement" onclick={() => ondelete?.()}>
-        ×
-      </Button>
+{#snippet iconAction(label: string, disabled: boolean, onclick: () => void, icon: typeof Trash2)}
+  {@const Icon = icon}
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <Button {...props} type="button" variant="ghost" size="icon-xs" {disabled} aria-label={label} {onclick}>
+          <Icon />
+        </Button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content>{label}</Tooltip.Content>
+  </Tooltip.Root>
+{/snippet}
+
+<section class="rounded-surface border border-border bg-panel">
+  <header class="flex h-9 items-center justify-between gap-2 border-b border-border px-3">
+    <div class="flex items-center gap-2">
+      <span class="num text-xs text-muted-foreground">Statement {index + 1}</span>
+      <SegmentedControl
+        size="xs"
+        aria-label="Effect"
+        value={statement.Effect}
+        options={[
+          { value: 'Allow', label: 'Allow', disabled: readonly },
+          { value: 'Deny', label: 'Deny', disabled: readonly },
+        ]}
+        onValueChange={(next) => setEffect(next as 'Allow' | 'Deny')}
+      />
     </div>
-  {/if}
+    {#if !readonly && total > 1}
+      <div class="flex items-center">
+        {@render iconAction('Move statement up', index === 0, () => onmove?.(-1), ChevronUp)}
+        {@render iconAction('Move statement down', index >= total - 1, () => onmove?.(1), ChevronDown)}
+        {@render iconAction('Delete statement', false, () => ondelete?.(), Trash2)}
+      </div>
+    {/if}
+  </header>
 
-  <div class="space-y-1.5">
-    <Label>Effect</Label>
-    <div class="flex gap-2">
-      <Button
-        type="button"
-        variant={statement.Effect === 'Allow' ? 'highlighted' : 'outline'}
-        size="sm"
-        disabled={readonly}
-        onclick={() => setEffect('Allow')}
-      >
-        Allow
-      </Button>
-      <Button
-        type="button"
-        variant={statement.Effect === 'Deny' ? 'destructive' : 'outline'}
-        size="sm"
-        disabled={readonly}
-        onclick={() => setEffect('Deny')}
-      >
-        Deny
-      </Button>
+  <div class="divide-y divide-border">
+    {#if variant === 'bucket'}
+      <div class="grid gap-1.5 px-3 py-2 sm:grid-cols-[6rem_1fr] sm:gap-3">
+        <Label class="sm:h-7">Principal</Label>
+        <PolicyPrincipalField bind:principal={statement.Principal} {readonly} onchange={() => emit()} />
+      </div>
+    {/if}
+
+    <div class="grid gap-1.5 px-3 py-2 sm:grid-cols-[6rem_1fr] sm:gap-3">
+      <Label class="sm:h-7">Actions</Label>
+      <PolicyActionField bind:actions={statement.Action} {readonly} onchange={emit} />
+    </div>
+
+    <div class="grid gap-1.5 px-3 py-2 sm:grid-cols-[6rem_1fr] sm:gap-3">
+      <Label class="sm:h-7">Resources</Label>
+      <PolicyResourceField
+        bind:resources={statement.Resource}
+        {accessibleBuckets}
+        {bucketsLoading}
+        {readonly}
+        onchange={emit}
+      />
     </div>
   </div>
-
-  {#if variant === 'bucket'}
-    <PolicyPrincipalField
-      bind:principal={statement.Principal}
-      {readonly}
-      onchange={() => emit()}
-    />
-  {/if}
-
-  <div class="space-y-1.5">
-    <Label>Actions</Label>
-    <PolicyActionField bind:actions={statement.Action} {readonly} onchange={emit} />
-  </div>
-
-  <div class="space-y-1.5">
-    <Label>Resources</Label>
-    <PolicyResourceField
-      bind:resources={statement.Resource}
-      {accessibleBuckets}
-      {bucketsLoading}
-      {readonly}
-      onchange={emit}
-    />
-  </div>
-</div>
+</section>

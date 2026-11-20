@@ -1,23 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { fade, fly } from 'svelte/transition'
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
   import { afterNavigate } from '$app/navigation'
   import { createMutation, createQuery } from '@tanstack/svelte-query'
   import Login from '$lib/components/Login.svelte'
   import AppSidebar from '$lib/components/app/sidebar/AppSidebar.svelte'
+  import MobileNavSheet from '$lib/components/app/sidebar/MobileNavSheet.svelte'
+  import TopBar from '$lib/components/app/topbar/TopBar.svelte'
+  import AppCommands from '$lib/components/app/commands/AppCommands.svelte'
+  import * as Tooltip from '$lib/components/ui/tooltip'
+  import { appUi } from '$lib/app-ui.svelte'
   import { buildSidebarNavItems } from '$lib/components/app/sidebar/navigation'
   import {
     applyThemeToDocument,
     isThemeMode,
-    nextThemeMode,
     type ThemeMode,
   } from '$lib/components/app/sidebar/theme'
-  import { base } from '$app/paths'
-  import Menu from 'lucide-svelte/icons/menu'
   import { Sonner } from '$lib/components/ui/sonner'
-  import { checkAuth, logout, type AuthCheckResponse } from '$lib/api/auth'
+  import { checkAuth, isNotAuthenticatedError, logout, type AuthCheckResponse } from '$lib/api/auth'
   import { authKeys } from '$lib/api/keys'
   import { registerSessionExpiredHandler, setSessionActive } from '$lib/api/session'
   import { isRootOnlyPath, routes } from '$lib/navigation'
@@ -29,6 +30,8 @@
     queryKey: authKeys.check(),
     queryFn: checkAuth,
     retry: false,
+    refetchInterval: (query) =>
+      query.state.error && !isNotAuthenticatedError(query.state.error) ? 2_000 : false,
   }))
   const logoutMutation = createMutation(() => ({
     mutationFn: logout,
@@ -40,10 +43,9 @@
 
   let authenticatedOverride = $state<boolean | null>(null)
   let sessionIsRoot = $state<boolean | null>(null)
-  let collapsed = $state(false)
-  let themeMode = $state<ThemeMode>('system')
+  let collapsed = $state(true)
+  let themeMode = $state<ThemeMode>('dark')
   let isDark = $state(true)
-  let mobileMenuOpen = $state(false)
   let sessionExpiredNotice = $state(false)
 
   function handleSessionExpired() {
@@ -54,6 +56,11 @@
     queryClient.clear()
   }
 
+  const authUnavailable = $derived(authQuery.isError && !isNotAuthenticatedError(authQuery.error))
+  const sessionKnown = $derived(
+    authenticatedOverride ?? (authUnavailable ? authQuery.data?.ok === true : authQuery.isSuccess),
+  )
+
   const isRootUser = $derived(sessionIsRoot ?? authQuery.data?.isRoot === true)
 
   const sidebarNavItems = $derived(
@@ -63,24 +70,8 @@
     }),
   )
 
-  function closeMobileMenu() {
-    mobileMenuOpen = false
-  }
-
   afterNavigate(() => {
-    mobileMenuOpen = false
-  })
-
-  function handleWindowKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && mobileMenuOpen) {
-      mobileMenuOpen = false
-    }
-  }
-
-  $effect(() => {
-    if (!mobileMenuOpen) return
-    document.body.classList.add('overflow-hidden')
-    return () => document.body.classList.remove('overflow-hidden')
+    appUi.mobileNavOpen = false
   })
 
   function toggleSidebarCollapsed() {
@@ -110,9 +101,9 @@
   })
 
   onMount(() => {
-    collapsed = localStorage.getItem('sidebar-collapsed') === 'true'
+    collapsed = localStorage.getItem('sidebar-collapsed') !== 'false'
     const savedTheme = localStorage.getItem('theme')
-    themeMode = isThemeMode(savedTheme) ? savedTheme : 'system'
+    themeMode = isThemeMode(savedTheme) ? savedTheme : 'dark'
     applyTheme(themeMode, false)
 
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -155,95 +146,53 @@
     }
   }
 
-  function cycleTheme() {
-    applyTheme(nextThemeMode(themeMode))
-  }
-
   function goHome() {
     goto(routes.home())
   }
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
-
 {#if authQuery.isPending && authenticatedOverride === null}
   <!-- loading -->
-{:else if !(authenticatedOverride ?? authQuery.isSuccess)}
+{:else if authUnavailable && !sessionKnown}
+  <div class="flex min-h-screen w-full items-center justify-center bg-background px-6 py-8">
+    <p class="text-center text-sm text-muted-foreground">Server unavailable. Retrying…</p>
+  </div>
+{:else if !sessionKnown}
   <Login onLogin={handleLogin} sessionExpired={sessionExpiredNotice} />
 {:else}
-  <div class="relative flex h-screen bg-background">
-    {#if mobileMenuOpen}
-      <button
-        type="button"
-        class="fixed inset-0 z-40 cursor-default bg-black/60 lg:hidden"
-        aria-label="Close menu"
-        onclick={closeMobileMenu}
-        transition:fade={{ duration: 200 }}
-      ></button>
-      <div
-        class="fixed inset-y-0 left-0 z-50 lg:hidden"
-        transition:fly={{ x: -224, duration: 200 }}
-      >
-        <AppSidebar
-          collapsed={false}
-          variant="drawer"
-          navItems={sidebarNavItems}
+  <Tooltip.Provider delayDuration={300}>
+    <div class="flex h-screen bg-background">
+      <AppSidebar
+        {collapsed}
+        class="hidden lg:flex"
+        navItems={sidebarNavItems}
+        onToggleCollapsed={toggleSidebarCollapsed}
+        onGoHome={goHome}
+      />
+
+      <div class="flex min-w-0 flex-1 flex-col">
+        <TopBar
+          pathname={page.url.pathname}
           username={authQuery.data?.username}
           isRoot={isRootUser}
           {themeMode}
-          onToggleCollapsed={toggleSidebarCollapsed}
+          {isDark}
           onThemeChange={applyTheme}
-          onCycleTheme={cycleTheme}
-          onGoHome={goHome}
           onLogout={handleLogout}
         />
+        <main class="min-h-0 flex-1 overflow-auto p-4">
+          {@render children()}
+        </main>
       </div>
-    {/if}
+    </div>
 
-    <AppSidebar
-      {collapsed}
-      variant="inline"
-      class="hidden shrink-0 lg:flex"
-      navItems={sidebarNavItems}
-      username={authQuery.data?.username}
+    <MobileNavSheet bind:open={appUi.mobileNavOpen} navItems={sidebarNavItems} />
+    <AppCommands
       isRoot={isRootUser}
-      {themeMode}
-      onToggleCollapsed={toggleSidebarCollapsed}
-      onThemeChange={applyTheme}
-      onCycleTheme={cycleTheme}
-      onGoHome={goHome}
       onLogout={handleLogout}
+      onToggleTheme={() => applyTheme(isDark ? 'light' : 'dark')}
+      onToggleSidebar={toggleSidebarCollapsed}
     />
-
-    <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-      <header
-        class="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur-sm lg:hidden"
-        style="border-color: var(--cool-sidebar-border);"
-      >
-        <button
-          type="button"
-          onclick={() => (mobileMenuOpen = true)}
-          class="-m-2.5 rounded-sm p-2.5 text-neutral-600 transition-colors hover:text-coollabs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:text-warning dark:hover:text-warning dark:focus-visible:ring-warning"
-          aria-label="Open menu"
-          aria-expanded={mobileMenuOpen}
-        >
-          <Menu class="size-5" />
-        </button>
-        <a
-          href={routes.home()}
-          class="flex items-center gap-2 rounded-sm transition-colors hover:text-coollabs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coollabs dark:hover:text-warning dark:focus-visible:ring-warning"
-          aria-label="Go to buckets"
-          title="Buckets"
-        >
-          <img src={`${base}/maxio.png`} alt="" class="size-6 shrink-0" aria-hidden="true" />
-          <span class="text-xl font-bold tracking-tight text-foreground">MaxIO</span>
-        </a>
-      </header>
-
-      <div class="flex-1 overflow-auto p-6">
-        {@render children()}
-      </div>
-    </main>
-  </div>
+  </Tooltip.Provider>
   <Sonner theme={isDark ? 'dark' : 'light'} />
 {/if}

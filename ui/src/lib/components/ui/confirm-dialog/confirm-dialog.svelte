@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Dialog as DialogPrimitive } from 'bits-ui'
   import { Button, type ButtonVariant } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import X from 'lucide-svelte/icons/x'
@@ -23,7 +24,7 @@
     description,
     confirmLabel = 'Confirm',
     cancelLabel = 'Cancel',
-    confirmVariant = 'highlighted',
+    confirmVariant = 'default',
     confirmationText,
     confirmationLabel,
     loading = false,
@@ -33,25 +34,10 @@
 
   let typedConfirmation = $state('')
   let confirmationInput = $state<HTMLInputElement | null>(null)
-  let cancelButton = $state<HTMLButtonElement | null>(null)
   const canConfirm = $derived(!confirmationText || typedConfirmation === confirmationText)
-  const closeLabel = $derived(
-    confirmVariant === 'destructive' || confirmationText
-      ? 'Close destructive confirmation'
-      : 'Close confirmation'
-  )
 
   $effect(() => {
     if (!open) typedConfirmation = ''
-  })
-
-  $effect(() => {
-    if (open) {
-      queueMicrotask(() => {
-        if (confirmationText) confirmationInput?.focus()
-        else cancelButton?.focus()
-      })
-    }
   })
 
   function close() {
@@ -64,76 +50,59 @@
     if (!canConfirm || loading) return
     await onConfirm()
   }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (!open) return
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      close()
-    }
-  }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
-
-{#if open}
-  <button
-    type="button"
-    class="fixed inset-0 z-40 cursor-default bg-black/60"
-    aria-label="Close dialog"
-    disabled={loading}
-    onclick={close}
-  ></button>
-  <div class="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2">
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="confirm-dialog-title"
-      tabindex="-1"
-      class="rounded-sm border border-neutral-200 bg-white p-4 text-black shadow-sm dark:border-coolgray-300 dark:bg-coolgray-100 dark:text-white"
+<DialogPrimitive.Root {open} onOpenChange={(next) => !next && close()}>
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Overlay
+      class="fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-[ui-fade-in_120ms_ease-out]"
+    />
+    <DialogPrimitive.Content
+      interactOutsideBehavior={loading ? 'ignore' : 'close'}
+      escapeKeydownBehavior={loading ? 'ignore' : 'close'}
+      onOpenAutoFocus={(event) => {
+        if (!confirmationText) return
+        event.preventDefault()
+        confirmationInput?.focus()
+      }}
+      class="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-surface border border-border-strong bg-panel shadow-pop outline-none data-[state=open]:animate-[ui-pop-in_120ms_ease-out]"
     >
-      <div class="flex items-start justify-between gap-4 pb-1">
+      <div class="flex items-start justify-between gap-3 px-4 pt-3">
         <div class="flex min-w-0 flex-col gap-1">
-          <h2 id="confirm-dialog-title" class="text-base font-bold text-black dark:text-white">{title}</h2>
+          <DialogPrimitive.Title class="text-sm font-semibold">{title}</DialogPrimitive.Title>
           {#if description}
-            <p class="text-sm text-neutral-600 dark:text-neutral-400">{description}</p>
+            <DialogPrimitive.Description class="text-sm text-muted-foreground">
+              {description}
+            </DialogPrimitive.Description>
           {/if}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          class="shrink-0"
-          aria-label={closeLabel}
-          disabled={loading}
-          onclick={close}
-        >
-          <X class="size-5" />
+        <Button variant="ghost" size="icon-xs" aria-label="Close confirmation" disabled={loading} onclick={close}>
+          <X />
         </Button>
       </div>
 
       {#if confirmationText}
-        <div class="mt-4 rounded-sm border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
-          Type <span class="font-mono font-bold">{confirmationText}</span> to confirm this destructive action.
-        </div>
-        <label class="mt-3 flex flex-col gap-1.5 text-sm font-medium text-black dark:text-white">
-          {confirmationLabel ?? 'Confirmation'}
+        <label class="mt-3 flex flex-col gap-1.5 px-4 text-xs text-muted-foreground">
+          <span>
+            Type <span class="font-mono font-medium text-foreground">{confirmationText}</span> to confirm
+            {#if confirmationLabel}({confirmationLabel}){/if}
+          </span>
           <Input
             bind:ref={confirmationInput}
-            class="bg-white dark:bg-base"
             bind:value={typedConfirmation}
             autocomplete="off"
             disabled={loading}
+            onkeydown={(event) => event.key === 'Enter' && confirm()}
           />
         </label>
       {/if}
 
-      <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-3 dark:border-coolgray-200">
-        <Button bind:ref={cancelButton} type="button" variant="default" disabled={loading} onclick={close}>{cancelLabel}</Button>
-        <Button type="button" variant={confirmVariant} disabled={loading || !canConfirm} onclick={confirm}>
-          {loading ? 'Working…' : confirmLabel}
+      <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-border bg-inset px-4 py-2.5">
+        <Button variant="secondary" disabled={loading} onclick={close}>{cancelLabel}</Button>
+        <Button variant={confirmVariant} loading={loading} disabled={!canConfirm} onclick={confirm}>
+          {confirmLabel}
         </Button>
       </div>
-    </div>
-  </div>
-{/if}
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+</DialogPrimitive.Root>

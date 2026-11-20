@@ -55,6 +55,7 @@ export async function uploadObject(
   key: string,
   file: File,
   onProgress?: (loaded: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean }> {
   const contentType = file.type || guessContentType(file.name)
   const url = `/api/buckets/${encodeURIComponent(bucket)}/objects/${encodeObjectKey(key)}`
@@ -78,6 +79,8 @@ export async function uploadObject(
       }
     }
     xhr.onerror = () => reject(new Error('Upload failed'))
+    xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'))
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true })
     xhr.send(file)
   })
 }

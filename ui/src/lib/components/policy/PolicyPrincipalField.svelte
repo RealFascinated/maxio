@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
-  import { Label } from '$lib/components/ui/label'
+  import { SegmentedControl } from '$lib/components/ui/segmented-control'
   import type { PrincipalSpec } from '$lib/policy/types'
 
   interface Props {
@@ -55,33 +54,23 @@
   }
 </script>
 
-<div class="space-y-2">
-  <Label>Principal</Label>
-  <div class="flex flex-wrap gap-2">
-    <Button
-      type="button"
-      variant={mode === 'everyone' ? 'highlighted' : 'outline'}
-      size="sm"
-      disabled={readonly}
-      onclick={setEveryone}
-    >
-      Everyone (*)
-    </Button>
-    <Button
-      type="button"
-      variant={mode === 'custom' ? 'highlighted' : 'outline'}
-      size="sm"
-      disabled={readonly}
-      onclick={setCustom}
-    >
-      AWS principals
-    </Button>
-  </div>
+<div class="flex min-w-0 flex-col gap-2">
+  <SegmentedControl
+    class="self-start"
+    aria-label="Principal"
+    value={mode}
+    options={[
+      { value: 'everyone', label: 'Everyone (*)', disabled: readonly },
+      { value: 'custom', label: 'AWS principals', disabled: readonly },
+    ]}
+    onValueChange={(next) => (next === 'everyone' ? setEveryone() : setCustom())}
+  />
   {#if mode === 'custom'}
     <Input
       type="text"
       placeholder="arn:aws:iam::maxio:user/alice, comma-separated"
       class="font-mono text-xs"
+      aria-label="AWS principals"
       value={customArns}
       readonly={readonly}
       oninput={(e) => updateCustomArns(e.currentTarget.value)}

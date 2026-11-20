@@ -67,7 +67,7 @@ pub fn read_raw_process_metrics() -> Option<RawProcessMetrics> {
     }
 }
 
-fn cpu_cores() -> f64 {
+pub fn cpu_cores() -> f64 {
     std::thread::available_parallelism()
         .map(|n| n.get() as f64)
         .unwrap_or(1.0)

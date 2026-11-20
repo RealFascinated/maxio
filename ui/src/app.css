@@ -10,254 +10,391 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ==============================================
-   COOLIFY DESIGN TOKENS
-   Light mode = :root, Dark mode = .dark on <html>
+   DESIGN TOKENS — see ui/DESIGN_SYSTEM.md
+   Light = :root, dark = .dark on <html>
    ============================================== */
 
 :root {
-  --cool-accent: #6b16ed;
-  --cool-accent-hover: #5a12c7;
-  --cool-accent-fg: #ffffff;
+  color-scheme: light;
 
-  --cool-bg: #f9fafb;
-  --cool-bg-card: #ffffff;
-  --cool-bg-card-hover: #f5f5f5;
-  --cool-bg-input: #ffffff;
+  /* Surfaces: bg < panel < raised */
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --inset: #f6f7f9;
+  --hover: rgb(15 20 30 / 0.05);
+  --selected: rgb(15 20 30 / 0.08);
 
-  --cool-fg: #000000;
-  --cool-fg-muted: #737373;
+  /* Borders */
+  --border: #e2e4e9;
+  --border-strong: #cbd0d8;
 
-  --cool-border: #e5e5e5;
-  --cool-border-input: #e5e5e5;
-  --cool-ring: #6b16ed;
+  /* Text tiers */
+  --fg: #15171c;
+  --muted: #565d69;
+  --subtle: #858c98;
 
-  --cool-success: #22c55e;
-  --cool-error: #dc2626;
+  /* Accent (the only brand colour) */
+  --accent: #5b3df5;
+  --accent-hover: #4a2ee0;
+  --accent-soft: rgb(91 61 245 / 0.1);
+  --accent-fg: #ffffff;
 
-  --cool-sidebar-bg: #ffffff;
-  --cool-sidebar-border: #d4d4d4;
-  --cool-sidebar-hover: #d4d4d4;
-  --cool-sidebar-active-bg: #e5e5e5;
-  --cool-sidebar-active-fg: #000000;
+  /* Semantic */
+  --success: #17835a;
+  --warning: #a86200;
+  --danger: #d1343b;
+  --info: #1f6fd1;
+  --success-soft: rgb(23 131 90 / 0.1);
+  --warning-soft: rgb(168 98 0 / 0.12);
+  --danger-soft: rgb(209 52 59 / 0.1);
+  --info-soft: rgb(31 111 209 / 0.1);
+
+  /* Chart palette (colourblind-safe, Okabe-Ito derived) */
+  --chart-1: #0072b2;
+  --chart-2: #c27c00;
+  --chart-3: #009e73;
+  --chart-4: #a39500;
+  --chart-5: #5b4bdb;
+  --chart-6: #d55e00;
+  --chart-7: #b0508a;
+  --chart-8: #6b7280;
+
+  --shadow-pop: 0 8px 24px -6px rgb(15 20 30 / 0.18), 0 0 0 1px var(--border);
+
+  /* Control heights */
+  --control-xs: 1.5rem;
+  --control-md: 1.75rem;
+  --control-lg: 2rem;
+  --row-h: 2rem;
 }
 
 .dark {
-  --cool-accent: #fcd452;
-  --cool-accent-hover: #facc15;
-  --cool-accent-fg: #101010;
+  color-scheme: dark;
 
-  --cool-bg: #101010;
-  --cool-bg-card: #181818;
-  --cool-bg-card-hover: #202020;
-  --cool-bg-input: #181818;
+  --bg: #0d0e10;
+  --panel: #131417;
+  --raised: #1a1b1f;
+  --inset: #0f1012;
+  --hover: rgb(255 255 255 / 0.045);
+  --selected: rgb(255 255 255 / 0.08);
 
-  --cool-fg: #e5e5e5;
-  --cool-fg-muted: #a3a3a3;
+  --border: #25272c;
+  --border-strong: #34373e;
 
-  --cool-border: #242424;
-  --cool-border-input: #242424;
-  --cool-ring: #fcd452;
+  --fg: #e7e8eb;
+  --muted: #9a9fa8;
+  --subtle: #6a6f78;
 
-  --cool-success: #22c55e;
-  --cool-error: #dc2626;
+  --accent: #7c5cff;
+  --accent-hover: #917aff;
+  --accent-soft: rgb(124 92 255 / 0.16);
+  --accent-fg: #ffffff;
 
-  --cool-sidebar-bg: #101010;
-  --cool-sidebar-border: #202020;
-  --cool-sidebar-hover: #181818;
-  --cool-sidebar-active-bg: #202020;
-  --cool-sidebar-active-fg: #fcd452;
+  --success: #3dd68c;
+  --warning: #f5a524;
+  --danger: #f4636a;
+  --info: #5aaeff;
+  --success-soft: rgb(61 214 140 / 0.13);
+  --warning-soft: rgb(245 165 36 / 0.13);
+  --danger-soft: rgb(244 99 106 / 0.14);
+  --info-soft: rgb(90 174 255 / 0.13);
+
+  --chart-1: #56b4e9;
+  --chart-2: #e69f00;
+  --chart-3: #2fc99a;
+  --chart-4: #f0e442;
+  --chart-5: #8a8cff;
+  --chart-6: #ee7a2c;
+  --chart-7: #d98bb6;
+  --chart-8: #a3a9b3;
+
+  --shadow-pop: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--border-strong);
 }
 
 /* ==============================================
-   MAP TO TAILWIND v4 TOKENS
+   TAILWIND MAPPING
    ============================================== */
 
 @theme inline {
-  --color-background: var(--cool-bg);
-  --color-foreground: var(--cool-fg);
+  --color-background: var(--bg);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-inset: var(--inset);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
 
-  --color-card: var(--cool-bg-card);
-  --color-card-foreground: var(--cool-fg);
-  --color-card-hover: var(--cool-bg-card-hover);
+  --color-foreground: var(--fg);
+  --color-muted-foreground: var(--muted);
+  --color-subtle: var(--subtle);
 
-  --color-popover: var(--cool-bg-card);
-  --color-popover-foreground: var(--cool-fg);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ring: var(--accent);
 
-  --color-primary: var(--cool-accent);
-  --color-primary-foreground: var(--cool-accent-fg);
-  --color-primary-hover: var(--cool-accent-hover);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-foreground: var(--accent-fg);
 
-  --color-secondary: var(--cool-bg-card-hover);
-  --color-secondary-foreground: var(--cool-fg);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-success-soft: var(--success-soft);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger-soft: var(--danger-soft);
+  --color-info-soft: var(--info-soft);
 
-  --color-muted: var(--cool-bg-card-hover);
-  --color-muted-foreground: var(--cool-fg-muted);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
 
-  --color-accent: var(--cool-bg-card-hover);
-  --color-accent-foreground: var(--cool-fg);
-
-  --color-destructive: var(--cool-error);
+  /* shadcn-style aliases still used by pages */
+  --color-card: var(--panel);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--raised);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-primary-hover: var(--accent-hover);
+  --color-secondary: var(--raised);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--hover);
+  --color-destructive: var(--danger);
   --color-destructive-foreground: #ffffff;
+  --color-error: var(--danger);
+  --color-input: var(--inset);
+  --color-input-border: var(--border-strong);
 
-  --color-success: var(--cool-success);
-  --color-error: var(--cool-error);
+  /* Legacy Coolify names kept so un-migrated pages stay readable.
+     Remove once no page references coollabs-*, coolgray-* or base. */
+  --color-base: var(--bg);
+  --color-coollabs: var(--accent);
+  --color-coollabs-50: var(--accent-soft);
+  --color-coollabs-100: var(--accent-hover);
+  --color-coollabs-200: var(--accent);
+  --color-coollabs-300: var(--accent);
+  --color-coolgray-100: var(--panel);
+  --color-coolgray-200: var(--raised);
+  --color-coolgray-300: var(--border);
+  --color-coolgray-400: var(--border-strong);
+  --color-coolgray-500: var(--border-strong);
 
-  /* Brand — always coollabs purple, does not swap with dark mode */
-  --color-brand: #6b16ed;
-  --color-brand-highlight: #7317ff;
-  --color-brand-hover: #5a12c7;
-  --color-brand-foreground: #ffffff;
-
-  --color-border: var(--cool-border);
-  --color-input: var(--cool-bg-input);
-  --color-input-border: var(--cool-border-input);
-  --color-ring: var(--cool-ring);
-
-  --color-sidebar-background: var(--cool-sidebar-bg);
-  --color-sidebar-foreground: var(--cool-fg);
-  --color-sidebar-primary: var(--cool-accent);
-  --color-sidebar-primary-foreground: var(--cool-accent-fg);
-  --color-sidebar-accent: var(--cool-sidebar-hover);
-  --color-sidebar-accent-foreground: var(--cool-fg);
-  --color-sidebar-border: var(--cool-sidebar-border);
-  --color-sidebar-ring: var(--cool-ring);
-  --color-sidebar-active: var(--cool-sidebar-active-bg);
-  --color-sidebar-active-foreground: var(--cool-sidebar-active-fg);
-
-  /* Coollabs (brand) scale */
-  --color-coollabs: #6b16ed;
-  --color-coollabs-50: #f5f0ff;
-  --color-coollabs-100: #7317ff;
-  --color-coollabs-200: #5a12c7;
-  --color-coollabs-300: #4a0fa3;
-
-  /* Warning scale — used for dark-mode accent + callouts */
-  --color-warning: #fcd452;
-  --color-warning-50: #fefce8;
-  --color-warning-100: #fef9c3;
-  --color-warning-200: #fef08a;
-  --color-warning-300: #fde047;
-  --color-warning-400: #fcd452;
-  --color-warning-500: #facc15;
-  --color-warning-600: #ca8a04;
-  --color-warning-700: #a16207;
-  --color-warning-800: #854d0e;
-  --color-warning-900: #713f12;
-
-  /* Coolgray scale — dark mode background hierarchy */
-  --color-base: #101010;
-  --color-coolgray-100: #181818;
-  --color-coolgray-200: #202020;
-  --color-coolgray-300: #242424;
-  --color-coolgray-400: #282828;
-  --color-coolgray-500: #323232;
-
-  --radius: 0.125rem;
+  /* Two radii only. Controls: buttons, inputs, tags, tabs, menu items, kbd.
+     Surfaces: cards, tables, panels, dialogs, popovers, menus, toasts.
+     Tailwind's scale is remapped so no component can pick another value. */
+  --radius: 6px;
+  --radius-control: 4px;
+  --radius-surface: 6px;
+  --radius-xs: 4px;
+  --radius-sm: 4px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 6px;
+  --radius-2xl: 6px;
+  --radius-3xl: 6px;
 
   --font-sans: "Geist", "Geist Sans", Inter, ui-sans-serif, system-ui, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+
+  /* Type scale: 13px base, tight leading */
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.125rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.25rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.375rem;
+  --text-xl: 1.125rem;
+  --text-xl--line-height: 1.5rem;
+  --text-2xl: 1.375rem;
+  --text-2xl--line-height: 1.75rem;
 }
 
 /* ==============================================
-   GLOBAL BASE STYLES
+   BASE
    ============================================== */
 
-body {
-  background-color: var(--cool-bg);
-  color: var(--cool-fg);
-  font-family: var(--font-sans);
-  font-size: 0.875rem;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-/* While a file preview is open, keep text selection inside the preview body
-   instead of bleeding into the page behind the modal. The preview content
-   re-enables selection via `select-text`. */
-body.preview-open {
-  user-select: none;
-}
-
 @layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
   *,
   ::after,
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-coolgray-200, var(--color-border, currentcolor));
-  }
-  :root *,
-  :root ::after,
-  :root ::before {
-    border-color: var(--color-border);
-  }
-  .dark *,
-  .dark ::after,
-  .dark ::before {
-    border-color: var(--color-coolgray-200);
+    border-color: var(--border);
   }
 
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--fg);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
   h1 {
-    @apply text-2xl font-bold text-black dark:text-white;
+    font-size: 1rem;
+    line-height: 1.375rem;
   }
   h2 {
-    @apply text-xl font-bold text-black dark:text-white;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
   }
-  h3 {
-    @apply text-lg font-bold text-black dark:text-white;
-  }
+  h3,
   h4 {
-    @apply text-base font-bold text-black dark:text-white;
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  /* Number inputs: no native spinners. */
+  input[type="number"] {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  button,
+  [role="button"],
+  summary {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* One focus ring everywhere: 2px accent, offset. Keyboard only. */
+  :where(a, button, input, select, textarea, summary, [tabindex], [role="button"], [role="tab"], [role="menuitem"], [role="switch"], [role="combobox"]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  :where(input, select, textarea):focus-visible {
+    outline-offset: 0;
   }
 }
 
-/* Scrollbar — thumb always coollabs-100 per spec */
+/* Selection inside a modal file preview stays within the preview body. */
+body.preview-open {
+  user-select: none;
+}
+
+/* Thin scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--cool-bg-card-hover);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-coollabs-100);
-  border-radius: 3px;
+  background: var(--border-strong);
+  border-radius: var(--radius-control);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--subtle);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 /* ==============================================
-   COOLIFY INPUT — inset box-shadow system
+   UTILITIES
    ============================================== */
 
-@layer components {
-  .input-cool {
-    display: block;
-    width: 100%;
-    height: 2rem;
-    padding: 0.375rem 0.75rem;
-    font-size: 0.875rem;
-    color: var(--cool-fg);
-    background: var(--cool-bg-input);
-    border: 0;
-    border-radius: 0.125rem;
-    box-shadow: inset 4px 0 0 transparent, inset 0 0 0 2px var(--cool-border-input);
-    outline: none;
-    transition: box-shadow 150ms;
-  }
+/** Numbers: fixed-width digits so columns align. */
+@utility num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
 
-  .input-cool::placeholder {
-    color: var(--cool-fg-muted);
-    opacity: 0.5;
-  }
+/** Table row height. */
+@utility h-row {
+  height: var(--row-h);
+}
 
-  .input-cool:focus {
-    box-shadow: inset 4px 0 0 var(--cool-ring), inset 0 0 0 2px var(--cool-border-input);
-  }
+/** Popover / menu / dialog elevation. */
+@utility shadow-pop {
+  box-shadow: var(--shadow-pop);
+}
 
-  .input-cool:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-    box-shadow: none;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Overlay + popup motion (bits-ui sets data-state) */
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes ui-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(-2px);
+  }
+}
+@keyframes ui-slide-in-right {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+@keyframes ui-slide-in-left {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
   }
 }

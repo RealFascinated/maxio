@@ -7,14 +7,17 @@
   import { Callout } from '$lib/components/ui/callout'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import { Dialog } from '$lib/components/ui/dialog'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
+  import { EmptyState } from '$lib/components/ui/empty-state'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import Shield from 'lucide-svelte/icons/shield'
+  import { PageHeader } from '$lib/components/ui/page-header'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { Toolbar } from '$lib/components/ui/toolbar'
   import Plus from 'lucide-svelte/icons/plus'
   import Trash2 from 'lucide-svelte/icons/trash-2'
   import FileJson from 'lucide-svelte/icons/file-json'
-  import Search from 'lucide-svelte/icons/search'
-  import X from 'lucide-svelte/icons/x'
+  import MoreHorizontal from 'lucide-svelte/icons/ellipsis'
   import Copy from 'lucide-svelte/icons/copy'
   import { toast, toastApiError } from '$lib/toast'
   import { policyKeys } from '$lib/api/keys'
@@ -69,7 +72,7 @@
   const columnHelper = createColumnHelper<typeof sortableTableFeatures, ManagedPolicySummary>()
   const columns = [
     columnHelper.accessor('name', { header: sortableHeader('Name') }),
-    columnHelper.accessor('policyId', { header: sortableHeader('Policy ID') }),
+    columnHelper.accessor('policyId', { header: sortableHeader('ID') }),
     columnHelper.accessor('arn', { header: sortableHeader('ARN') }),
     columnHelper.display({ id: 'actions', enableSorting: false, header: '' }),
   ]
@@ -86,7 +89,7 @@
     mutationFn: ({ name, document }: { name: string; document: string }) =>
       createPolicy(name, document),
     onSuccess: (data) => {
-      toast.success(`Policy "${data.name}" created`)
+      toast.success(`Policy ${data.name} created`)
       newPolicyName = ''
       newPolicyDocument = defaultPolicyDocument
       showCreate = false
@@ -145,79 +148,66 @@
     }
   }
 
+  function closeCreateDialog() {
+    showCreate = false
+    newPolicyName = ''
+    newPolicyDocument = defaultPolicyDocument
+  }
+
   function closeViewerDialog() {
     policyViewer = null
     showViewerDialog = false
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between gap-4">
-    <div class="flex items-center gap-2">
-      <Shield class="size-5 text-coollabs dark:text-warning" />
-      <h1>Managed policies</h1>
-    </div>
-    <Button variant="brand" onclick={() => (showCreate = true)}>
-      <Plus class="size-4" />
-      Add policy
-    </Button>
-  </div>
+<div class="flex flex-col gap-4">
+  <PageHeader title="Policies">
+    {#snippet actions()}
+      <Button onclick={() => (showCreate = true)}><Plus />Add policy</Button>
+    {/snippet}
+  </PageHeader>
 
   {#if policiesQuery.isError}
     <Callout type="danger">
       {policiesQuery.error instanceof ApiError ? policiesQuery.error.message : 'Failed to load policies'}
     </Callout>
-  {:else if policiesQuery.isPending}
-    <p class="text-sm text-muted-foreground">Loading policies…</p>
-  {:else if allPolicies.length === 0}
-    <Callout type="info">
-      <div class="flex flex-col gap-3">
-        <span class="inline-flex items-center gap-2">
-          <Shield class="size-4 opacity-70" />
-          No managed policies yet — create one to attach reusable permissions to IAM users.
-        </span>
-        <Button variant="brand" class="w-fit" onclick={() => (showCreate = true)}>
-          <Plus class="size-4" />
-          Add policy
-        </Button>
-      </div>
-    </Callout>
   {:else}
-    <div class="relative max-w-sm">
-      <Search class="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    <Toolbar>
       <Input
         type="search"
-        placeholder="Filter policies…"
-        class="h-8 pl-8 pr-8"
+        placeholder="Filter"
+        class="w-56"
         bind:value={searchInput}
-        aria-label="Filter policies by name, ID, or ARN"
+        aria-label="Filter policies by name, ID or ARN"
       />
-      {#if searchInput}
-        <button
-          type="button"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-          onclick={() => (searchInput = '')}
-          aria-label="Clear filter"
-        >
-          <X class="size-4" />
-        </button>
-      {/if}
-    </div>
+      {#snippet end()}
+        <span class="num text-xs text-muted-foreground">{filteredPolicies.length} policies</span>
+      {/snippet}
+    </Toolbar>
 
-    {#if filteredPolicies.length === 0}
-      <Callout type="info">
-        <span class="inline-flex items-center gap-2">
-          <Search class="size-4 opacity-70" />
-          No policies matching &ldquo;{searchInput.trim()}&rdquo;.
-        </span>
-      </Callout>
+    {#if policiesQuery.isPending}
+      <div class="rounded-surface border border-border bg-panel">
+        {#each [0, 1, 2] as n (n)}
+          <div class="flex h-8 items-center border-b border-border px-3 last:border-b-0"><Skeleton class="w-1/3" /></div>
+        {/each}
+      </div>
+    {:else if filteredPolicies.length === 0}
+      <div class="rounded-surface border border-border bg-panel">
+        <EmptyState title={allPolicies.length === 0 ? 'No policies' : 'No matching policies'}>
+          {#snippet action()}
+            {#if allPolicies.length === 0}
+              <Button size="sm" onclick={() => (showCreate = true)}><Plus />Add policy</Button>
+            {/if}
+          {/snippet}
+        </EmptyState>
+      </div>
     {:else}
       <Table.Root>
         <Table.Header>
           {#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
-            <Table.Row>
+            <Table.Row class="hover:bg-transparent">
               {#each headerGroup.headers as header (header.id)}
-                <Table.Head class={header.column.id === 'actions' ? 'w-20' : undefined}>
+                <Table.Head class={header.column.id === 'actions' ? 'w-8' : undefined}>
                   {#if !header.isPlaceholder}
                     <FlexRender header={header} />
                   {/if}
@@ -229,63 +219,41 @@
         <Table.Body>
           {#each table.getRowModel().rows as row (row.id)}
             {@const policy = row.original}
-            <Table.Row>
+            <Table.Row
+              class="cursor-pointer"
+              tabindex={0}
+              onclick={() => openPolicyViewer(policy)}
+              onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && openPolicyViewer(policy)}
+            >
               <Table.Cell class="font-medium">{policy.name}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground">{policy.policyId}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground">{policy.arn}</Table.Cell>
               <Table.Cell>
-                <div class="flex items-center gap-1">
-                  <span
-                    class="max-w-36 truncate font-mono text-xs text-muted-foreground"
-                    title={policy.policyId}
-                  >{policy.policyId}</span>
-                  <button
-                    type="button"
-                    class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                    title="Copy policy ID"
-                    aria-label="Copy policy ID"
-                    onclick={() => copyText(policy.policyId, 'Policy ID')}
-                  >
-                    <Copy class="size-3.5" />
-                  </button>
-                </div>
-              </Table.Cell>
-              <Table.Cell>
-                <div class="flex items-center gap-1">
-                  <span
-                    class="max-w-64 truncate font-mono text-xs text-muted-foreground"
-                    title={policy.arn}
-                  >{policy.arn}</span>
-                  <button
-                    type="button"
-                    class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                    title="Copy ARN"
-                    aria-label="Copy ARN"
-                    onclick={() => copyText(policy.arn, 'ARN')}
-                  >
-                    <Copy class="size-3.5" />
-                  </button>
-                </div>
-              </Table.Cell>
-              <Table.Cell>
-                <div class="flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    class="text-muted-foreground transition-colors hover:text-foreground"
-                    title="View policy document"
-                    aria-label="View policy document"
-                    onclick={() => openPolicyViewer(policy)}
-                  >
-                    <FileJson class="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    class="text-muted-foreground transition-colors hover:text-destructive"
-                    title="Delete policy"
-                    aria-label="Delete policy"
-                    onclick={() => (policyToDelete = policy.name)}
-                  >
-                    <Trash2 class="size-4" />
-                  </button>
-                </div>
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                      <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Actions for ${policy.name}`}
+                        onclick={(e: MouseEvent) => e.stopPropagation()}
+                        onkeydown={(e: KeyboardEvent) => e.stopPropagation()}
+                      >
+                        <MoreHorizontal />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end">
+                    <DropdownMenu.Item onSelect={() => openPolicyViewer(policy)}><FileJson />View document</DropdownMenu.Item>
+                    <DropdownMenu.Item onSelect={() => copyText(policy.policyId, 'Policy ID')}><Copy />Copy ID</DropdownMenu.Item>
+                    <DropdownMenu.Item onSelect={() => copyText(policy.arn, 'ARN')}><Copy />Copy ARN</DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item variant="destructive" onSelect={() => (policyToDelete = policy.name)}>
+                      <Trash2 />Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
               </Table.Cell>
             </Table.Row>
           {/each}
@@ -297,14 +265,10 @@
 
 <Dialog
   open={showCreate}
-  title="Create managed policy"
+  title="Create policy"
   size="lg"
   loading={createPolicyMutation.isPending}
-  onClose={() => {
-    showCreate = false
-    newPolicyName = ''
-    newPolicyDocument = defaultPolicyDocument
-  }}
+  onClose={closeCreateDialog}
 >
   <form
     id="create-policy-form"
@@ -312,10 +276,10 @@
       e.preventDefault()
       handleCreatePolicy()
     }}
-    class="space-y-4"
+    class="flex flex-col gap-4"
   >
-    <div class="space-y-1.5">
-      <Label for="newPolicyName">Policy name</Label>
+    <div class="flex max-w-xs flex-col gap-1.5">
+      <Label for="newPolicyName">Name</Label>
       <Input
         bind:ref={createPolicyInput}
         id="newPolicyName"
@@ -328,77 +292,52 @@
     <PolicyEditor variant="identity" bind:value={newPolicyDocument} />
   </form>
   {#snippet footer()}
-    <Button
-      type="button"
-      variant="default"
-      disabled={createPolicyMutation.isPending}
-      onclick={() => {
-        showCreate = false
-        newPolicyName = ''
-        newPolicyDocument = defaultPolicyDocument
-      }}
-    >
+    <Button type="button" variant="secondary" disabled={createPolicyMutation.isPending} onclick={closeCreateDialog}>
       Cancel
     </Button>
     <Button
       type="submit"
       form="create-policy-form"
-      variant="highlighted"
-      disabled={createPolicyMutation.isPending || !newPolicyName.trim()}
+      loading={createPolicyMutation.isPending}
+      disabled={!newPolicyName.trim()}
     >
-      {createPolicyMutation.isPending ? 'Creating…' : 'Create policy'}
+      Create
     </Button>
   {/snippet}
 </Dialog>
 
 <Dialog
   bind:open={showViewerDialog}
-  title="Managed policy"
+  title={policyViewer?.name ?? ''}
   size="lg"
   onClose={closeViewerDialog}
 >
   {#if policyViewer}
-    <div class="space-y-4">
-      <div class="space-y-1.5">
-        <Label>Policy name</Label>
-        <p class="font-medium">{policyViewer.name}</p>
-      </div>
-      <div class="space-y-1.5">
-        <Label>ARN</Label>
-        <div class="flex items-center gap-2">
-          <p class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={policyViewer.arn}>
-            {policyViewer.arn}
-          </p>
-          <Button variant="outline" size="sm" onclick={() => copyText(policyViewer!.arn, 'ARN')}>
-            <Copy class="size-3.5" />
-            Copy
-          </Button>
-        </div>
+    <div class="flex flex-col gap-4">
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-muted-foreground">ARN</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-xs">{policyViewer.arn}</span>
+        <Button variant="secondary" size="sm" onclick={() => copyText(policyViewer!.arn, 'ARN')}>
+          <Copy />Copy
+        </Button>
       </div>
       <PolicyEditor variant="identity" value={policyViewer.document} readonly />
     </div>
   {/if}
   {#snippet footer()}
     {#if policyViewer}
-      <div class="flex w-full flex-wrap items-center justify-between gap-2">
-        <Button
-          variant="destructive"
-          onclick={() => (policyToDelete = policyViewer!.name)}
-        >
-          Delete policy
-        </Button>
-        <Button variant="brand" onclick={closeViewerDialog}>Close</Button>
-      </div>
+      <Button variant="destructive" class="mr-auto" onclick={() => (policyToDelete = policyViewer!.name)}>
+        Delete policy
+      </Button>
+      <Button variant="secondary" onclick={closeViewerDialog}>Close</Button>
     {/if}
   {/snippet}
 </Dialog>
 
 <ConfirmDialog
   open={policyToDelete !== null}
-  title="Delete managed policy?"
-  description={policyToDelete
-    ? `Remove policy "${policyToDelete}"? Users with this policy attached will lose those permissions.`
-    : ''}
+  title={policyToDelete ? `Delete policy ${policyToDelete}?` : 'Delete policy?'}
+  description="Users with this policy attached lose its permissions."
   confirmLabel="Delete"
   confirmVariant="destructive"
   loading={deletePolicyMutation.isPending}

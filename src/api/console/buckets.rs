@@ -28,10 +28,20 @@ pub async fn list_buckets(
                 let can_manage_settings =
                     console_bucket_can_manage_settings(&state, &session, &b.name).await;
                 let stat = state.stats.get(&b.name);
+                let public_read = crate::iam::policy::policy_has_public_read(
+                    state
+                        .storage
+                        .get_bucket_policy(&b.name)
+                        .await
+                        .ok()
+                        .flatten()
+                        .as_deref(),
+                );
                 list.push(serde_json::json!({
                     "name": b.name,
                     "createdAt": b.created_at,
                     "versioning": b.versioning,
+                    "publicRead": public_read,
                     "objectCount": stat.as_ref().map(|s| s.object_count),
                     "sizeBytes": stat.as_ref().map(|s| s.size_bytes),
                     "canDelete": can_delete,

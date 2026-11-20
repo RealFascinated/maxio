@@ -3,13 +3,17 @@
 	import type { HTMLAttributes } from "svelte/elements";
 	import { type VariantProps, tv } from "tailwind-variants";
 
+	/** Status dot. With `label`, renders dot + text. */
 	export const badgeVariants = tv({
-		base: "inline-block w-3 h-3 rounded-full leading-none border border-neutral-200 dark:border-black",
+		base: "inline-block size-2 shrink-0 rounded-full",
 		variants: {
 			variant: {
 				success: "bg-success",
 				warning: "bg-warning",
-				error: "bg-error",
+				error: "bg-danger",
+				danger: "bg-danger",
+				info: "bg-info",
+				neutral: "bg-subtle",
 			},
 		},
 		defaultVariants: {
@@ -37,21 +41,25 @@
 	const textColor = $derived(
 		variant === "success"
 			? "text-success"
-			: variant === "error"
-				? "text-error"
-				: "text-warning"
+			: variant === "error" || variant === "danger"
+				? "text-danger"
+				: variant === "warning"
+					? "text-warning"
+					: variant === "info"
+						? "text-info"
+						: "text-muted-foreground"
 	);
 </script>
 
 {#if label}
-	<span class="inline-flex items-center gap-2">
+	<span class="inline-flex items-center gap-1.5">
 		<span
 			bind:this={ref}
 			data-slot="badge"
 			class={cn(badgeVariants({ variant }), className)}
 			{...restProps}
 		></span>
-		<span class="text-xs font-bold {textColor}">{label}</span>
+		<span class="text-xs font-medium {textColor}">{label}</span>
 	</span>
 {:else}
 	<span

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Plus from 'lucide-svelte/icons/plus'
   import { Button } from '$lib/components/ui/button'
   import { newStatement } from '$lib/policy/document'
   import type { PolicyDocument, PolicyVariant } from '$lib/policy/types'
@@ -58,25 +59,25 @@
   }
 </script>
 
-<div class="space-y-4">
-  <div class="flex flex-col gap-4">
-    {#each document.Statement as stmt, i (i)}
-      <PolicyStatementCard
-        statement={stmt}
-        index={i}
-        total={document.Statement.length}
-        {variant}
-        {accessibleBuckets}
-        {bucketsLoading}
-        {readonly}
-        onchange={(s) => updateStatement(i, s)}
-        ondelete={() => deleteStatement(i)}
-        onmove={(dir) => moveStatement(i, dir)}
-      />
-    {/each}
-  </div>
+<div class="flex flex-col gap-3">
+  {#each document.Statement as stmt, i (i)}
+    <PolicyStatementCard
+      bind:statement={document.Statement[i]}
+      index={i}
+      total={document.Statement.length}
+      {variant}
+      {accessibleBuckets}
+      {bucketsLoading}
+      {readonly}
+      onchange={(s) => updateStatement(i, s)}
+      ondelete={() => deleteStatement(i)}
+      onmove={(dir) => moveStatement(i, dir)}
+    />
+  {/each}
 
   {#if !readonly}
-    <Button type="button" variant="outline" size="sm" onclick={addStatement}>Add statement</Button>
+    <Button type="button" variant="secondary" size="sm" class="self-start" onclick={addStatement}>
+      <Plus />Add statement
+    </Button>
   {/if}
 </div>

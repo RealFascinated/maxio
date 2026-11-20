@@ -13,7 +13,7 @@
 <span
 	bind:this={ref}
 	data-slot="highlighted"
-	class={cn("inline-block font-bold text-coollabs dark:text-warning", className)}
+	class={cn("inline-block font-medium text-foreground", className)}
 	{...restProps}
 >
 	{@render children?.()}

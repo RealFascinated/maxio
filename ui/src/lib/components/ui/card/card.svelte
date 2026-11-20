@@ -4,13 +4,13 @@
 	import { type VariantProps, tv } from "tailwind-variants";
 
 	export const cardVariants = tv({
-		base: "group bg-card text-card-foreground flex flex-col gap-6 rounded-sm border border-border py-6 shadow-sm min-h-16 transition-colors",
+		base: "group flex flex-col gap-3 rounded-surface border border-border bg-panel py-3 text-card-foreground transition-colors",
 		variants: {
 			variant: {
 				default: "",
-				box: "cursor-pointer hover:bg-neutral-100 dark:hover:bg-coollabs-100 dark:hover:text-white hover:text-black dark:group-hover:[&_[data-slot=card-title]]:text-white dark:group-hover:[&_[data-slot=card-description]]:text-white group-hover:[&_[data-slot=card-description]]:text-black",
-				coolbox:
-					"rounded cursor-pointer border-neutral-200 dark:border-coolgray-400 hover:ring-2 hover:ring-coollabs dark:hover:ring-warning",
+				box: "cursor-pointer hover:border-border-strong hover:bg-raised",
+				/** @deprecated alias of box */
+				coolbox: "cursor-pointer hover:border-border-strong hover:bg-raised",
 			},
 		},
 		defaultVariants: {

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
   import { Callout } from "$lib/components/ui/callout";
-  import { Highlighted } from "$lib/components/ui/highlighted";
   import { createMutation, createQuery } from "@tanstack/svelte-query";
   import Eye from "lucide-svelte/icons/eye";
   import EyeOff from "lucide-svelte/icons/eye-off";
@@ -18,12 +18,15 @@
   let accessKey = $state('')
   let secretKey = $state('')
   let error = $state('')
+  let accessKeyError = $state('')
+  let secretKeyError = $state('')
   let showSecret = $state(false)
 
   const authConfigQuery = createQuery(() => ({
     queryKey: authKeys.config(),
     queryFn: fetchAuthConfig,
     staleTime: Infinity,
+    refetchInterval: (query) => (query.state.error ? 2_000 : false),
   }))
 
   const loginBlocked = $derived(
@@ -45,6 +48,9 @@
     e.preventDefault()
     if (loginBlocked) return
     error = ''
+    accessKeyError = accessKey.trim() ? '' : 'Access key is required'
+    secretKeyError = secretKey.trim() ? '' : 'Secret key is required'
+    if (accessKeyError || secretKeyError) return
     try {
       await loginMutation.mutateAsync({ accessKey, secretKey })
     } catch (err) {
@@ -54,80 +60,89 @@
   }
 </script>
 
-<div class="flex min-h-screen w-full items-center justify-center bg-gray-50 px-6 py-8 dark:bg-base">
-  <div class="mx-auto w-full max-w-md space-y-8 text-black dark:text-white">
-    <!-- Title -->
-    <h1 class="text-center text-5xl font-extrabold tracking-tight text-gray-900 dark:text-white">MaxIO</h1>
+<div class="flex min-h-screen w-full items-center justify-center bg-background p-4">
+  <div class="w-full max-w-sm rounded-surface border border-border bg-panel p-4">
+    <h1 class="mb-4">MaxIO</h1>
 
-    <form onsubmit={handleSubmit} class="flex flex-col gap-4">
-      <!-- Access Key -->
+    <form onsubmit={handleSubmit} class="flex flex-col gap-3">
       <div class="flex flex-col gap-1.5">
-        <label for="accessKey" class="text-sm text-muted-foreground">
-          Access Key <Highlighted>*</Highlighted>
-        </label>
+        <Label for="accessKey">Access key</Label>
         <Input
           id="accessKey"
           type="text"
           bind:value={accessKey}
           autocomplete="username"
           disabled={loginBlocked}
-          required
+          aria-invalid={accessKeyError ? true : undefined}
+          aria-describedby={accessKeyError ? 'accessKey-error' : undefined}
         />
+        {#if accessKeyError}
+          <p id="accessKey-error" class="text-xs text-danger">{accessKeyError}</p>
+        {/if}
       </div>
 
-      <!-- Secret Key -->
       <div class="flex flex-col gap-1.5">
-        <label for="secretKey" class="text-sm text-muted-foreground">
-          Secret Key <Highlighted>*</Highlighted>
-        </label>
+        <Label for="secretKey">Secret key</Label>
         <div class="relative">
           <Input
             id="secretKey"
             type={showSecret ? 'text' : 'password'}
             bind:value={secretKey}
             autocomplete="current-password"
-            class="pr-10"
+            class="pr-8"
             disabled={loginBlocked}
-            required
+            aria-invalid={secretKeyError ? true : undefined}
+            aria-describedby={secretKeyError ? 'secretKey-error' : undefined}
           />
-          <button
+          <Button
             type="button"
-            onclick={() => showSecret = !showSecret}
-            class="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground transition-colors hover:text-foreground"
+            variant="ghost"
+            size="icon-xs"
+            class="absolute right-0.5 top-0.5"
+            aria-label={showSecret ? 'Hide secret key' : 'Show secret key'}
+            aria-pressed={showSecret}
+            onclick={() => (showSecret = !showSecret)}
           >
             {#if showSecret}
-              <EyeOff class="size-4" />
+              <EyeOff />
             {:else}
-              <Eye class="size-4" />
+              <Eye />
             {/if}
-          </button>
+          </Button>
         </div>
+        {#if secretKeyError}
+          <p id="secretKey-error" class="text-xs text-danger">{secretKeyError}</p>
+        {/if}
       </div>
+
+      {#if authConfigQuery.isError}
+        <Callout type="warning">Server unavailable. Retrying…</Callout>
+      {/if}
 
       {#if loginBlocked}
         <Callout type="warning" title="HTTPS required">
-          Console login is disabled on plain HTTP because session cookies are marked Secure.
-          Use HTTPS, or set <code class="font-mono text-xs">MAXIO_ALLOW_INSECURE_DEV=true</code> or
-          <code class="font-mono text-xs">MAXIO_SECURE_COOKIES=false</code> for HTTP-only deployments.
+          Session cookies are Secure. Use HTTPS or set
+          <code class="font-mono text-xs">MAXIO_ALLOW_INSECURE_DEV=true</code> or
+          <code class="font-mono text-xs">MAXIO_SECURE_COOKIES=false</code>.
         </Callout>
       {/if}
 
       {#if sessionExpired}
-        <Callout type="warning">Your session has expired. Please sign in again.</Callout>
+        <Callout type="warning">Session expired. Sign in again.</Callout>
       {/if}
 
       {#if error}
         <Callout type="danger">{error}</Callout>
       {/if}
 
-      <!-- Login button — large highlighted style -->
       <Button
         type="submit"
-        variant="highlighted"
-        class="mt-2 h-12 w-full justify-center px-4"
-        disabled={loginBlocked || loginMutation.isPending}
+        size="lg"
+        class="mt-1 w-full"
+        loading={loginMutation.isPending}
+        disabled={loginBlocked}
       >
-        {loginMutation.isPending ? 'Signing in...' : 'Login'}
+        Sign in
       </Button>
     </form>
   </div>

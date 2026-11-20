@@ -2,10 +2,11 @@
   import { createQuery } from '@tanstack/svelte-query'
   import PolicyBuilder from './PolicyBuilder.svelte'
   import PolicyJsonPanel from './PolicyJsonPanel.svelte'
-  import PolicyModeToggle from './PolicyModeToggle.svelte'
+  import { Button } from '$lib/components/ui/button'
+  import { SegmentedControl } from '$lib/components/ui/segmented-control'
   import { listBuckets } from '$lib/api/buckets'
   import { bucketKeys } from '$lib/api/keys'
-  import { parsePolicyDocument, serializePolicyDocument } from '$lib/policy/document'
+  import { parsePolicyDocument, prettyPolicyJson, serializePolicyDocument } from '$lib/policy/document'
   import { defaultBucketPolicy, defaultIdentityPolicy } from '$lib/policy/defaults'
   import type { PolicyDocument, PolicyEditorMode, PolicyVariant } from '$lib/policy/types'
   import { validatePolicyDocument, validatePolicyText, isPolicyValid, blockingPolicyIssue } from '$lib/policy/validation'
@@ -86,6 +87,15 @@
     onchange?.(compact)
   }
 
+  function formatJson() {
+    const pretty = prettyPolicyJson(jsonText)
+    if (!pretty) {
+      toast.error('Policy document must be valid JSON')
+      return
+    }
+    onJsonChange(pretty)
+  }
+
   function switchMode(next: PolicyEditorMode) {
     if (next === mode) return
     if (next === 'builder') {
@@ -120,9 +130,22 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="flex flex-col gap-3">
   {#if !readonly}
-    <PolicyModeToggle {mode} {readonly} onchange={switchMode} />
+    <div class="flex items-center justify-between gap-2">
+      <SegmentedControl
+        aria-label="Policy editor mode"
+        value={mode}
+        options={[
+          { value: 'builder', label: 'Builder' },
+          { value: 'json', label: 'JSON' },
+        ]}
+        onValueChange={(next) => switchMode(next as PolicyEditorMode)}
+      />
+      {#if mode === 'json'}
+        <Button type="button" variant="secondary" size="sm" onclick={formatJson}>Format</Button>
+      {/if}
+    </div>
   {/if}
 
   {#if mode === 'builder' && document}

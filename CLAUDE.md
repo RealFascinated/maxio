@@ -74,7 +74,7 @@ async fn get_object(...) -> Result<Response, S3Error> { ... }
 
 **Read the subsystem before you write code.** A change is never isolated — it sits inside a router, repo, trait, or UI feature area. Before implementing, explore how that area already works: its traits, registration paths, middleware, migrations, and existing implementations. Your change should plug into those mechanisms, not bypass them.
 
-- **Follow the integration points** — new S3 operations wire through `src/api/router.rs`; metadata changes go through `MetadataStore` and diesel repos; console features extend `console.rs` and mirror existing `/api/` patterns; UI features use TanStack Query and the Coolify design system.
+- **Follow the integration points** — new S3 operations wire through `src/api/router.rs`; metadata changes go through `MetadataStore` and diesel repos; console features extend `console.rs` and mirror existing `/api/` patterns; UI features use TanStack Query and the design system in `ui/DESIGN_SYSTEM.md`.
 - **No loose workarounds** — don't reach around a trait with one-off DB calls, duplicated logic that an existing abstraction already handles, or ad-hoc state outside `AppState`. If the framework doesn't support what you need, extend it at the right layer — don't glue around it from the call site.
 - **Mirror a nearby example** — pick an existing implementation closest to what you're adding and trace it end to end: handler, storage call, error mapping, test, UI component. That path is the template.
 
@@ -97,7 +97,7 @@ The rules below are part of the project conventions above. They are not suggesti
 #### Frontend (`ui/`)
 
 - Svelte 5 runes, TanStack Query for server state, shadcn-svelte components.
-- Follow [`ui/DESIGN_SYSTEM.md`](ui/DESIGN_SYSTEM.md) — Coolify theme, inset inputs, button variants, 2px border radius.
+- Follow [`ui/DESIGN_SYSTEM.md`](ui/DESIGN_SYSTEM.md) — dense graphite theme, one violet accent, hairline borders, 6px radius, 28px controls. Use the `ui/` primitives; no gradients, glows, accent stripes or helper copy (see its Anti-patterns).
 - All `fetch` catch blocks log via `console.error` with context (e.g. `'fetchBuckets failed:'`).
 - Use **bun** (not npm).
 
@@ -374,16 +374,16 @@ bun run bench:quick  # quick smoke test
 
 ## UI Design System
 
-The web console (`ui/`) follows the Coolify design system. The full specification is in [`ui/DESIGN_SYSTEM.md`](ui/DESIGN_SYSTEM.md). Key points:
+The web console (`ui/`) is a dense, keyboard-first console (Linear/Grafana style). The full specification is in [`ui/DESIGN_SYSTEM.md`](ui/DESIGN_SYSTEM.md). Key points:
 
-- **Stack**: SvelteKit static SPA, Svelte 5, Vite, Tailwind CSS v4, shadcn-svelte components, TanStack Query
-- **Theme**: Class-based dark mode (`.dark` on `<html>`), with light/dark CSS variable swap in `ui/src/app.css`
-- **Accent colors**: Coollabs purple `#6b16ed` (light) / warning yellow `#fcd452` (dark). Brand purple (`--color-brand`) is always `#6b16ed` regardless of theme
-- **Font**: Geist Sans + Geist Mono via `@fontsource/geist-sans` / `@fontsource/geist-mono` (Inter fallback)
-- **Inputs**: Inset box-shadow system (4px colored left bar on focus), no standard borders — see `.input-cool` in `app.css`
-- **Buttons**: `border-2`, `h-8`, `rounded-sm`. Variants: `default`, `highlighted`, `destructive`, `outline`, `secondary`, `ghost`, `link`, `brand`
-- **Border radius**: `0.125rem` (2px) everywhere — set via `--radius` in `@theme inline`
-- **Sidebar**: Collapsible 224px → 56px icon-only, uses `--cool-sidebar-*` CSS variables
+- **Stack**: SvelteKit static SPA, Svelte 5, Vite, Tailwind CSS v4, bits-ui primitives, TanStack Query
+- **Theme**: Class-based dark mode (`.dark` on `<html>`, dark by default), light/dark CSS variables and Tailwind mapping in `ui/src/app.css`
+- **Surfaces and accent**: three elevations (`bg` < `panel` < `raised`), 1px hairline borders, one violet accent (`#7c5cff` dark / `#5b3df5` light), semantic success/warning/danger/info, chart palette `--chart-1..8`
+- **Font**: Geist Sans + Geist Mono via `@fontsource/geist-sans` / `@fontsource/geist-mono`; 13px base, `num` utility for tabular numbers
+- **Controls**: bordered inputs with subtle inner background, 2px accent focus ring; 28px height (xs 24px, lg 32px), 32px table rows
+- **Buttons**: variants `default` (accent), `secondary`, `outline`, `ghost`, `destructive`, `link`; sizes `xs`, `sm`, `md`, `lg`, `icon*`; `loading` prop
+- **Border radius**: `--radius` 6px (`sm` 4px, `lg` 8px); no pills except avatars and status dots
+- **Shell**: 48px icon rail (expandable to 208px, persisted), 40px top bar with breadcrumbs, `⌘K` command palette, `g`-chord navigation shortcuts (`ui/src/lib/shortcuts.ts`)
 
 ## Roadmap
 
