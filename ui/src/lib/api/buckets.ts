@@ -7,6 +7,7 @@ export interface Bucket {
   publicRead: boolean
   objectCount: number | null
   sizeBytes: number | null
+  storedBytes: number | null
   canDelete?: boolean
   canManageSettings?: boolean
 }

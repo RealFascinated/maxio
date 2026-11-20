@@ -80,6 +80,7 @@ pub async fn create_bucket(ctx: &DbContext, meta: &BucketMeta) -> Result<bool, S
             id: bucket_id,
             versioning: meta.versioning,
             versioning_suspended: false,
+            compression: crate::storage::compression::Compression::None,
             owner_id: meta.owner_id.clone(),
             owner_display_name: meta.owner_display_name.clone(),
             policy: meta.policy.clone(),
@@ -387,7 +388,7 @@ async fn load_bucket_cache_entry_core(
     name: &str,
 ) -> Result<CachedBucketEntry, StorageError> {
     validate_bucket_name(name)?;
-    let row: (Uuid, bool, bool, String, String) = buckets::table
+    let row: (Uuid, bool, bool, String, String, String) = buckets::table
         .filter(buckets::name.eq(name))
         .select((
             buckets::id,
@@ -395,6 +396,7 @@ async fn load_bucket_cache_entry_core(
             buckets::versioning_suspended,
             buckets::owner_id,
             buckets::owner_display_name,
+            buckets::compression,
         ))
         .first(conn)
         .await
@@ -409,6 +411,7 @@ async fn load_bucket_cache_entry_core(
         id: row.0,
         versioning: row.1,
         versioning_suspended: row.2,
+        compression: crate::storage::compression::Compression::parse(&row.5).unwrap_or_default(),
         owner_id: row.3,
         owner_display_name: row.4,
         policy,
@@ -486,6 +489,33 @@ pub async fn set_versioning_state(
     }
     ctx.bucket_cache()
         .set_versioning_state(bucket, enabled, suspended);
+    Ok(())
+}
+
+pub async fn get_compression(
+    ctx: &DbContext,
+    bucket: &str,
+) -> Result<crate::storage::compression::Compression, StorageError> {
+    Ok(fetch_put_bucket_context(ctx, bucket).await?.compression)
+}
+
+pub async fn set_compression(
+    ctx: &DbContext,
+    bucket: &str,
+    compression: crate::storage::compression::Compression,
+) -> Result<(), StorageError> {
+    validate_bucket_name(bucket)?;
+    let mut conn = get_conn(ctx.pool()).await?;
+    let updated = diesel::update(buckets::table.filter(buckets::name.eq(bucket)))
+        .set(buckets::compression.eq(compression.as_str()))
+        .execute(&mut conn)
+        .await
+        .map_err(db_err)?;
+
+    if updated == 0 {
+        return Err(StorageError::NotFound(bucket.to_string()));
+    }
+    ctx.bucket_cache().set_compression(bucket, compression);
     Ok(())
 }
 

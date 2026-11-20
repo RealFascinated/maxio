@@ -44,6 +44,7 @@ pub struct Sample {
     pub rss_bytes: Option<f64>,
     pub open_fds: Option<f64>,
     pub storage_bytes: Option<f64>,
+    pub stored_bytes: Option<f64>,
     pub object_count: Option<f64>,
     /// Hit rate (0-1) per cache id; caches without lookups in the period are absent.
     pub cache_hit_rates: HashMap<String, f64>,
@@ -64,6 +65,7 @@ pub struct Gauges {
     pub rss_bytes: Option<f64>,
     pub open_fds: Option<f64>,
     pub storage_bytes: Option<f64>,
+    pub stored_bytes: Option<f64>,
     pub object_count: Option<f64>,
 }
 
@@ -141,6 +143,7 @@ pub fn build_tick(
         rss_bytes: gauges.rss_bytes,
         open_fds: gauges.open_fds,
         storage_bytes: gauges.storage_bytes,
+        stored_bytes: gauges.stored_bytes,
         object_count: gauges.object_count,
         cache_hit_rates: hit_rates(&cache_deltas),
     };
@@ -216,6 +219,7 @@ fn aggregate(ts_ms: i64, group: &[&Sample]) -> Sample {
         rss_bytes: mean_opt(group, |s| s.rss_bytes),
         open_fds: mean_opt(group, |s| s.open_fds),
         storage_bytes: mean_opt(group, |s| s.storage_bytes),
+        stored_bytes: mean_opt(group, |s| s.stored_bytes),
         object_count: mean_opt(group, |s| s.object_count),
         cache_hit_rates: cache_sums
             .into_iter()
@@ -376,6 +380,7 @@ pub struct HistorySeries {
     pub rss_bytes: Vec<Option<f64>>,
     pub open_fds: Vec<Option<f64>>,
     pub storage_bytes: Vec<Option<f64>>,
+    pub stored_bytes: Vec<Option<f64>>,
     pub object_count: Vec<Option<f64>>,
 }
 
@@ -441,6 +446,7 @@ impl HistoryResponse {
                 rss_bytes: column(|s| s.rss_bytes),
                 open_fds: column(|s| s.open_fds),
                 storage_bytes: column(|s| s.storage_bytes),
+                stored_bytes: column(|s| s.stored_bytes),
                 object_count: column(|s| s.object_count),
             },
             cache_hit_rates,

@@ -47,6 +47,7 @@ pub async fn get_metrics_api(
             name: s.name,
             object_count: s.object_count,
             size_bytes: s.size_bytes,
+            stored_bytes: s.stored_bytes,
         })
         .collect();
     Json(snapshot)

@@ -42,6 +42,7 @@ struct NewMetricsSample {
     rss_bytes: Option<f64>,
     open_fds: Option<f64>,
     storage_bytes: Option<f64>,
+    stored_bytes: Option<f64>,
     object_count: Option<f64>,
     cache_hit_rates: JsonValue,
 }
@@ -74,6 +75,7 @@ impl From<&Sample> for NewMetricsSample {
             rss_bytes: s.rss_bytes,
             open_fds: s.open_fds,
             storage_bytes: s.storage_bytes,
+            stored_bytes: s.stored_bytes,
             object_count: s.object_count,
             cache_hit_rates: serde_json::to_value(&s.cache_hit_rates).unwrap_or_default(),
         }
@@ -133,6 +135,8 @@ struct AggregatedRow {
     #[diesel(sql_type = Nullable<Double>)]
     storage_bytes: Option<f64>,
     #[diesel(sql_type = Nullable<Double>)]
+    stored_bytes: Option<f64>,
+    #[diesel(sql_type = Nullable<Double>)]
     object_count: Option<f64>,
 }
 
@@ -174,6 +178,7 @@ impl From<AggregatedRow> for Sample {
             rss_bytes: r.rss_bytes,
             open_fds: r.open_fds,
             storage_bytes: r.storage_bytes,
+            stored_bytes: r.stored_bytes,
             object_count: r.object_count,
             cache_hit_rates: HashMap::new(),
         }
@@ -224,7 +229,7 @@ pub async fn load_metrics_samples_aggregated(
          avg(write_lat_p50) AS write_lat_p50, max(write_lat_p95) AS write_lat_p95, max(write_lat_p99) AS write_lat_p99, \
          avg(http_lat_p50) AS http_lat_p50, max(http_lat_p95) AS http_lat_p95, max(http_lat_p99) AS http_lat_p99, \
          avg(cpu_percent) AS cpu_percent, avg(rss_bytes) AS rss_bytes, avg(open_fds) AS open_fds, \
-         avg(storage_bytes) AS storage_bytes, avg(object_count) AS object_count \
+         avg(storage_bytes) AS storage_bytes, avg(stored_bytes) AS stored_bytes, avg(object_count) AS object_count \
          FROM metrics_samples WHERE bucket_start >= $1 GROUP BY 1 ORDER BY 1"
     ))
     .bind::<Timestamptz, _>(from)

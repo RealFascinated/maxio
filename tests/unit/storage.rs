@@ -9,6 +9,7 @@ use maxio::metrics::MetricsRegistry;
 use maxio::metrics::cache_name::OBJECT_DISK;
 use maxio::storage::blob::{BlobStorage, IO_BUFFER_SIZE, stream_to_writer};
 use maxio::storage::cache::{CacheLayer, decode_index, encode_index};
+use maxio::storage::compression::{Compression, PayloadEncoder};
 use maxio::storage::disk_cache_state::DiskCacheState;
 use maxio::storage::{ObjectMeta, PartMeta, validate_bucket_name};
 use tempfile::TempDir;
@@ -256,6 +257,7 @@ fn blob_meta(size: u64) -> ObjectMeta {
         checksum_value: None,
         tags: None,
         part_sizes: None,
+        compressed_size: None,
     }
 }
 
@@ -509,9 +511,14 @@ async fn stream_to_writer_does_not_buffer_whole_part() {
     let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, out);
     let mut buf = vec![0u8; IO_BUFFER_SIZE];
 
-    let copied = stream_to_writer(&mut reader, &mut writer, &mut buf)
-        .await
-        .unwrap();
+    let copied = stream_to_writer(
+        &mut reader,
+        &mut writer,
+        &mut PayloadEncoder::new(Compression::None),
+        &mut buf,
+    )
+    .await
+    .unwrap();
     writer.flush().await.unwrap();
 
     assert_eq!(copied, FIVE_GIB);
@@ -589,7 +596,7 @@ async fn assemble_multipart_streams_five_gib_sparse_parts() {
     ];
 
     let written = blobs
-        .assemble_multipart_temp(bucket, "large.bin", upload_id, &parts)
+        .assemble_multipart_temp(bucket, "large.bin", upload_id, &parts, Compression::None)
         .await
         .unwrap();
 
@@ -638,6 +645,7 @@ async fn blob_small_flat_write_uses_buffered_path() {
             Box::pin(std::io::Cursor::new(payload.clone())),
             None,
             Some(4096),
+            Compression::None,
         )
         .await
         .unwrap();
@@ -688,6 +696,7 @@ async fn assemble_multipart_single_part_renames_without_copy() {
             "obj.bin",
             upload_id,
             std::slice::from_ref(&part_meta),
+            Compression::None,
         )
         .await
         .unwrap();

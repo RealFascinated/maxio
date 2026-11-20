@@ -33,6 +33,7 @@ export const versionKeys = {
 export const settingsKeys = {
   all: ['settings'] as const,
   versioning: (bucket: string) => [...settingsKeys.all, 'versioning', bucket] as const,
+  compression: (bucket: string) => [...settingsKeys.all, 'compression', bucket] as const,
   publicAccess: (bucket: string) => [...settingsKeys.all, 'public', bucket] as const,
   cors: (bucket: string) => [...settingsKeys.all, 'cors', bucket] as const,
   lifecycle: (bucket: string) => [...settingsKeys.all, 'lifecycle', bucket] as const,

@@ -376,6 +376,24 @@ impl PrometheusMetrics {
                 &["bucket"],
             )
             .unwrap();
+            let stored_gauge = GaugeVec::new(
+                Opts::new(
+                    "maxio_bucket_stored_bytes",
+                    "Bytes on disk per bucket after compression",
+                ),
+                &["bucket"],
+            )
+            .unwrap();
+            let saved_gauge = GaugeVec::new(
+                Opts::new(
+                    "maxio_bucket_compression_saved_bytes",
+                    "Bytes saved by compression per bucket",
+                ),
+                &["bucket"],
+            )
+            .unwrap();
+            let _ = tmp.register(Box::new(stored_gauge.clone()));
+            let _ = tmp.register(Box::new(saved_gauge.clone()));
             let _ = tmp.register(Box::new(obj_gauge.clone()));
             let _ = tmp.register(Box::new(size_gauge.clone()));
 
@@ -386,6 +404,12 @@ impl PrometheusMetrics {
                 size_gauge
                     .with_label_values(&[&stat.name])
                     .set(stat.size_bytes as f64);
+                stored_gauge
+                    .with_label_values(&[&stat.name])
+                    .set(stat.stored_bytes as f64);
+                saved_gauge
+                    .with_label_values(&[&stat.name])
+                    .set((stat.size_bytes - stat.stored_bytes) as f64);
             }
             all_families.extend(tmp.gather());
         }

@@ -5,6 +5,7 @@ diesel::table! {
         created_at -> Timestamptz,
         versioning -> Bool,
         versioning_suspended -> Bool,
+        compression -> Text,
         owner_id -> Text,
         owner_display_name -> Text,
     }
@@ -68,6 +69,7 @@ diesel::table! {
         is_delete_marker -> Bool,
         is_folder_marker -> Bool,
         part_sizes -> Nullable<Array<Int8>>,
+        compressed_size -> Nullable<Int8>,
     }
 }
 
@@ -114,6 +116,7 @@ diesel::table! {
         is_delete_marker -> Bool,
         is_folder_marker -> Bool,
         part_sizes -> Nullable<Array<Int8>>,
+        compressed_size -> Nullable<Int8>,
         is_current -> Bool,
         noncurrent_since -> Nullable<Timestamptz>,
     }
@@ -291,6 +294,7 @@ diesel::table! {
         rss_bytes -> Nullable<Float8>,
         open_fds -> Nullable<Float8>,
         storage_bytes -> Nullable<Float8>,
+        stored_bytes -> Nullable<Float8>,
         object_count -> Nullable<Float8>,
         cache_hit_rates -> Jsonb,
     }

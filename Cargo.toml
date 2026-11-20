@@ -65,6 +65,7 @@ deadpool-diesel = "0.7"
 async-trait = "0.1"
 lru = "0.19"
 crc-fast = "1.10.0"
+lz4_flex = "0.14.2"
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }

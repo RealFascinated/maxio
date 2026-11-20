@@ -62,6 +62,8 @@ pub fn spawn_sampler(
                 open_fds: process.as_ref().map(|p| p.open_fds as f64),
                 storage_bytes: has_stats
                     .then(|| bucket_stats.iter().map(|s| s.size_bytes as f64).sum()),
+                stored_bytes: has_stats
+                    .then(|| bucket_stats.iter().map(|s| s.stored_bytes as f64).sum()),
                 object_count: has_stats
                     .then(|| bucket_stats.iter().map(|s| s.object_count as f64).sum()),
             };

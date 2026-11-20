@@ -118,6 +118,7 @@ async fn flush(pool: &DbPool, batch: &mut Vec<PendingUpsert>) {
                 objects::is_delete_marker.eq(p.meta.is_delete_marker),
                 objects::is_folder_marker.eq(p.meta.key.ends_with('/')),
                 objects::part_sizes.eq(part_sizes_to_db(p.meta.part_sizes.as_deref())),
+                objects::compressed_size.eq(p.meta.compressed_size.map(|s| s as i64)),
             )
         })
         .collect();
@@ -137,6 +138,7 @@ async fn flush(pool: &DbPool, batch: &mut Vec<PendingUpsert>) {
             objects::is_delete_marker.eq(excluded(objects::is_delete_marker)),
             objects::is_folder_marker.eq(excluded(objects::is_folder_marker)),
             objects::part_sizes.eq(excluded(objects::part_sizes)),
+            objects::compressed_size.eq(excluded(objects::compressed_size)),
         ))
         .execute(&mut *conn)
         .await;

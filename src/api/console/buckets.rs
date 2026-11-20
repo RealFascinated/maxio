@@ -44,6 +44,7 @@ pub async fn list_buckets(
                     "publicRead": public_read,
                     "objectCount": stat.as_ref().map(|s| s.object_count),
                     "sizeBytes": stat.as_ref().map(|s| s.size_bytes),
+                    "storedBytes": stat.as_ref().map(|s| s.stored_bytes),
                     "canDelete": can_delete,
                     "canManageSettings": can_manage_settings,
                 }));

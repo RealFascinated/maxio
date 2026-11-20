@@ -38,6 +38,7 @@ fn make_meta(etag: &str, last_modified: &str) -> ObjectMeta {
         checksum_value: None,
         tags: None,
         part_sizes: None,
+        compressed_size: None,
         owner_id: ROOT_CANONICAL_ID.to_string(),
         owner_display_name: ROOT_DISPLAY_NAME.to_string(),
         acl: None,

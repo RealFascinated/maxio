@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 pub use crate::db::repos::PutBucketContext;
 
+use super::compression::Compression;
 use super::traits::{DelimitedListPage, ListPage};
 use super::{
     BucketMeta, CorsRule, LifecycleRule, MultipartUploadMeta, ObjectMeta, PartMeta, StorageError,
@@ -55,6 +56,13 @@ pub trait MetadataStore: Send + Sync {
         &self,
         bucket: &str,
         state: crate::storage::VersioningState,
+    ) -> Result<(), StorageError>;
+
+    async fn get_compression(&self, bucket: &str) -> Result<Compression, StorageError>;
+    async fn set_compression(
+        &self,
+        bucket: &str,
+        compression: Compression,
     ) -> Result<(), StorageError>;
 
     async fn fetch_put_bucket_context(

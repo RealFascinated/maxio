@@ -52,6 +52,15 @@ pub trait Storage: Send + Sync {
         bucket: &str,
         state: crate::storage::VersioningState,
     ) -> Result<(), StorageError>;
+    async fn get_compression(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::compression::Compression, StorageError>;
+    async fn set_compression(
+        &self,
+        bucket: &str,
+        compression: crate::storage::compression::Compression,
+    ) -> Result<(), StorageError>;
     async fn get_bucket_auth_info(
         &self,
         bucket: &str,

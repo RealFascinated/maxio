@@ -1,4 +1,5 @@
 use super::cache::CacheLayer;
+use super::compression::{self, Compression, PayloadEncoder};
 use super::hashing::EtagMd5;
 use super::{ByteStream, ChecksumAlgorithm, ObjectMeta, PartMeta, StorageError};
 use crate::metrics::MetricsRegistry;
@@ -28,6 +29,8 @@ pub struct WrittenPayload {
     pub etag: String,
     pub checksum_algorithm: Option<ChecksumAlgorithm>,
     pub checksum_value: Option<String>,
+    /// Stored file size when the payload was LZ4-compressed; `None` when stored raw.
+    pub compressed_size: Option<u64>,
     pub tmp_path: PathBuf,
     pub final_path: PathBuf,
 }
@@ -292,6 +295,7 @@ impl BlobStorage {
         mut body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
         content_length: Option<u64>,
+        compression: Compression,
     ) -> Result<WrittenPayload, StorageError> {
         let write_base = self.write_buckets_dir()?;
         let obj_path = object_path_in(write_base, bucket, key);
@@ -300,7 +304,14 @@ impl BlobStorage {
         if let Some(size) = content_length {
             if size > SMALL_OBJECT_THRESHOLD {
                 return self
-                    .write_flat_object_temp_streaming(bucket, obj_path, Vec::new(), body, checksum)
+                    .write_flat_object_temp_streaming(
+                        bucket,
+                        obj_path,
+                        Vec::new(),
+                        body,
+                        checksum,
+                        compression,
+                    )
                     .await;
             }
             let mut data = Vec::with_capacity(size as usize);
@@ -308,7 +319,7 @@ impl BlobStorage {
                 .await
                 .map_err(StorageError::Io)?;
             return self
-                .write_flat_object_temp_buffered(bucket, obj_path, data, checksum)
+                .write_flat_object_temp_buffered(bucket, obj_path, data, checksum, compression)
                 .await;
         }
 
@@ -322,12 +333,19 @@ impl BlobStorage {
             prefix.extend_from_slice(&chunk[..n]);
             if prefix.len() as u64 > SMALL_OBJECT_THRESHOLD {
                 return self
-                    .write_flat_object_temp_streaming(bucket, obj_path, prefix, body, checksum)
+                    .write_flat_object_temp_streaming(
+                        bucket,
+                        obj_path,
+                        prefix,
+                        body,
+                        checksum,
+                        compression,
+                    )
                     .await;
             }
         }
 
-        self.write_flat_object_temp_buffered(bucket, obj_path, prefix, checksum)
+        self.write_flat_object_temp_buffered(bucket, obj_path, prefix, checksum, compression)
             .await
     }
 
@@ -337,6 +355,7 @@ impl BlobStorage {
         obj_path: PathBuf,
         data: Vec<u8>,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+        compression: Compression,
     ) -> Result<WrittenPayload, StorageError> {
         let size = data.len() as u64;
         let started = crate::perf::start();
@@ -344,7 +363,10 @@ impl BlobStorage {
 
         let write_path = temp_sibling_path(&obj_path);
         let mut tmp_guard = TempPathGuard::new(write_path.clone());
-        fs::write(&write_path, &data)
+        let compressed = (compression == Compression::Lz4)
+            .then(|| compression::compress_buffered(&data))
+            .flatten();
+        fs::write(&write_path, compressed.as_deref().unwrap_or(&data))
             .await
             .map_err(StorageError::Io)?;
 
@@ -357,6 +379,7 @@ impl BlobStorage {
             etag,
             checksum_algorithm,
             checksum_value,
+            compressed_size: compressed.map(|c| c.len() as u64),
             tmp_path: write_path,
             final_path: obj_path,
         })
@@ -369,6 +392,7 @@ impl BlobStorage {
         mut prefix: Vec<u8>,
         mut body: ByteStream,
         checksum: Option<(ChecksumAlgorithm, Option<String>)>,
+        compression: Compression,
     ) -> Result<WrittenPayload, StorageError> {
         let write_path = temp_sibling_path(&obj_path);
         let mut tmp_guard = TempPathGuard::new(write_path.clone());
@@ -382,6 +406,7 @@ impl BlobStorage {
             .map(|(algo, _)| ChecksumHasher::new(*algo));
         let mut size: u64 = 0;
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
+        let mut encoder = PayloadEncoder::new(compression);
         let mut write_elapsed = write_started.elapsed();
 
         let mut update = |slice: &[u8]| {
@@ -392,10 +417,11 @@ impl BlobStorage {
             size += slice.len() as u64;
         };
 
-        update(&prefix);
         {
             let t = Instant::now();
-            writer.write_all(&prefix).await?;
+            encoder
+                .write_while(&mut writer, &prefix, || update(&prefix))
+                .await?;
             write_elapsed += t.elapsed();
         }
         prefix.clear();
@@ -405,13 +431,16 @@ impl BlobStorage {
             if n == 0 {
                 break;
             }
-            update(&buf[..n]);
             let t = Instant::now();
-            writer.write_all(&buf[..n]).await?;
+            encoder
+                .write_while(&mut writer, &buf[..n], || update(&buf[..n]))
+                .await?;
             write_elapsed += t.elapsed();
         }
+        let compressed_size;
         {
             let t = Instant::now();
+            compressed_size = encoder.finish(&mut writer).await?;
             writer.flush().await?;
             write_elapsed += t.elapsed();
         }
@@ -430,6 +459,7 @@ impl BlobStorage {
             etag,
             checksum_algorithm,
             checksum_value,
+            compressed_size,
             tmp_path: write_path,
             final_path: obj_path,
         })
@@ -455,8 +485,13 @@ impl BlobStorage {
         key: &str,
         meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self.resolve_read_path(bucket, key, meta.size).await?;
+        let obj_path = self
+            .resolve_read_path(bucket, key, meta.stored_size())
+            .await?;
         self.record_drive_read();
+        if let Some(stored_size) = meta.compressed_size {
+            return compression::open_range(&obj_path, stored_size, meta.size, 0, meta.size).await;
+        }
         if meta.size <= SMALL_OBJECT_THRESHOLD {
             let data = fs::read(&obj_path).await.map_err(StorageError::Io)?;
             return Ok(Box::pin(std::io::Cursor::new(data)));
@@ -469,12 +504,18 @@ impl BlobStorage {
         &self,
         bucket: &str,
         key: &str,
-        _meta: &ObjectMeta,
+        meta: &ObjectMeta,
         offset: u64,
         length: u64,
     ) -> Result<ByteStream, StorageError> {
-        let obj_path = self.resolve_read_path(bucket, key, _meta.size).await?;
+        let obj_path = self
+            .resolve_read_path(bucket, key, meta.stored_size())
+            .await?;
         self.record_drive_read();
+        if let Some(stored_size) = meta.compressed_size {
+            return compression::open_range(&obj_path, stored_size, meta.size, offset, length)
+                .await;
+        }
         if length <= SMALL_OBJECT_THRESHOLD {
             let mut file = fs::File::open(&obj_path).await.map_err(StorageError::Io)?;
             file.seek(std::io::SeekFrom::Start(offset))
@@ -716,6 +757,7 @@ impl BlobStorage {
         key: &str,
         upload_id: &str,
         parts: &[PartMeta],
+        compression: Compression,
     ) -> Result<WrittenPayload, StorageError> {
         let write_base = self.write_buckets_dir()?;
         let obj_path = object_path_in(write_base, bucket, key);
@@ -725,7 +767,8 @@ impl BlobStorage {
         let tmp_obj_path = temp_sibling_path(&obj_path);
         let mut tmp_obj_guard = TempPathGuard::new(tmp_obj_path.clone());
 
-        let (total_size, etag) = if parts.len() == 1 {
+        let mut compressed_size = None;
+        let (total_size, etag) = if parts.len() == 1 && compression == Compression::None {
             let part = &parts[0];
             let part_path = self.part_path(bucket, upload_id, part.part_number);
             fs::rename(&part_path, &tmp_obj_path)
@@ -740,6 +783,7 @@ impl BlobStorage {
         } else {
             let out = fs::File::create(&tmp_obj_path).await?;
             let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, out);
+            let mut encoder = PayloadEncoder::new(compression);
             let mut total_size = 0u64;
             let mut etag_hasher = EtagMd5::new();
             let mut buf = vec![0u8; IO_BUFFER_SIZE];
@@ -748,12 +792,14 @@ impl BlobStorage {
                 let part_path = self.part_path(bucket, upload_id, part.part_number);
                 let part_file = fs::File::open(&part_path).await?;
                 let mut part_stream = BufReader::with_capacity(IO_BUFFER_SIZE, part_file);
-                total_size += stream_to_writer(&mut part_stream, &mut writer, &mut buf).await?;
+                total_size +=
+                    stream_to_writer(&mut part_stream, &mut writer, &mut encoder, &mut buf).await?;
 
                 let raw_md5 = hex::decode(part.etag.trim_matches('"'))
                     .map_err(|_| StorageError::InvalidKey("invalid part etag".into()))?;
                 etag_hasher.update(&raw_md5);
             }
+            compressed_size = encoder.finish(&mut writer).await?;
             writer.flush().await?;
             let etag = format!(
                 "\"{}-{}\"",
@@ -770,6 +816,7 @@ impl BlobStorage {
             etag,
             checksum_algorithm: None,
             checksum_value: None,
+            compressed_size,
             tmp_path: tmp_obj_path,
             final_path: obj_path,
         })
@@ -857,8 +904,13 @@ impl BlobStorage {
         bucket: &str,
         key: &str,
         version_id: &str,
+        meta: &ObjectMeta,
     ) -> Result<ByteStream, StorageError> {
         let ver_data_path = self.version_data_path(bucket, key, version_id);
+        if let Some(stored_size) = meta.compressed_size {
+            return compression::open_range(&ver_data_path, stored_size, meta.size, 0, meta.size)
+                .await;
+        }
         let file = fs::File::open(&ver_data_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 StorageError::VersionNotFound(version_id.to_string())
@@ -1015,6 +1067,7 @@ impl Drop for TempPathGuard {
 pub async fn stream_to_writer<R, W>(
     reader: &mut R,
     writer: &mut W,
+    encoder: &mut PayloadEncoder,
     buf: &mut [u8],
 ) -> Result<u64, StorageError>
 where
@@ -1027,8 +1080,8 @@ where
         if n == 0 {
             break;
         }
-        writer
-            .write_all(&buf[..n])
+        encoder
+            .write(writer, &buf[..n])
             .await
             .map_err(StorageError::Io)?;
         total += n as u64;

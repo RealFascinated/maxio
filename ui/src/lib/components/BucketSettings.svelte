@@ -27,11 +27,13 @@
     getCors,
     getLifecycle,
     getPublicAccess,
+    getCompression,
     getVersioning,
     putBucketPolicy,
     setCors,
     setLifecycle,
     setPublicAccess,
+    setCompression,
     setVersioning,
     type LifecycleRule,
   } from '$lib/api/settings'
@@ -55,6 +57,10 @@
   const versioningQuery = createQuery(() => ({
     queryKey: settingsKeys.versioning(bucket),
     queryFn: () => getVersioning(bucket),
+  }))
+  const compressionQuery = createQuery(() => ({
+    queryKey: settingsKeys.compression(bucket),
+    queryFn: () => getCompression(bucket),
   }))
   const publicQuery = createQuery(() => ({
     queryKey: settingsKeys.publicAccess(bucket),
@@ -101,6 +107,7 @@
   const lifecycleRules = $derived(lifecycleQuery.data?.rules ?? [])
 
   const versioningEnabled = $derived(!!versioningQuery.data?.enabled)
+  const compressionEnabled = $derived(!!compressionQuery.data?.enabled)
   const publicRead = $derived(!!publicQuery.data?.read)
   const publicList = $derived(!!publicQuery.data?.list)
   const corsEnabled = $derived(!!corsQuery.data?.enabled)
@@ -111,6 +118,14 @@
       toast.success(enabled ? 'Versioning enabled' : 'Versioning disabled')
       queryClient.invalidateQueries({ queryKey: settingsKeys.versioning(bucket) })
       queryClient.invalidateQueries({ queryKey: bucketKeys.list() })
+    },
+  }))
+
+  const compressionMutation = createMutation(() => ({
+    mutationFn: (enabled: boolean) => setCompression(bucket, enabled),
+    onSuccess: (_data, enabled) => {
+      toast.success(enabled ? 'Compression enabled' : 'Compression disabled')
+      queryClient.invalidateQueries({ queryKey: settingsKeys.compression(bucket) })
     },
   }))
 
@@ -323,6 +338,15 @@
     }
   }
 
+  async function toggleCompression() {
+    try {
+      await compressionMutation.mutateAsync(!compressionEnabled)
+    } catch (err) {
+      console.error('toggleCompression failed:', err)
+      toastApiError(err, 'Failed to update compression')
+    }
+  }
+
   async function togglePublicRead() {
     const newState = !publicRead
     if (newState) {
@@ -408,7 +432,7 @@
 {/snippet}
 
 <div class="flex max-w-2xl flex-col gap-4">
-  {#if versioningQuery.isError || publicQuery.isError || corsQuery.isError || lifecycleQuery.isError || policyQuery.isError}
+  {#if versioningQuery.isError || compressionQuery.isError || publicQuery.isError || corsQuery.isError || lifecycleQuery.isError || policyQuery.isError}
     <Callout type="danger">Failed to load bucket settings</Callout>
   {/if}
 
@@ -417,6 +441,7 @@
   {#if activeTab === 'general'}
     <div class="divide-y divide-border rounded-surface border border-border bg-panel">
       {@render toggleRow('Versioning', versioningEnabled, versioningQuery.isPending, versioningMutation.isPending, toggleVersioning)}
+      {@render toggleRow('LZ4 compression', compressionEnabled, compressionQuery.isPending, compressionMutation.isPending, toggleCompression)}
       {@render toggleRow('Public read', publicRead, publicQuery.isPending, publicMutation.isPending, togglePublicRead, publicRead)}
       {@render toggleRow('Public listing', publicList, publicQuery.isPending, publicMutation.isPending, togglePublicList, publicList)}
       {@render toggleRow('Cross-origin read', corsEnabled, corsQuery.isPending, corsMutation.isPending, toggleCors)}

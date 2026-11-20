@@ -84,6 +84,7 @@ pub(super) async fn do_upsert_object(
         objects::is_delete_marker.eq(meta.is_delete_marker),
         objects::is_folder_marker.eq(meta.key.ends_with('/')),
         objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
+        objects::compressed_size.eq(meta.compressed_size.map(|s| s as i64)),
     );
     let update = (
         objects::size.eq(meta.size as i64),
@@ -96,6 +97,7 @@ pub(super) async fn do_upsert_object(
         objects::is_delete_marker.eq(meta.is_delete_marker),
         objects::is_folder_marker.eq(meta.key.ends_with('/')),
         objects::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
+        objects::compressed_size.eq(meta.compressed_size.map(|s| s as i64)),
     );
 
     if !object_has_side_tables(meta) {
@@ -386,6 +388,7 @@ fn meta_for_read_cache(meta: &ObjectMeta) -> ObjectMeta {
         checksum_value: meta.checksum_value.clone(),
         tags: None,
         part_sizes: meta.part_sizes.clone(),
+        compressed_size: meta.compressed_size,
     }
 }
 
@@ -410,6 +413,7 @@ pub(crate) fn row_into_read_meta(row: ObjectRow) -> ObjectMeta {
         checksum_value: None,
         tags: None,
         part_sizes: part_sizes_from_db(row.part_sizes),
+        compressed_size: row.compressed_size.map(|s| s as u64),
     }
 }
 
@@ -481,6 +485,7 @@ pub(crate) async fn row_into_meta(
         checksum_value,
         tags: tags_map,
         part_sizes: part_sizes_from_db(row.part_sizes),
+        compressed_size: row.compressed_size.map(|s| s as u64),
     })
 }
 
@@ -498,6 +503,7 @@ pub(crate) struct ObjectRow {
     pub version_id: Option<String>,
     pub is_delete_marker: bool,
     pub part_sizes: Option<Vec<i64>>,
+    pub compressed_size: Option<i64>,
 }
 
 #[derive(Queryable, Selectable)]

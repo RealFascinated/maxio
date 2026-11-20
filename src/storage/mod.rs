@@ -1,6 +1,7 @@
 pub mod blob;
 pub mod cache;
 pub mod checksum;
+pub mod compression;
 pub mod disk_cache_state;
 pub mod hashing;
 pub mod lifecycle;
@@ -160,6 +161,16 @@ pub struct ObjectMeta {
     pub tags: Option<HashMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part_sizes: Option<Vec<u64>>,
+    /// Size of the stored file when the payload is LZ4-compressed; `None` when stored raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed_size: Option<u64>,
+}
+
+impl ObjectMeta {
+    /// Byte length of the payload file on disk.
+    pub fn stored_size(&self) -> u64 {
+        self.compressed_size.unwrap_or(self.size)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

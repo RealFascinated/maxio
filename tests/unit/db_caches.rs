@@ -8,6 +8,7 @@ fn sample_bucket_entry() -> CachedBucketEntry {
         id: Uuid::new_v4(),
         versioning: false,
         versioning_suspended: false,
+        compression: maxio::storage::compression::Compression::None,
         owner_id: "owner".into(),
         owner_display_name: "Owner".into(),
         policy: None,
@@ -33,6 +34,7 @@ fn sample_meta(key: &str) -> ObjectMeta {
         checksum_value: None,
         tags: None,
         part_sizes: None,
+        compressed_size: None,
     }
 }
 

@@ -13,6 +13,8 @@ pub struct BucketStat {
     pub name: String,
     pub object_count: i64,
     pub size_bytes: i64,
+    /// Bytes on disk after compression.
+    pub stored_bytes: i64,
 }
 
 pub struct BucketStatsCache {
@@ -77,6 +79,8 @@ struct StatRow {
     object_count: i64,
     #[diesel(sql_type = BigInt)]
     size_bytes: i64,
+    #[diesel(sql_type = BigInt)]
+    stored_bytes: i64,
 }
 
 async fn fetch_bucket_stats(pool: &DbPool) -> anyhow::Result<Vec<BucketStat>> {
@@ -84,7 +88,8 @@ async fn fetch_bucket_stats(pool: &DbPool) -> anyhow::Result<Vec<BucketStat>> {
     let rows: Vec<StatRow> = sql_query(
         "SELECT b.name, \
          COUNT(o.id)::bigint AS object_count, \
-         COALESCE(SUM(o.size), 0)::bigint AS size_bytes \
+         COALESCE(SUM(o.size), 0)::bigint AS size_bytes, \
+         COALESCE(SUM(COALESCE(o.compressed_size, o.size)), 0)::bigint AS stored_bytes \
          FROM buckets b \
          LEFT JOIN objects o \
              ON o.bucket_id = b.id \
@@ -102,6 +107,7 @@ async fn fetch_bucket_stats(pool: &DbPool) -> anyhow::Result<Vec<BucketStat>> {
             name: r.name,
             object_count: r.object_count,
             size_bytes: r.size_bytes,
+            stored_bytes: r.stored_bytes,
         })
         .collect())
 }

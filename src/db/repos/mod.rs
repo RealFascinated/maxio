@@ -180,6 +180,7 @@ pub(crate) async fn resolve_bucket_id(
 pub struct PutBucketContext {
     pub bucket_id: Uuid,
     pub versioning: bool,
+    pub compression: crate::storage::compression::Compression,
     pub owner_id: String,
     pub owner_display_name: String,
 }
@@ -189,6 +190,7 @@ impl From<CachedBucketEntry> for PutBucketContext {
         Self {
             bucket_id: entry.id,
             versioning: entry.versioning,
+            compression: entry.compression,
             owner_id: entry.owner_id,
             owner_display_name: entry.owner_display_name,
         }

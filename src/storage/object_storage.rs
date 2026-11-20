@@ -83,8 +83,13 @@ impl ObjectStorage {
         versioned: bool,
         put_ctx: Option<&PutBucketContext>,
     ) -> Result<PutResult, StorageError> {
-        self.publish_written_payload(bucket, key, &written, written.size)
-            .await?;
+        self.publish_written_payload(
+            bucket,
+            key,
+            &written,
+            written.compressed_size.unwrap_or(written.size),
+        )
+        .await?;
         if let Err(e) = self.meta.upsert_object(bucket, &object_meta, put_ctx).await {
             let _ = BlobStorage::remove_published_payload(&written.final_path).await;
             return Err(e);
@@ -170,6 +175,7 @@ impl ObjectStorage {
                 checksum_value: None,
                 tags: None,
                 part_sizes: None,
+                compressed_size: None,
             };
             normalize_object_meta(&mut meta, &prep.owner_id, &prep.owner_display_name);
             self.meta.upsert_object(bucket, &meta, Some(&prep)).await?;
@@ -192,7 +198,14 @@ impl ObjectStorage {
 
         let written = self
             .blobs
-            .write_flat_object_temp(bucket, key, body, checksum, content_length)
+            .write_flat_object_temp(
+                bucket,
+                key,
+                body,
+                checksum,
+                content_length,
+                prep.compression,
+            )
             .await?;
 
         let mut object_meta = ObjectMeta {
@@ -210,6 +223,7 @@ impl ObjectStorage {
             checksum_value: written.checksum_value.clone(),
             tags: None,
             part_sizes: None,
+            compressed_size: written.compressed_size,
         };
         let owner_id = object_meta.owner_id.clone();
         let owner_name = object_meta.owner_display_name.clone();
@@ -256,6 +270,7 @@ impl ObjectStorage {
                 checksum_value: None,
                 tags: None,
                 part_sizes: None,
+                compressed_size: None,
             };
             self.meta.insert_version(bucket, &marker).await?;
             self.meta.delete_object_meta(bucket, key).await?;
@@ -509,7 +524,13 @@ impl ObjectStorage {
 
         let mut written = self
             .blobs
-            .assemble_multipart_temp(bucket, &upload_meta.key, upload_id, &selected)
+            .assemble_multipart_temp(
+                bucket,
+                &upload_meta.key,
+                upload_id,
+                &selected,
+                prep.compression,
+            )
             .await?;
 
         let (checksum_algorithm, checksum_value) =
@@ -541,6 +562,7 @@ impl ObjectStorage {
             checksum_value: checksum_value.clone(),
             tags: None,
             part_sizes: Some(part_sizes),
+            compressed_size: written.compressed_size,
         };
 
         let result = self
@@ -656,6 +678,21 @@ impl Storage for ObjectStorage {
         state: crate::storage::VersioningState,
     ) -> Result<(), StorageError> {
         self.meta.set_versioning_state(bucket, state).await
+    }
+
+    async fn get_compression(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::compression::Compression, StorageError> {
+        self.meta.get_compression(bucket).await
+    }
+
+    async fn set_compression(
+        &self,
+        bucket: &str,
+        compression: crate::storage::compression::Compression,
+    ) -> Result<(), StorageError> {
+        self.meta.set_compression(bucket, compression).await
     }
 
     async fn get_bucket_auth_info(
@@ -1015,7 +1052,10 @@ impl Storage for ObjectStorage {
         if meta.is_delete_marker {
             return Err(StorageError::NotFound(key.to_string()));
         }
-        let stream = self.blobs.open_version(bucket, key, version_id).await?;
+        let stream = self
+            .blobs
+            .open_version(bucket, key, version_id, &meta)
+            .await?;
         Ok((stream, meta))
     }
 

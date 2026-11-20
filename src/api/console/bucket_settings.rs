@@ -8,6 +8,7 @@ use axum::{
 use crate::api::bucket::apply_bucket_policy;
 use crate::error::S3Error;
 use crate::server::AppState;
+use crate::storage::compression::Compression;
 use crate::storage::{LifecycleRule, VersioningState};
 
 use super::access::console_bucket_check;
@@ -67,6 +68,67 @@ pub async fn set_versioning(
         .await
     {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// Compression has no S3 action of its own, so it is gated by the bucket-versioning actions.
+pub async fn get_compression(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:GetBucketVersioning").await
+    {
+        return resp.into_response();
+    }
+
+    match state.storage.get_compression(&bucket).await {
+        Ok(compression) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"enabled": compression == Compression::Lz4})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetCompressionRequest {
+    enabled: bool,
+}
+
+pub async fn set_compression(
+    State(state): State<AppState>,
+    Extension(session): Extension<ConsoleSession>,
+    Path(bucket): Path<String>,
+    Json(body): Json<SetCompressionRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) =
+        console_bucket_check(&state, &session, &bucket, "s3:PutBucketVersioning").await
+    {
+        return resp.into_response();
+    }
+
+    let compression = if body.enabled {
+        Compression::Lz4
+    } else {
+        Compression::None
+    };
+    match state.storage.set_compression(&bucket, compression).await {
+        Ok(()) => {
+            tracing::info!(bucket = %bucket, compression = compression.as_str(), "bucket compression changed");
+            (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

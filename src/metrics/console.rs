@@ -273,6 +273,8 @@ impl ConsoleMetrics {
                 bucket_count: 0,
                 object_count: 0,
                 size_bytes: 0,
+                stored_bytes: 0,
+                saved_bytes: 0,
             },
             throughput: ThroughputSnapshot {
                 window_seconds: LATENCY_WINDOW_SECS,

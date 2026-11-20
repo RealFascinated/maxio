@@ -18,6 +18,8 @@ mod bucket;
 mod checksum;
 #[path = "integration/chunked_upload.rs"]
 mod chunked_upload;
+#[path = "integration/compression.rs"]
+mod compression;
 #[path = "integration/conditionals.rs"]
 mod conditionals;
 #[path = "integration/console.rs"]
@@ -30,6 +32,7 @@ mod console_admin_extended;
 mod console_buckets;
 #[path = "integration/console_upload.rs"]
 mod console_upload;
+
 #[path = "integration/copy.rs"]
 mod copy;
 #[path = "integration/cors.rs"]

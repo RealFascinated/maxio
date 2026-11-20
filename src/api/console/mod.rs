@@ -36,8 +36,9 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use bucket_settings::{
-    delete_policy, get_cors, get_lifecycle, get_policy, get_public, get_versioning, set_cors,
-    set_lifecycle, set_policy, set_public, set_versioning,
+    delete_policy, get_compression, get_cors, get_lifecycle, get_policy, get_public,
+    get_versioning, set_compression, set_cors, set_lifecycle, set_policy, set_public,
+    set_versioning,
 };
 use buckets::{create_bucket, delete_bucket_api, list_buckets};
 use maintenance::{repair_orphan_meta_api, scan_orphan_meta_api};
@@ -120,6 +121,8 @@ pub fn console_router(state: AppState) -> Router<AppState> {
         )
         .route("/buckets/{bucket}/versioning", get(get_versioning))
         .route("/buckets/{bucket}/versioning", put(set_versioning))
+        .route("/buckets/{bucket}/compression", get(get_compression))
+        .route("/buckets/{bucket}/compression", put(set_compression))
         .route("/buckets/{bucket}/public", get(get_public))
         .route("/buckets/{bucket}/public", put(set_public))
         .route("/buckets/{bucket}/policy", get(get_policy))

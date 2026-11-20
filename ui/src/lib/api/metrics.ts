@@ -39,6 +39,8 @@ export interface StorageTotalsSnapshot {
   bucketCount: number
   objectCount: number
   sizeBytes: number
+  storedBytes: number
+  savedBytes: number
 }
 
 export interface LatencySnapshot {
@@ -87,6 +89,7 @@ export interface BucketUsageSnapshot {
   name: string
   objectCount: number
   sizeBytes: number
+  storedBytes: number
 }
 
 export interface MetricsSnapshot {
@@ -135,6 +138,7 @@ export const SERIES_KEYS = [
   'rssBytes',
   'openFds',
   'storageBytes',
+  'storedBytes',
   'objectCount',
 ] as const
 export type SeriesKey = (typeof SERIES_KEYS)[number]

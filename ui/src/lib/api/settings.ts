@@ -14,6 +14,17 @@ export async function setVersioning(bucket: string, enabled: boolean): Promise<E
   })
 }
 
+export async function getCompression(bucket: string): Promise<EnabledResponse> {
+  return apiFetch<EnabledResponse>(`/api/buckets/${encodeURIComponent(bucket)}/compression`)
+}
+
+export async function setCompression(bucket: string, enabled: boolean): Promise<EnabledResponse> {
+  return apiFetch<EnabledResponse>(`/api/buckets/${encodeURIComponent(bucket)}/compression`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
 export async function getPublicAccess(bucket: string): Promise<PublicAccessResponse> {
   return apiFetch<PublicAccessResponse>(`/api/buckets/${encodeURIComponent(bucket)}/public`)
 }

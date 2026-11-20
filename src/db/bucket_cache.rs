@@ -6,6 +6,7 @@ use crate::cache::MetricsLruCache;
 use crate::iam::Acl;
 use crate::metrics::{MetricsRegistry, cache_name};
 use crate::storage::CorsRule;
+use crate::storage::compression::Compression;
 
 /// Cached bucket metadata for hot paths (PutObject, auth, bucket id resolution, CORS).
 #[derive(Debug, Clone)]
@@ -13,6 +14,7 @@ pub struct CachedBucketEntry {
     pub id: Uuid,
     pub versioning: bool,
     pub versioning_suspended: bool,
+    pub compression: Compression,
     pub owner_id: String,
     pub owner_display_name: String,
     pub policy: Option<String>,
@@ -54,6 +56,11 @@ impl BucketCache {
             entry.versioning = enabled;
             entry.versioning_suspended = suspended;
         });
+    }
+
+    pub fn set_compression(&self, name: &str, compression: Compression) {
+        self.map
+            .get_mut(name, |entry| entry.compression = compression);
     }
 
     pub fn set_policy(&self, name: &str, policy: Option<String>) {

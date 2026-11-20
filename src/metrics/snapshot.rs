@@ -11,14 +11,22 @@ pub struct StorageTotalsSnapshot {
     pub bucket_count: usize,
     pub object_count: i64,
     pub size_bytes: i64,
+    /// Bytes on disk after compression.
+    pub stored_bytes: i64,
+    /// Bytes saved by compression (`size_bytes - stored_bytes`).
+    pub saved_bytes: i64,
 }
 
 impl StorageTotalsSnapshot {
     pub fn from_bucket_stats(stats: &[crate::stats::BucketStat]) -> Self {
+        let size_bytes: i64 = stats.iter().map(|s| s.size_bytes).sum();
+        let stored_bytes: i64 = stats.iter().map(|s| s.stored_bytes).sum();
         Self {
             bucket_count: stats.len(),
             object_count: stats.iter().map(|s| s.object_count).sum(),
-            size_bytes: stats.iter().map(|s| s.size_bytes).sum(),
+            size_bytes,
+            stored_bytes,
+            saved_bytes: size_bytes - stored_bytes,
         }
     }
 }
@@ -82,6 +90,7 @@ pub struct BucketUsageSnapshot {
     pub name: String,
     pub object_count: i64,
     pub size_bytes: i64,
+    pub stored_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -83,6 +83,7 @@ pub async fn insert_version(
             object_versions::is_delete_marker.eq(meta.is_delete_marker),
             object_versions::is_folder_marker.eq(meta.key.ends_with('/')),
             object_versions::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
+            object_versions::compressed_size.eq(meta.compressed_size.map(|s| s as i64)),
             object_versions::is_current.eq(is_current),
             object_versions::noncurrent_since.eq(noncurrent_since),
         ))
@@ -102,6 +103,7 @@ pub async fn insert_version(
             object_versions::is_delete_marker.eq(meta.is_delete_marker),
             object_versions::is_folder_marker.eq(meta.key.ends_with('/')),
             object_versions::part_sizes.eq(part_sizes_to_db(meta.part_sizes.as_deref())),
+            object_versions::compressed_size.eq(meta.compressed_size.map(|s| s as i64)),
             object_versions::is_current.eq(is_current),
         ))
         .returning(object_versions::id)
@@ -454,6 +456,7 @@ struct VersionRow {
     owner_display_name: String,
     is_delete_marker: bool,
     part_sizes: Option<Vec<i64>>,
+    compressed_size: Option<i64>,
 }
 
 fn version_row_into_read_meta(row: VersionRow) -> ObjectMeta {
@@ -472,6 +475,7 @@ fn version_row_into_read_meta(row: VersionRow) -> ObjectMeta {
         checksum_value: None,
         tags: None,
         part_sizes: part_sizes_from_db(row.part_sizes),
+        compressed_size: row.compressed_size.map(|s| s as u64),
     }
 }
 
@@ -546,6 +550,7 @@ async fn version_row_into_meta(
         checksum_value,
         tags: tags_map,
         part_sizes: part_sizes_from_db(row.part_sizes),
+        compressed_size: row.compressed_size.map(|s| s as u64),
     })
 }
 

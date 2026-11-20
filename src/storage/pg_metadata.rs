@@ -241,6 +241,29 @@ impl MetadataStore for PgMetadataStore {
         )
     }
 
+    async fn get_compression(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::storage::compression::Compression, StorageError> {
+        meta_op!(
+            self,
+            "get_compression",
+            repos::get_compression(&self.ctx, bucket).await
+        )
+    }
+
+    async fn set_compression(
+        &self,
+        bucket: &str,
+        compression: crate::storage::compression::Compression,
+    ) -> Result<(), StorageError> {
+        meta_op!(
+            self,
+            "set_compression",
+            repos::set_compression(&self.ctx, bucket, compression).await
+        )
+    }
+
     async fn fetch_put_bucket_context(
         &self,
         bucket: &str,
