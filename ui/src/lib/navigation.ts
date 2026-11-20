@@ -1,4 +1,4 @@
-import { base } from '$app/paths'
+import { base } from '$lib/base'
 
 export const routes = {
   home: () => `${base}/`,

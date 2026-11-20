@@ -8,7 +8,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SKIP_FRONTEND");
     println!("cargo:rerun-if-changed=ui/package.json");
     println!("cargo:rerun-if-changed=ui/bun.lock");
-    println!("cargo:rerun-if-changed=ui/svelte.config.js");
     println!("cargo:rerun-if-changed=ui/vite.config.ts");
     println!("cargo:rerun-if-changed=ui/src");
     println!("cargo:rerun-if-changed=ui/static");
@@ -62,7 +61,6 @@ fn frontend_inputs_newer_than(artifact: &Path) -> bool {
     let roots = [
         PathBuf::from("ui/package.json"),
         PathBuf::from("ui/bun.lock"),
-        PathBuf::from("ui/svelte.config.js"),
         PathBuf::from("ui/vite.config.ts"),
         PathBuf::from("ui/src"),
         PathBuf::from("ui/static"),

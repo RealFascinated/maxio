@@ -396,21 +396,18 @@ fn parse_complete_parts(xml: &str) -> Result<Vec<(u32, String)>, S3Error> {
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(e)) => match e.name().as_ref() {
-                b"Part" => {
+                "Part" => {
                     in_part = true;
                     part_number = None;
                     etag = None;
                 }
-                b"PartNumber" if in_part => in_part_number = true,
-                b"ETag" if in_part => in_etag = true,
+                "PartNumber" if in_part => in_part_number = true,
+                "ETag" if in_part => in_etag = true,
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(e)) => {
                 if in_part_number {
-                    let value = e
-                        .decode()
-                        .map_err(|_| S3Error::malformed_xml())?
-                        .into_owned();
+                    let value = e.xml10_content().into_owned();
                     part_number = Some(
                         value
                             .parse::<u32>()
@@ -418,10 +415,7 @@ fn parse_complete_parts(xml: &str) -> Result<Vec<(u32, String)>, S3Error> {
                     );
                     in_part_number = false;
                 } else if in_etag {
-                    let value = e
-                        .decode()
-                        .map_err(|_| S3Error::malformed_xml())?
-                        .into_owned();
+                    let value = e.xml10_content().into_owned();
                     let normalized = if value.starts_with('"') && value.ends_with('"') {
                         value
                     } else {
@@ -432,9 +426,9 @@ fn parse_complete_parts(xml: &str) -> Result<Vec<(u32, String)>, S3Error> {
                 }
             }
             Ok(quick_xml::events::Event::End(e)) => match e.name().as_ref() {
-                b"PartNumber" => in_part_number = false,
-                b"ETag" => in_etag = false,
-                b"Part" => {
+                "PartNumber" => in_part_number = false,
+                "ETag" => in_etag = false,
+                "Part" => {
                     let n = part_number.ok_or_else(S3Error::malformed_xml)?;
                     let tag = etag.clone().ok_or_else(S3Error::malformed_xml)?;
                     parts.push((n, tag));

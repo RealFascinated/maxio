@@ -51,7 +51,7 @@
   $effect(() => {
     if (!page.url.searchParams.has('new')) return
     if (canCreateBucket) showCreate = true
-    goto(routes.home(), { replaceState: true, noScroll: true, keepFocus: true })
+    goto(routes.home(), { replace: true, reset: false })
   })
 
   const bucketNameRules = [

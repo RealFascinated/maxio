@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog as DialogPrimitive } from 'bits-ui'
-  import { base } from '$app/paths'
+  import { base } from '$lib/base'
   import SidebarNavItem from '$lib/components/app/sidebar/SidebarNavItem.svelte'
   import type { SidebarNavEntry } from '$lib/components/app/sidebar/navigation'
 

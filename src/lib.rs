@@ -1,6 +1,7 @@
 #![allow(
     clippy::collapsible_if,
     clippy::redundant_closure,
+    clippy::redundant_field_names,
     clippy::redundant_pattern_matching,
     clippy::needless_borrows_for_generic_args,
     clippy::io_other_error,

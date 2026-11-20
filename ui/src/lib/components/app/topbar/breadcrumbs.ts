@@ -1,4 +1,4 @@
-import { base } from '$app/paths'
+import { base } from '$lib/base'
 import { routes } from '$lib/navigation'
 
 export interface Crumb {

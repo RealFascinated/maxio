@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { base } from '$app/paths'
+  import { base } from '$lib/base'
   import { formatBytes } from '$lib/format-bytes'
   import { StatTile } from '$lib/components/ui/stat-tile'
   import BarList from './BarList.svelte'

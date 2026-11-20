@@ -97,27 +97,27 @@ pub fn parse_delete_objects_xml(
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(e)) => match e.name().as_ref() {
-                b"Object" => {
+                "Object" => {
                     in_object = true;
                     current_key.clear();
                     current_version_id = None;
                 }
-                b"Key" if in_object => in_key = true,
-                b"VersionId" if in_object => in_version_id = true,
+                "Key" if in_object => in_key = true,
+                "VersionId" if in_object => in_version_id = true,
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(e)) if in_key => {
-                current_key = e.decode().unwrap_or_default().into_owned();
+                current_key = e.xml10_content().into_owned();
                 in_key = false;
             }
             Ok(quick_xml::events::Event::Text(e)) if in_version_id => {
-                current_version_id = Some(e.decode().unwrap_or_default().into_owned());
+                current_version_id = Some(e.xml10_content().into_owned());
                 in_version_id = false;
             }
             Ok(quick_xml::events::Event::End(e)) => match e.name().as_ref() {
-                b"Key" => in_key = false,
-                b"VersionId" => in_version_id = false,
-                b"Object" => {
+                "Key" => in_key = false,
+                "VersionId" => in_version_id = false,
+                "Object" => {
                     if !current_key.is_empty() {
                         objects.push(crate::storage::BatchDeleteObject {
                             key: current_key.clone(),

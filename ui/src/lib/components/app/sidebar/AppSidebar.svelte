@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { base } from '$app/paths'
+  import { base } from '$lib/base'
   import PanelLeft from 'lucide-svelte/icons/panel-left'
   import SidebarNavItem from '$lib/components/app/sidebar/SidebarNavItem.svelte'
   import type { SidebarNavEntry } from '$lib/components/app/sidebar/navigation'

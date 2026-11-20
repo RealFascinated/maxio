@@ -36,9 +36,9 @@
   const refetchInterval = $derived(Number(refreshSeconds) > 0 ? Number(refreshSeconds) * 1000 : false)
 
   function setParam(name: string, value: string) {
-    const url = new URL(page.url)
+    const url = new URL(page.url.href)
     url.searchParams.set(name, value)
-    goto(`${url.pathname}${url.search}`, { replaceState: true, keepFocus: true, noScroll: true })
+    goto(`${url.pathname}${url.search}`, { replace: true, reset: false })
   }
 
   const snapshotQuery = createQuery(() => ({

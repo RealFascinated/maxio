@@ -185,12 +185,12 @@ async fn parse_tagging_body(body: Body) -> Result<HashMap<String, String>, S3Err
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(e)) => match e.name().as_ref() {
-                b"Key" => in_key = true,
-                b"Value" => in_value = true,
+                "Key" => in_key = true,
+                "Value" => in_value = true,
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(e)) => {
-                let text = e.decode().unwrap_or_default().into_owned();
+                let text = e.xml10_content().into_owned();
                 if in_key {
                     current_key = Some(text);
                     in_key = false;
@@ -202,8 +202,8 @@ async fn parse_tagging_body(body: Body) -> Result<HashMap<String, String>, S3Err
                 }
             }
             Ok(quick_xml::events::Event::End(e)) => match e.name().as_ref() {
-                b"Key" => in_key = false,
-                b"Value" => in_value = false,
+                "Key" => in_key = false,
+                "Value" => in_value = false,
                 _ => {}
             },
             Ok(quick_xml::events::Event::Eof) => break,

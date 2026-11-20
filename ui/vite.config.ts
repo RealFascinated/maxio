@@ -1,5 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite'
 import tailwindcss from '@tailwindcss/vite'
+import adapter from '@sveltejs/adapter-static'
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
 import { defineConfig } from 'vite'
 
 const backendPort = process.env.PORT ?? '9000'
@@ -10,7 +12,24 @@ const NOT_S3 =
   '^/(?!ui(?:/|$)|@|node_modules/|src/|\\.svelte-kit/|favicon\\.ico|__vite_ping).*'
 
 export default defineConfig({
-  plugins: [sveltekit(), tailwindcss()],
+  plugins: [
+    sveltekit({
+      preprocess: vitePreprocess(),
+      adapter: adapter({
+        pages: 'build',
+        assets: 'build',
+        fallback: '200.html',
+        strict: true,
+      }),
+      paths: {
+        base: '/ui',
+      },
+      alias: {
+        $lib: 'src/lib',
+      },
+    }),
+    tailwindcss(),
+  ],
   server: {
     proxy: {
       '/api': backendTarget,
