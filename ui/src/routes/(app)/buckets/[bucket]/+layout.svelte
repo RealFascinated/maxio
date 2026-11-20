@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { goto } from '$app/navigation'
   import { page } from '$app/state'
   import { createQuery } from '@tanstack/svelte-query'
   import { bucketKeys } from '$lib/api/keys'
   import { listBuckets } from '$lib/api/buckets'
   import { PageHeader } from '$lib/components/ui/page-header'
   import { Tabs } from '$lib/components/ui/tabs'
+  import { toast } from '$lib/toast'
   import { formatBytes } from '$lib/format-bytes'
   import { bucketObjectsUrl, routes } from '$lib/navigation'
 
@@ -21,6 +23,13 @@
   const bucketStats = $derived(
     bucketsQuery.data?.buckets.find((entry) => entry.name === bucket),
   )
+
+  $effect(() => {
+    if (bucketsQuery.isSuccess && !bucketsQuery.isFetching && !bucketStats) {
+      toast.error(`Bucket "${bucket}" not found`)
+      goto(routes.home(), { replaceState: true })
+    }
+  })
 
   const tabs = $derived([
     {
