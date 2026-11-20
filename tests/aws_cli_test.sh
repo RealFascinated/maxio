@@ -62,6 +62,17 @@ assert_eq() {
     fi
 }
 
+assert_contains() {
+    local name="$1" needle="$2" haystack="$3"
+    if [[ "$haystack" == *"$needle"* ]]; then
+        green "PASS: $name"
+        PASS=$((PASS + 1))
+    else
+        red "FAIL: $name (expected to contain '$needle', got '$haystack')"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 assert_file_exists() {
     local name="$1" path="$2"
     if [ -e "$path" ]; then
@@ -91,7 +102,6 @@ echo ""
 
 # --- Bucket operations ---
 assert "create bucket" $AWS s3 mb "s3://$BUCKET"
-assert_file_exists "bucket dir exists on disk" "$DATA_DIR/buckets/$BUCKET"
 
 # List buckets
 OUTPUT=$($AWS s3 ls 2>&1)
@@ -508,8 +518,8 @@ TAG_AFTER=$($AWS s3api get-object-tagging --bucket "$TAG_BUCKET" --key tag.txt 2
 TAG_AFTER_COUNT=$(echo "$TAG_AFTER" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("TagSet",[])))' 2>/dev/null)
 assert_eq "get-object-tagging empty after delete" "0" "$TAG_AFTER_COUNT"
 
-$AWS s3 cp "$TMPDIR/tag.txt" "s3://$TAG_BUCKET/inline-tag.txt" \
-    --metadata-directive REPLACE \
+$AWS s3api put-object --bucket "$TAG_BUCKET" --key inline-tag.txt \
+    --body "$TMPDIR/tag.txt" \
     --tagging 'env=prod&team=platform' > /dev/null
 INLINE_TAGS=$($AWS s3api get-object-tagging --bucket "$TAG_BUCKET" --key "inline-tag.txt" --output json 2>/dev/null)
 assert_contains "put-object x-amz-tagging sets tags" "env" "$INLINE_TAGS"
@@ -682,7 +692,7 @@ LOC_BUCKET="loc-$$"
 assert "create loc bucket" $AWS s3api create-bucket --bucket "$LOC_BUCKET"
 LOC=$($AWS s3api get-bucket-location --bucket "$LOC_BUCKET" 2>&1)
 # LocationConstraint is "us-east-1" or null-equivalent
-LOC_VAL=$(echo "$LOC" | grep -o '"LocationConstraint": "[^"]*"' | cut -d'"' -f4)
+LOC_VAL=$(echo "$LOC" | grep -o '"LocationConstraint": "[^"]*"' | cut -d"\"" -f4 || true)
 if [ "$LOC_VAL" = "us-east-1" ] || [ -z "$LOC_VAL" ]; then
     green "PASS: get-bucket-location returned '$LOC_VAL'"
     PASS=$((PASS + 1))

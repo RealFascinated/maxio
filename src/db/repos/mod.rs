@@ -6,6 +6,7 @@ mod listing;
 mod multipart;
 mod objects;
 mod orphans;
+mod upsert_batcher;
 mod versions;
 
 pub use buckets::*;
@@ -15,6 +16,7 @@ pub use listing::*;
 pub use multipart::*;
 pub use objects::*;
 pub use orphans::*;
+pub use upsert_batcher::UpsertBatcher;
 pub use versions::*;
 
 use crate::db::{BucketCache, CachedBucketEntry, DbPool};

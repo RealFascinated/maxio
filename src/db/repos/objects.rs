@@ -43,28 +43,35 @@ pub async fn upsert_object(
     meta: &ObjectMeta,
     put_ctx: Option<&PutBucketContext>,
 ) -> Result<(), StorageError> {
-    let mut conn = get_conn(ctx.pool()).await?;
     let bucket_id = if let Some(put) = put_ctx {
         put.bucket_id
     } else if let Some(entry) = ctx.bucket_cache().get(bucket_name) {
         entry.id
     } else {
+        let mut conn = get_conn(ctx.pool()).await?;
         resolve_bucket_id(ctx.bucket_cache(), &mut conn, bucket_name).await?
     };
     let last_modified = parse_ts(&meta.last_modified)?;
-    do_upsert_object(&mut conn, bucket_id, meta, last_modified).await?;
+    if object_has_side_tables(meta) {
+        let mut conn = get_conn(ctx.pool()).await?;
+        do_upsert_object(&mut conn, bucket_id, meta, last_modified).await?;
+    } else {
+        ctx.upsert_batcher()
+            .upsert(bucket_id, meta, last_modified)
+            .await?;
+    }
     write_through_read_cache(ctx, bucket_name, meta);
     Ok(())
 }
 
-async fn do_upsert_object(
+pub(super) async fn do_upsert_object(
     conn: &mut diesel_async::AsyncPgConnection,
     bucket_id: Uuid,
     meta: &ObjectMeta,
     last_modified: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), StorageError> {
     let values = (
-        objects::id.eq(Uuid::new_v4()),
+        objects::id.eq(Uuid::now_v7()),
         objects::bucket_id.eq(bucket_id),
         objects::key.eq(&meta.key),
         objects::size.eq(meta.size as i64),

@@ -207,9 +207,7 @@ impl BlobStorage {
         }
 
         if let Some(cache) = &self.cache {
-            return cache
-                .populate_from_data(bucket, key, &data_path, expected_size)
-                .await;
+            cache.fill_in_background(bucket, key, data_path.clone(), expected_size);
         }
 
         Ok(data_path)

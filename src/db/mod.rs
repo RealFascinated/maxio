@@ -11,7 +11,9 @@ pub use context::DbContext;
 use diesel::connection::CacheSize;
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
 use diesel_async::pooled_connection::deadpool::Pool;
-use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
+use diesel_async::pooled_connection::{
+    AsyncDieselConnectionManager, ManagerConfig, RecyclingMethod,
+};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use futures::FutureExt;
@@ -33,6 +35,8 @@ pub async fn create_pool(
     };
 
     let mut manager_config = ManagerConfig::<AsyncPgConnection>::default();
+    // The default `Verified` runs `SELECT 1` on every checkout, doubling DB round trips per operation.
+    manager_config.recycling_method = RecyclingMethod::Fast;
     manager_config.custom_setup = Box::new(move |url| {
         async move {
             let mut conn = AsyncPgConnection::establish(url).await?;

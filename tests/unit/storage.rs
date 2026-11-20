@@ -218,6 +218,9 @@ async fn cache_reserve_space_flushes_dirty_when_no_clean_entries() {
         .unwrap(),
     );
     cache.clone().spawn_scan_task();
+    // Writers go through reserve_space first, which waits out the startup scan; a scan that
+    // finishes after the writes below would reset the cache state and drop them.
+    cache.reserve_space(0).await.unwrap();
 
     for (key, len) in [("a.txt", 200usize), ("b.txt", 200), ("c.txt", 200)] {
         let payload = vec![b'x'; len];
@@ -256,6 +259,20 @@ fn blob_meta(size: u64) -> ObjectMeta {
     }
 }
 
+/// Read misses fill the cache in the background; wait for the fill to land.
+async fn wait_for_cache_file(path: &std::path::Path, expected: &[u8]) {
+    for _ in 0..200 {
+        if tokio::fs::read(path)
+            .await
+            .is_ok_and(|bytes| bytes == expected)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("cache file {} was not filled", path.display());
+}
+
 #[tokio::test]
 async fn blob_read_miss_populates_cache_and_records_metrics() {
     let data_root = TempDir::new().unwrap();
@@ -291,6 +308,11 @@ async fn blob_read_miss_populates_cache_and_records_metrics() {
         .open_object("bucket-a", "obj.txt", &object_meta)
         .await
         .unwrap();
+    wait_for_cache_file(
+        &cache_root.path().join("buckets/bucket-a/obj.txt"),
+        b"payload",
+    )
+    .await;
     let disk = metrics
         .snapshot()
         .caches
@@ -360,11 +382,8 @@ async fn blob_stale_cache_file_is_skipped_for_read() {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.unwrap();
     assert_eq!(buf, payload);
-    let cached = tokio::fs::read(&cache_path).await.unwrap();
-    assert_eq!(
-        cached, payload,
-        "stale cache file should be replaced from data"
-    );
+    // The read drops the stale partial file; the background fill then replaces it from data.
+    wait_for_cache_file(&cache_path, payload).await;
 }
 
 #[tokio::test]

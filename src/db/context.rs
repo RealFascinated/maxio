@@ -4,6 +4,7 @@ use super::DbPool;
 use super::bucket_cache::BucketCache;
 use super::multipart_cache::MultipartCache;
 use super::object_read_cache::ObjectReadCache;
+use super::repos::UpsertBatcher;
 use crate::config::MemoryCacheLimits;
 use crate::metrics::MetricsRegistry;
 
@@ -14,6 +15,7 @@ pub struct DbContext {
     bucket_cache: Arc<BucketCache>,
     multipart_cache: Arc<MultipartCache>,
     object_read_cache: Arc<ObjectReadCache>,
+    upsert_batcher: Arc<UpsertBatcher>,
 }
 
 impl DbContext {
@@ -23,6 +25,7 @@ impl DbContext {
         limits: MemoryCacheLimits,
     ) -> Self {
         Self {
+            upsert_batcher: Arc::new(UpsertBatcher::spawn(Arc::clone(&pool))),
             pool,
             bucket_cache: Arc::new(BucketCache::new(metrics.clone(), limits.bucket_max_entries)),
             multipart_cache: Arc::new(MultipartCache::new(
@@ -42,6 +45,10 @@ impl DbContext {
 
     pub fn pool_arc(&self) -> Arc<DbPool> {
         Arc::clone(&self.pool)
+    }
+
+    pub fn upsert_batcher(&self) -> &UpsertBatcher {
+        &self.upsert_batcher
     }
 
     pub fn bucket_cache(&self) -> &BucketCache {

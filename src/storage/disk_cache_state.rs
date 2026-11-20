@@ -24,11 +24,14 @@ fn shard_index(key: &ObjectKey) -> usize {
 struct Entry {
     size: u64,
     dirty: bool,
+    /// Global access sequence; lets eviction compare recency across shards.
+    used: u64,
     prev_clean: Option<ObjectKey>,
     next_clean: Option<ObjectKey>,
 }
 
 struct Shard {
+    clock: Arc<AtomicU64>,
     entries: HashMap<ObjectKey, Entry>,
     clean_head: Option<ObjectKey>,
     clean_tail: Option<ObjectKey>,
@@ -71,8 +74,38 @@ impl Shard {
         }
     }
 
+    /// Links a never-read entry at the cold end so it is the first eviction candidate.
+    /// A later hit promotes it to the head like any other entry.
+    fn link_clean_tail(&mut self, key: &ObjectKey) {
+        self.unlink_clean(key);
+        let Some(entry) = self.entries.get_mut(key) else {
+            return;
+        };
+        entry.used = 0;
+        entry.prev_clean = self.clean_tail.clone();
+        entry.next_clean = None;
+        match self.clean_tail.replace(key.clone()) {
+            Some(tail) => {
+                if let Some(e) = self.entries.get_mut(&tail) {
+                    e.next_clean = Some(key.clone());
+                }
+            }
+            None => self.clean_head = Some(key.clone()),
+        }
+    }
+
+    /// Recency of the least recently used clean entry, if any.
+    fn clean_tail_used(&self) -> Option<u64> {
+        let tail = self.clean_tail.as_ref()?;
+        self.entries.get(tail).map(|entry| entry.used)
+    }
+
     fn link_clean_head(&mut self, key: &ObjectKey) {
         let key = key.clone();
+        let used = self.clock.fetch_add(1, Ordering::Relaxed);
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.used = used;
+        }
         if self.clean_head.as_ref() == Some(&key) {
             return;
         }
@@ -121,6 +154,7 @@ impl Shard {
                 Entry {
                     size,
                     dirty: true,
+                    used: 0,
                     prev_clean: None,
                     next_clean: None,
                 },
@@ -144,7 +178,12 @@ impl Shard {
                 self.dirty_count = self.dirty_count.saturating_sub(1);
                 dirty_delta = -1;
             }
-            self.link_clean_head(key);
+            // `used` is only set by reads, so a flushed write nobody read stays cold.
+            if entry.used == 0 {
+                self.link_clean_tail(key);
+            } else {
+                self.link_clean_head(key);
+            }
             delta
         } else {
             let key = key.clone();
@@ -153,6 +192,7 @@ impl Shard {
                 Entry {
                     size,
                     dirty: false,
+                    used: 0,
                     prev_clean: None,
                     next_clean: None,
                 },
@@ -169,7 +209,9 @@ impl Shard {
             let delta = size as i64 - entry.size as i64;
             self.total_size = self.total_size.saturating_sub(entry.size) + size;
             entry.size = size;
-            if !entry.dirty {
+            if entry.dirty {
+                entry.used = self.clock.fetch_add(1, Ordering::Relaxed);
+            } else {
                 self.link_clean_head(&key);
             }
             return delta;
@@ -179,6 +221,7 @@ impl Shard {
             Entry {
                 size,
                 dirty: false,
+                used: 0,
                 prev_clean: None,
                 next_clean: None,
             },
@@ -217,6 +260,7 @@ impl Shard {
             Entry {
                 size,
                 dirty,
+                used: 0,
                 prev_clean: None,
                 next_clean: None,
             },
@@ -280,9 +324,12 @@ pub struct DiskCacheState {
 
 impl DiskCacheState {
     pub fn new() -> Self {
+        // Starts at 1: `used == 0` marks entries that were written but never read.
+        let clock = Arc::new(AtomicU64::new(1));
         let shards = (0..SHARD_COUNT)
             .map(|_| {
                 Mutex::new(Shard {
+                    clock: Arc::clone(&clock),
                     entries: HashMap::new(),
                     clean_head: None,
                     clean_tail: None,
@@ -439,17 +486,26 @@ impl DiskCacheState {
         None
     }
 
+    /// Pops the globally least recently used clean entry: each shard keeps its own LRU list,
+    /// so the victim is the oldest tail across shards.
     fn pop_clean_lru_inner(&self) -> Option<(ObjectKey, u64)> {
-        for shard in &self.shards {
-            let mut guard = shard.lock().unwrap();
-            if let Some(victim) = guard.pop_clean_lru() {
-                drop(guard);
+        loop {
+            let oldest = self
+                .shards
+                .iter()
+                .enumerate()
+                .filter_map(|(index, shard)| {
+                    Some((index, shard.lock().unwrap().clean_tail_used()?))
+                })
+                .min_by_key(|&(_, used)| used)?
+                .0;
+            // The shard may have changed since it was sampled; if it is now empty, resample.
+            if let Some(victim) = self.shards[oldest].lock().unwrap().pop_clean_lru() {
                 self.entry_count.fetch_sub(1, Ordering::Relaxed);
                 self.total_size.fetch_sub(victim.1, Ordering::Relaxed);
                 return Some(victim);
             }
         }
-        None
     }
 
     pub fn apply_bulk(&self, entries: &[(String, String, u64)], dirty: &HashSet<ObjectKey>) {
@@ -733,6 +789,7 @@ mod tests {
 
     fn empty_shard() -> Shard {
         Shard {
+            clock: Arc::new(AtomicU64::new(1)),
             entries: HashMap::new(),
             clean_head: None,
             clean_tail: None,
@@ -767,5 +824,41 @@ mod tests {
             pops += 1;
         }
         assert_eq!(pops, keys.len());
+    }
+
+    #[test]
+    fn eviction_is_globally_lru_across_shards() {
+        let state = DiskCacheState::new();
+        let keys: Vec<String> = (0..500).map(|i| format!("k{i}")).collect();
+        for key in &keys {
+            state.record_hit_sync("bucket-a", key, 1);
+        }
+        // Touch the oldest half so it becomes the most recent.
+        for key in &keys[..250] {
+            state.record_hit_sync("bucket-a", key, 1);
+        }
+        let evicted: Vec<String> = (0..500)
+            .map(|_| state.pop_clean_lru().unwrap().0.1)
+            .collect();
+        let expected: Vec<String> = keys[250..].iter().chain(&keys[..250]).cloned().collect();
+        assert_eq!(evicted, expected);
+    }
+
+    #[test]
+    fn flushed_write_is_evicted_before_read_entries_unless_read() {
+        let state = DiskCacheState::new();
+        state.record_hit_sync("bucket-a", "read-old", 1);
+        for key in ["written-cold", "written-then-read"] {
+            state.mark_dirty_sync("bucket-a", key, 1);
+            state.mark_clean_sync("bucket-a", key, 1);
+        }
+        state.record_hit_sync("bucket-a", "written-then-read", 1);
+        state.record_hit_sync("bucket-a", "read-new", 1);
+
+        let evicted: Vec<String> = (0..4).map(|_| state.pop_clean_lru().unwrap().0.1).collect();
+        assert_eq!(
+            evicted,
+            ["written-cold", "read-old", "written-then-read", "read-new"]
+        );
     }
 }

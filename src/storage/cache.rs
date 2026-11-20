@@ -34,6 +34,8 @@ pub struct CacheLayer {
     /// Merge scan finished (index-loaded restarts only). Writers use `scan_complete`.
     merge_scan_complete: AtomicBool,
     metrics: Option<Arc<MetricsRegistry>>,
+    /// Objects with a read-miss fill running, so concurrent misses don't copy the same file twice.
+    in_flight_fills: std::sync::Mutex<HashSet<ObjectKey>>,
 }
 
 impl CacheLayer {
@@ -66,6 +68,7 @@ impl CacheLayer {
             index_loaded: AtomicBool::new(false),
             merge_scan_complete: AtomicBool::new(false),
             metrics: None,
+            in_flight_fills: std::sync::Mutex::new(HashSet::new()),
         };
         if let Some((entries, dirty)) = layer.load_index().await? {
             // Trust the on-disk index for eviction sizing and dirty writeback state;
@@ -355,6 +358,11 @@ impl CacheLayer {
 
     pub async fn reserve_space(&self, needed: u64) -> Result<Vec<PathBuf>, StorageError> {
         self.wait_until_scan_complete().await;
+        if self.writeback {
+            // A fresh scan marks everything clean until the dirty scan runs; evicting before then
+            // could delete the only copy of an unflushed object.
+            self.wait_until_dirty_scan_complete().await;
+        }
         self.state_handle.drain().await;
         let mut evicted = Vec::new();
         let mut flushed = false;
@@ -411,6 +419,80 @@ impl CacheLayer {
         }
         self.state_handle.record_hit(bucket, key, size);
         Ok(cache_path)
+    }
+
+    /// Fills the cache after a read miss without delaying the response: the caller streams
+    /// straight from `data_path` while this copies it into the cache in the background.
+    pub fn fill_in_background(
+        self: &Arc<Self>,
+        bucket: &str,
+        key: &str,
+        data_path: PathBuf,
+        size: u64,
+    ) {
+        let object_key = (bucket.to_string(), key.to_string());
+        if !self
+            .in_flight_fills
+            .lock()
+            .unwrap()
+            .insert(object_key.clone())
+        {
+            return;
+        }
+        let layer = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(e) = layer
+                .fill_from_data(&object_key.0, &object_key.1, &data_path, size)
+                .await
+            {
+                tracing::warn!(bucket = %object_key.0, key = %object_key.1, "cache fill failed: {e}");
+            }
+            layer.in_flight_fills.lock().unwrap().remove(&object_key);
+        });
+    }
+
+    /// Copies via a temp file and links it into place only if no cache file exists yet, so a
+    /// concurrent PUT of the same key (which writes the cache file) is never overwritten with
+    /// stale bytes. A source that changed during the copy is discarded.
+    async fn fill_from_data(
+        &self,
+        bucket: &str,
+        key: &str,
+        data_path: &Path,
+        size: u64,
+    ) -> Result<(), StorageError> {
+        if let Some(m) = &self.metrics {
+            m.record_cache_miss(cache_name::OBJECT_DISK);
+        }
+        let source = fs::metadata(data_path).await.map_err(StorageError::Io)?;
+        self.reserve_space(size).await?;
+        let cache_path = self.object_path(bucket, key);
+        let parent = cache_path
+            .parent()
+            .expect("cache object path always has a parent");
+        fs::create_dir_all(parent).await.map_err(StorageError::Io)?;
+        let temp_path = parent.join(format!(".maxio-tmp-{}", uuid::Uuid::new_v4()));
+        let outcome = async {
+            fs::copy(data_path, &temp_path).await?;
+            let after = fs::metadata(data_path).await?;
+            if after.len() != source.len() || after.modified()? != source.modified()? {
+                return Ok(false);
+            }
+            match fs::hard_link(&temp_path, &cache_path).await {
+                Ok(()) => Ok(true),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(e),
+            }
+        }
+        .await;
+        let _ = fs::remove_file(&temp_path).await;
+        if outcome.map_err(StorageError::Io)? {
+            if let Some(m) = &self.metrics {
+                m.record_drive_read_op();
+            }
+            self.state_handle.record_hit(bucket, key, size);
+        }
+        Ok(())
     }
 
     pub async fn flush_dirty(&self) -> Result<(), StorageError> {

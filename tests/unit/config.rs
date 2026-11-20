@@ -22,7 +22,7 @@ fn default_address_is_all_interfaces() {
 fn default_db_pool_settings() {
     let cli = TestCli::parse_from(["maxio", "--database-url", "postgres://localhost/maxio"]);
 
-    assert_eq!(cli.config.db_pool_size, 64);
+    assert_eq!(cli.config.db_pool_size, 16);
     assert!(cli.config.db_prepared_statement_cache);
-    assert_eq!(PoolSettings::from(&cli.config).max_size, 64);
+    assert_eq!(PoolSettings::from(&cli.config).max_size, 16);
 }
