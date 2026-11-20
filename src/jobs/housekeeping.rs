@@ -16,6 +16,10 @@ pub struct HousekeepingJob {
 
 #[async_trait]
 impl JobHandler for HousekeepingJob {
+    fn initial_detail(&self) -> serde_json::Value {
+        serde_json::json!({"uploadsRemoved": 0, "tempFilesRemoved": 0})
+    }
+
     async fn run(&self, job: &mut Job, _ctx: &JobContext) -> Result<JobOutcome, StorageError> {
         let (uploads, temp_files) = self
             .storage

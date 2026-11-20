@@ -448,7 +448,7 @@
       {@render toggleRow('Cross-origin read', corsEnabled, corsQuery.isPending, corsMutation.isPending, toggleCors)}
     </div>
 
-    <CompressionJobPanel {bucket} />
+    <CompressionJobPanel {bucket} {compressionEnabled} />
 
     <h2 class="mt-2">Danger zone</h2>
     <div class="flex h-10 items-center justify-between gap-4 rounded-surface border border-border bg-panel px-3">

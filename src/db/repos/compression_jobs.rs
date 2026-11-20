@@ -6,6 +6,7 @@ use diesel_async::RunQueryDsl;
 use crate::db::DbContext;
 use crate::db::schema::{object_versions, objects};
 use crate::storage::StorageError;
+use crate::storage::compression::already_compressed_key_regex;
 use crate::storage::compression_job::{
     CompressionCandidate, CompressionPhase, CompressionState, MIN_REWRITE_SIZE,
 };
@@ -33,13 +34,14 @@ pub async fn count_compression_candidates(
         "SELECT COALESCE(SUM(count), 0)::bigint AS count, COALESCE(SUM(bytes), 0)::bigint AS bytes FROM ( \
          SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes FROM objects \
            WHERE bucket_id = $1 AND compressed_size IS NULL AND NOT is_delete_marker \
-             AND NOT is_folder_marker AND size >= {MIN_REWRITE_SIZE} \
+             AND NOT is_folder_marker AND size >= {MIN_REWRITE_SIZE} AND key !~* $2 \
          UNION ALL \
          SELECT COUNT(*), COALESCE(SUM(size), 0) FROM object_versions \
            WHERE bucket_id = $1 AND compressed_size IS NULL AND NOT is_delete_marker \
-             AND NOT is_folder_marker AND size >= {MIN_REWRITE_SIZE}) t"
+             AND NOT is_folder_marker AND size >= {MIN_REWRITE_SIZE} AND key !~* $2) t"
     ))
     .bind::<SqlUuid, _>(bucket_id)
+    .bind::<Text, _>(already_compressed_key_regex())
     .get_result(&mut conn)
     .await
     .map_err(db_err)?;
@@ -63,6 +65,10 @@ pub async fn list_compression_candidates(
                 .filter(objects::is_delete_marker.eq(false))
                 .filter(objects::is_folder_marker.eq(false))
                 .filter(objects::size.ge(MIN_REWRITE_SIZE))
+                .filter(
+                    diesel::dsl::sql::<diesel::sql_types::Bool>("key !~* ")
+                        .bind::<Text, _>(already_compressed_key_regex()),
+                )
                 .into_boxed();
             if let Some(after) = &state.cursor_key {
                 query = query.filter(objects::key.gt(after));
@@ -89,6 +95,10 @@ pub async fn list_compression_candidates(
                 .filter(object_versions::is_delete_marker.eq(false))
                 .filter(object_versions::is_folder_marker.eq(false))
                 .filter(object_versions::size.ge(MIN_REWRITE_SIZE))
+                .filter(
+                    diesel::dsl::sql::<diesel::sql_types::Bool>("key !~* ")
+                        .bind::<Text, _>(already_compressed_key_regex()),
+                )
                 .into_boxed();
             if let (Some(key), Some(version)) = (&state.cursor_key, &state.cursor_version) {
                 query = query.filter(
@@ -199,11 +209,12 @@ pub async fn sample_compression_candidates(
     let rows: Vec<SampleRow> = sql_query(format!(
         "SELECT key, size FROM objects \
          WHERE bucket_id = $1 AND compressed_size IS NULL AND NOT is_delete_marker \
-           AND NOT is_folder_marker AND size >= {MIN_REWRITE_SIZE} \
+           AND NOT is_folder_marker AND size >= {MIN_REWRITE_SIZE} AND key !~* $3 \
          ORDER BY random() LIMIT $2"
     ))
     .bind::<SqlUuid, _>(bucket_id)
     .bind::<BigInt, _>(limit)
+    .bind::<Text, _>(already_compressed_key_regex())
     .load(&mut conn)
     .await
     .map_err(db_err)?;

@@ -9,7 +9,7 @@
   import { queryClient } from '$lib/query/client'
   import { toast, toastApiError } from '$lib/toast'
 
-  let { bucket }: { bucket: string } = $props()
+  let { bucket, compressionEnabled }: { bucket: string; compressionEnabled: boolean } = $props()
 
   const queryParams = () => ({ kind: 'compressBucket' as const, scope: bucket, limit: 1 })
 
@@ -27,6 +27,24 @@
       ? (compressionJob.processed / compressionJob.total) * 100
       : 0,
   )
+
+  // Progress only shows while a job runs; the outcome is announced once when it ends.
+  let lastSeen: { id: string; status: string } | null = null
+  $effect(() => {
+    const current = compressionJob
+    if (!current) return
+    if (lastSeen?.id === current.id && lastSeen.status === 'running' && current.status !== 'running') {
+      if (current.status === 'completed') {
+        const { compressed, skipped, bytesBefore, bytesAfter } = current.detail
+        toast.success(
+          `Compressed ${compressed.toLocaleString()} objects (${skipped.toLocaleString()} skipped), saved ${formatBytes(Math.max(0, bytesBefore - bytesAfter))}`,
+        )
+      } else if (current.status === 'failed') {
+        toast.error(current.error ?? 'Compression failed')
+      }
+    }
+    lastSeen = { id: current.id, status: current.status }
+  })
 
   const estimateMutation = createMutation(() => ({
     mutationFn: () => getCompressionEstimate(bucket),
@@ -79,7 +97,12 @@
           Cancel
         </Button>
       {:else}
-        <Button size="sm" loading={startMutation.isPending} onclick={() => startMutation.mutate()}>Compress</Button>
+        <Button
+          size="sm"
+          disabled={!compressionEnabled}
+          loading={startMutation.isPending}
+          onclick={() => startMutation.mutate()}
+        >Compress</Button>
       {/if}
     </div>
   </div>
@@ -96,7 +119,7 @@
     </div>
   {/if}
 
-  {#if compressionJob}
+  {#if running && compressionJob}
     <ProgressBar value={compressionJob.status === 'completed' ? 100 : percent} />
     <div class="num flex flex-wrap gap-x-4 text-muted-foreground">
       <span class="capitalize">

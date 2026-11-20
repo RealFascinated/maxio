@@ -66,7 +66,8 @@ impl JobManager {
         let handler = self.handler(kind)?;
         handler.validate(scope.as_deref()).await?;
 
-        let job = Job::new(kind, scope, trigger);
+        let mut job = Job::new(kind, scope, trigger);
+        job.detail = handler.initial_detail();
         let token = self.register(&job)?;
         if let Err(e) = self.meta.save_job(&job).await {
             self.unregister(&job);

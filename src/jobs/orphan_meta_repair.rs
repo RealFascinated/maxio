@@ -19,6 +19,10 @@ pub struct OrphanMetaRepairJob {
 
 #[async_trait]
 impl JobHandler for OrphanMetaRepairJob {
+    fn initial_detail(&self) -> serde_json::Value {
+        serde_json::json!({"removed": 0})
+    }
+
     async fn run(&self, job: &mut Job, _ctx: &JobContext) -> Result<JobOutcome, StorageError> {
         let blobs = BlobStorage::new(&self.data_dir)
             .await

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::StreamExt;
 
+use crate::storage::compression::Compression;
 use crate::storage::compression_job::{CompressOutcome, CompressionPhase, CompressionState};
 use crate::storage::{MetadataStore, Storage, StorageError, validate_bucket_name};
 
@@ -19,10 +20,19 @@ pub struct CompressBucketJob {
 
 #[async_trait]
 impl JobHandler for CompressBucketJob {
+    fn initial_detail(&self) -> serde_json::Value {
+        serde_json::to_value(CompressionState::default()).unwrap_or_default()
+    }
+
     async fn validate(&self, scope: Option<&str>) -> Result<(), StorageError> {
         let bucket = scope.unwrap_or_default();
         validate_bucket_name(bucket)?;
-        self.meta.get_compression(bucket).await.map(|_| ())
+        match self.meta.get_compression(bucket).await? {
+            Compression::None => Err(StorageError::InvalidKey(
+                "enable compression on the bucket first".into(),
+            )),
+            Compression::Lz4 => Ok(()),
+        }
     }
 
     async fn run(&self, job: &mut Job, ctx: &JobContext) -> Result<JobOutcome, StorageError> {

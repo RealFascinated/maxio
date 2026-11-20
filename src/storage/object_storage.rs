@@ -254,7 +254,7 @@ impl ObjectStorage {
                 body,
                 checksum,
                 content_length,
-                prep.compression,
+                prep.compression.for_key(key),
             )
             .await?;
 
@@ -588,7 +588,7 @@ impl ObjectStorage {
                 &upload_meta.key,
                 upload_id,
                 &selected,
-                prep.compression,
+                prep.compression.for_key(&upload_meta.key),
             )
             .await?;
 

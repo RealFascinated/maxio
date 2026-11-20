@@ -104,6 +104,7 @@ fn is_rewritable(meta: &ObjectMeta) -> bool {
         && meta.compressed_size.is_none()
         && meta.size >= MIN_REWRITE_SIZE as u64
         && !meta.key.ends_with('/')
+        && !compression::is_already_compressed(&meta.key)
 }
 
 impl ObjectStorage {

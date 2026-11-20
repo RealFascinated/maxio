@@ -46,7 +46,12 @@
   <PageHeader title={bucket}>
     {#snippet actions()}
       {#if bucketStats?.sizeBytes != null}
-        <span class="num text-sm text-muted-foreground">{formatBytes(bucketStats.sizeBytes)}</span>
+        <span class="num text-sm text-muted-foreground">
+          {formatBytes(bucketStats.sizeBytes)}
+          {#if bucketStats.storedBytes != null && bucketStats.storedBytes < bucketStats.sizeBytes}
+            · {formatBytes(bucketStats.storedBytes)} on disk
+          {/if}
+        </span>
       {/if}
     {/snippet}
   </PageHeader>

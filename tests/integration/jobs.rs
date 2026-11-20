@@ -33,6 +33,7 @@ async fn test_housekeeping_job_runs_and_is_listed() {
     assert_eq!(status, 200, "{started}");
     assert_eq!(started["job"]["kind"], "housekeeping");
     assert_eq!(started["job"]["trigger"], "manual");
+    assert_eq!(started["job"]["detail"]["uploadsRemoved"], 0, "{started}");
 
     let id = started["job"]["id"].as_str().unwrap();
     for _ in 0..100 {
@@ -92,4 +93,19 @@ async fn test_job_scope_is_validated() {
     )
     .await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn test_compress_job_requires_compression_enabled() {
+    let base_url = start_server().await;
+    s3_request("PUT", &format!("{base_url}/plain-bucket"), vec![]).await;
+
+    let (status, body) = jobs_request(
+        &base_url,
+        reqwest::Method::POST,
+        "/api/jobs",
+        Some(serde_json::json!({"kind": "compressBucket", "scope": "plain-bucket"})),
+    )
+    .await;
+    assert_eq!(status, 409, "{body}");
 }

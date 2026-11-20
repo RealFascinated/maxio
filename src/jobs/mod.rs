@@ -208,6 +208,9 @@ pub trait JobHandler: Send + Sync {
         Ok(())
     }
 
+    /// `detail` of a freshly created job, so clients always see every field the kind reports.
+    fn initial_detail(&self) -> serde_json::Value;
+
     /// Runs until done or until `ctx` reports cancellation.
     async fn run(&self, job: &mut Job, ctx: &JobContext) -> Result<JobOutcome, StorageError>;
 }

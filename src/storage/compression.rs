@@ -25,6 +25,27 @@ const MIN_COMPRESS_SIZE: usize = 1024;
 /// Leading blocks that must all be incompressible before the encoder stops compressing.
 const INCOMPRESSIBLE_PROBE_BLOCKS: usize = 4;
 
+/// Key extensions of formats that are already compressed; LZ4 cannot shrink them.
+const ALREADY_COMPRESSED_EXTENSIONS: &[&str] = &[
+    "zip", "gz", "tgz", "bz2", "xz", "zst", "lz4", "7z", "rar", "br", "jar", "apk", "docx", "xlsx",
+    "pptx", "odt", "jpg", "jpeg", "png", "gif", "webp", "avif", "heic", "heif", "mp3", "aac",
+    "ogg", "opus", "flac", "m4a", "mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv", "woff",
+    "woff2",
+];
+
+pub fn is_already_compressed(key: &str) -> bool {
+    key.rsplit_once('.').is_some_and(|(_, extension)| {
+        ALREADY_COMPRESSED_EXTENSIONS
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+    })
+}
+
+/// Postgres regex matching keys for which [`is_already_compressed`] is true.
+pub fn already_compressed_key_regex() -> String {
+    format!("\\.({})$", ALREADY_COMPRESSED_EXTENSIONS.join("|"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Compression {
     #[default]
@@ -37,6 +58,15 @@ impl Compression {
         match self {
             Self::None => "none",
             Self::Lz4 => "lz4",
+        }
+    }
+
+    /// The codec to use for `key`: none when the key's format is already compressed.
+    pub fn for_key(self, key: &str) -> Self {
+        if is_already_compressed(key) {
+            Self::None
+        } else {
+            self
         }
     }
 
@@ -362,6 +392,17 @@ impl DecodeState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn already_compressed_keys_skip_compression() {
+        use super::{Compression, is_already_compressed};
+        assert!(is_already_compressed("photos/Cat.JPG"));
+        assert!(is_already_compressed("a.tar.gz"));
+        assert!(!is_already_compressed("notes.txt"));
+        assert!(!is_already_compressed("zip"));
+        assert_eq!(Compression::Lz4.for_key("movie.mp4"), Compression::None);
+        assert_eq!(Compression::Lz4.for_key("data.json"), Compression::Lz4);
+    }
+
     use super::*;
 
     fn sample(len: usize) -> Vec<u8> {

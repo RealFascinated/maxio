@@ -73,6 +73,55 @@ async fn test_compression_only_applies_to_new_objects() {
 }
 
 #[tokio::test]
+async fn test_already_compressed_formats_are_stored_raw_and_skipped_by_the_job() {
+    let base_url = start_server().await;
+    let bucket = "lz4-skip-formats";
+    s3_request("PUT", &format!("{base_url}/{bucket}"), vec![]).await;
+    let data = compressible(100_000);
+    s3_request(
+        "PUT",
+        &format!("{base_url}/{bucket}/before.JPG"),
+        data.clone(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{base_url}/{bucket}/before.txt"),
+        data.clone(),
+    )
+    .await;
+    enable_compression(&base_url, bucket).await;
+    s3_request(
+        "PUT",
+        &format!("{base_url}/{bucket}/after.zip"),
+        data.clone(),
+    )
+    .await;
+    s3_request(
+        "PUT",
+        &format!("{base_url}/{bucket}/after.txt"),
+        data.clone(),
+    )
+    .await;
+
+    assert_eq!(
+        stored_len(base_url.data_dir(), bucket, "after.zip"),
+        100_000
+    );
+    assert!(stored_len(base_url.data_dir(), bucket, "after.txt") < 50_000);
+
+    let job = run_rewrite_job(&base_url, bucket).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    assert_eq!(job["total"], 1, "{job}");
+    assert_eq!(job["detail"]["compressed"], 1, "{job}");
+    assert_eq!(
+        stored_len(base_url.data_dir(), bucket, "before.JPG"),
+        100_000
+    );
+    assert!(stored_len(base_url.data_dir(), bucket, "before.txt") < 50_000);
+}
+
+#[tokio::test]
 async fn test_compressed_multipart_copy_and_versions() {
     let base_url = start_server().await;
     let bucket = "lz4-multipart";
@@ -203,6 +252,7 @@ async fn start_compress_job(
     base_url: &str,
     bucket: &str,
 ) -> (reqwest::StatusCode, serde_json::Value) {
+    enable_compression(base_url, bucket).await;
     console_request(
         base_url,
         reqwest::Method::POST,
@@ -232,6 +282,7 @@ async fn wait_for_job(base_url: &str, id: &str) -> serde_json::Value {
 async fn run_rewrite_job(base_url: &str, bucket: &str) -> serde_json::Value {
     let (status, body) = start_compress_job(base_url, bucket).await;
     assert_eq!(status, 200);
+    assert_eq!(body["job"]["detail"]["compressed"], 0, "{body}");
     wait_for_job(base_url, body["job"]["id"].as_str().unwrap()).await
 }
 

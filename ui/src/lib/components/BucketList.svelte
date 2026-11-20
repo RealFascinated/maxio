@@ -80,6 +80,11 @@
     return allBuckets.filter((bucket) => bucket.name.toLowerCase().includes(q))
   })
 
+  function savedBytes(bucket: Bucket): number | null {
+    if (bucket.sizeBytes === null || bucket.storedBytes === null) return null
+    return Math.max(0, bucket.sizeBytes - bucket.storedBytes)
+  }
+
   const columnHelper = createColumnHelper<typeof sortableTableFeatures, Bucket>()
   const columns = [
     columnHelper.accessor('name', { header: sortableHeader('Name') }),
@@ -89,6 +94,15 @@
     }),
     columnHelper.accessor('sizeBytes', {
       header: sortableHeader('Size'),
+      sortUndefined: 'last',
+    }),
+    columnHelper.accessor('storedBytes', {
+      header: sortableHeader('On disk'),
+      sortUndefined: 'last',
+    }),
+    columnHelper.accessor(savedBytes, {
+      id: 'savedBytes',
+      header: sortableHeader('Saved'),
       sortUndefined: 'last',
     }),
     columnHelper.accessor('createdAt', { header: sortableHeader('Created') }),
@@ -104,7 +118,7 @@
     },
   })
 
-  const rightAligned = new Set(['objectCount', 'sizeBytes'])
+  const rightAligned = new Set(['objectCount', 'sizeBytes', 'storedBytes', 'savedBytes'])
 
   const createBucketMutation = createMutation(() => ({
     mutationFn: createBucketApi,
@@ -225,6 +239,8 @@
                 <Table.Cell><Skeleton class="w-40" /></Table.Cell>
                 <Table.Cell><Skeleton class="ml-auto w-12" /></Table.Cell>
                 <Table.Cell><Skeleton class="ml-auto w-16" /></Table.Cell>
+                <Table.Cell><Skeleton class="ml-auto w-16" /></Table.Cell>
+                <Table.Cell><Skeleton class="ml-auto w-20" /></Table.Cell>
                 <Table.Cell><Skeleton class="w-32" /></Table.Cell>
                 <Table.Cell></Table.Cell>
                 <Table.Cell></Table.Cell>
@@ -233,6 +249,7 @@
           {:else}
             {#each table.getRowModel().rows as row (row.id)}
               {@const bucket = row.original}
+              {@const saved = savedBytes(bucket)}
               <Table.Row class="cursor-pointer" onclick={() => goto(routes.bucket(bucket.name))}>
                 <Table.Cell class="font-medium">
                   <a
@@ -246,6 +263,16 @@
                 </Table.Cell>
                 <Table.Cell class="num text-right text-muted-foreground">
                   {bucket.sizeBytes !== null ? formatBytes(bucket.sizeBytes) : '—'}
+                </Table.Cell>
+                <Table.Cell class="num text-right text-muted-foreground">
+                  {bucket.storedBytes !== null ? formatBytes(bucket.storedBytes) : '—'}
+                </Table.Cell>
+                <Table.Cell class="num text-right text-muted-foreground">
+                  {#if saved}
+                    {formatBytes(saved)} ({Math.round((saved / bucket.sizeBytes!) * 100)}%)
+                  {:else}
+                    —
+                  {/if}
                 </Table.Cell>
                 <Table.Cell class="num text-muted-foreground">{formatDate(bucket.createdAt)}</Table.Cell>
                 <Table.Cell>
