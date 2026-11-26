@@ -76,7 +76,7 @@ pub async fn build_app_state(config: Config) -> anyhow::Result<AppState> {
         Some(Arc::clone(&metrics)),
         cache_limits.iam_max_entries,
     ));
-    let stats = BucketStatsCache::new(Arc::clone(&pool), Arc::clone(&metrics));
+    let stats = BucketStatsCache::new(Arc::clone(&pool));
 
     crate::metrics::sampler::spawn_sampler(
         Arc::clone(&metrics),

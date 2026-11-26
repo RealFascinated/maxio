@@ -6,7 +6,6 @@ use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
 
 use crate::db::DbPool;
-use crate::metrics::MetricsRegistry;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BucketStat {
@@ -22,15 +21,14 @@ pub struct BucketStatsCache {
 }
 
 impl BucketStatsCache {
-    /// Create the cache and spawn the 60-second background refresh task.
-    /// The task also drives the uptime gauge on every tick.
-    pub fn new(db_pool: Arc<DbPool>, metrics: Arc<MetricsRegistry>) -> Arc<Self> {
+    /// Create the cache and spawn the hourly background refresh task.
+    pub fn new(db_pool: Arc<DbPool>) -> Arc<Self> {
         let cache = Arc::new(Self {
             snapshot: RwLock::new(Vec::new()),
         });
         let cache2 = Arc::clone(&cache);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(60));
+            let mut ticker = tokio::time::interval(Duration::from_secs(3600));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
@@ -49,7 +47,6 @@ impl BucketStatsCache {
                         tracing::warn!("bucket stats refresh failed: {}", e);
                     }
                 }
-                metrics.update_uptime();
             }
         });
         cache
